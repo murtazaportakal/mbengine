@@ -18,6 +18,8 @@ pub struct Application {
     pub texture: Option<crate::renderer::vulkan::Texture>,
     pub meshes: Vec<crate::renderer::vulkan::Mesh>,
     pub world_matrices: std::collections::HashMap<u32, crate::math::mat4::Mat4>,
+    pub ubo_buffer: vk::Buffer,
+    pub ubo_memory: vk::DeviceMemory,
     pub descriptor_pool: vk::DescriptorPool,
     pub descriptor_set: vk::DescriptorSet,
     pub render_pass: RenderPass,
@@ -56,15 +58,20 @@ impl Application {
         let mut descriptor_pool = vk::DescriptorPool::null();
         let mut descriptor_set = vk::DescriptorSet::null();
 
-        if let Some(pipe) = &pipeline {
+        let ubo_data = if let Some(pipe) = &pipeline {
             if let Some(tex) = crate::renderer::vulkan::Texture::new_checkerboard(&vulkan) {
                 // 1. Create Descriptor Pool
-                let pool_size = vk::DescriptorPoolSize::default()
-                    .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .descriptor_count(1);
+                let pool_sizes = [
+                    vk::DescriptorPoolSize::default()
+                        .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                        .descriptor_count(1),
+                    vk::DescriptorPoolSize::default()
+                        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .descriptor_count(1)
+                ];
                 
                 let pool_info = vk::DescriptorPoolCreateInfo::default()
-                    .pool_sizes(std::slice::from_ref(&pool_size))
+                    .pool_sizes(&pool_sizes)
                     .max_sets(1);
                 
                 descriptor_pool = unsafe { vulkan.device.create_descriptor_pool(&pool_info, None).unwrap() };
@@ -76,24 +83,57 @@ impl Application {
 
                 descriptor_set = unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0] };
 
+                // Create UBO buffer
+                let ubo_size = std::mem::size_of::<crate::renderer::vulkan::pipeline::GlobalUbo>() as u64;
+                let ubo_buffer_info = vk::BufferCreateInfo::default()
+                    .size(ubo_size)
+                    .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                
+                let ubo_buffer = unsafe { vulkan.device.create_buffer(&ubo_buffer_info, None).unwrap() };
+                let mem_req = unsafe { vulkan.device.get_buffer_memory_requirements(ubo_buffer) };
+                let mem_type_index = vulkan.find_memory_type(mem_req.memory_type_bits, vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT).unwrap();
+                
+                let alloc_info = vk::MemoryAllocateInfo::default()
+                    .allocation_size(mem_req.size)
+                    .memory_type_index(mem_type_index);
+                    
+                let ubo_memory = unsafe { vulkan.device.allocate_memory(&alloc_info, None).unwrap() };
+                unsafe { vulkan.device.bind_buffer_memory(ubo_buffer, ubo_memory, 0).unwrap() };
+
                 // 3. Update Descriptor Set
+                let ubo_info = vk::DescriptorBufferInfo::default()
+                    .buffer(ubo_buffer)
+                    .offset(0)
+                    .range(ubo_size);
+                
+                let write_desc_ubo = vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_set)
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(std::slice::from_ref(&ubo_info));
+
                 let image_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(tex.view)
                     .sampler(tex.sampler);
                 
-                let write_desc = vk::WriteDescriptorSet::default()
+                let write_desc_sampler = vk::WriteDescriptorSet::default()
                     .dst_set(descriptor_set)
-                    .dst_binding(0)
+                    .dst_binding(1)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&image_info));
                 
-                unsafe { vulkan.device.update_descriptor_sets(std::slice::from_ref(&write_desc), &[]) };
+                unsafe { vulkan.device.update_descriptor_sets(&[write_desc_ubo, write_desc_sampler], &[]) };
                 
                 texture = Some(tex);
-            }
-        }
+                Some((ubo_buffer, ubo_memory))
+            } else { None }
+        } else { None };
+
+        let (ubo_buffer, ubo_memory) = ubo_data.unwrap_or((vk::Buffer::null(), vk::DeviceMemory::null()));
 
         let mut meshes = Vec::new();
         if let Some(cube_mesh) = crate::renderer::vulkan::Mesh::load_obj("cube.obj", &vulkan) {
@@ -102,7 +142,6 @@ impl Application {
             crate::log_info!("Failed to load cube.obj. Rendering will fail.");
         }
 
-        let world_matrices = std::collections::HashMap::new();
 
         if pipeline.is_none() {
             crate::log_info!("Shaders not found or failed to compile. Rendering will be skipped.");
@@ -192,7 +231,9 @@ impl Application {
             pipeline,
             texture,
             meshes,
-            world_matrices,
+            world_matrices: std::collections::HashMap::new(),
+            ubo_buffer,
+            ubo_memory,
             descriptor_pool,
             descriptor_set,
             render_pass,
@@ -203,6 +244,24 @@ impl Application {
             timer,
             memory,
         })
+    }
+
+    pub fn recreate_swapchain(&mut self) {
+        let mut width = self.window.width;
+        let mut height = self.window.height;
+        
+        while width == 0 || height == 0 {
+            self.window.poll_events(&mut self.input);
+            width = self.window.width;
+            height = self.window.height;
+        }
+
+        unsafe {
+            self.vulkan.device.device_wait_idle().unwrap();
+        }
+
+        self.swapchain.recreate(&self.vulkan, width, height);
+        self.swapchain.create_framebuffers(&self.vulkan, self.render_pass.handle);
     }
 
     /// The canonical game loop.
@@ -389,23 +448,85 @@ impl Application {
             _ => return, // Skip rendering if no pipeline (avoids deadlock)
         };
 
+        // Extract Camera
+        let mut view_proj = crate::math::mat4::Mat4::identity();
+        {
+            let cameras = self.world.get_component_array::<CameraComponent>();
+            let transforms = self.world.get_component_array::<TransformComponent>();
+            let dense_cams = cameras.as_slice();
+            let cam_entities = cameras.dense_entities_slice();
+            
+            if let Some(&cam_entity) = cam_entities.first() {
+                let cam = dense_cams[0];
+                if transforms.has(cam_entity) {
+                    let cam_transform = unsafe { transforms.get(cam_entity) };
+                    let pitch = cam_transform.rotation.x;
+                    let yaw = cam_transform.rotation.y;
+                    let forward = Vec3::new(
+                        yaw.sin() * pitch.cos(),
+                        pitch.sin(),
+                        yaw.cos() * pitch.cos(),
+                    ).normalize();
+                    let center = cam_transform.position + forward;
+                    let view = crate::math::mat4::Mat4::look_at(cam_transform.position, center, Vec3::new(0.0, 1.0, 0.0));
+                    view_proj = cam.proj * view;
+                }
+            }
+        }
+
+        // Extract Light
+        let mut light_dir = [0.0, -1.0, 0.0, 0.0];
+        let mut light_color = [1.0, 1.0, 1.0, 0.0];
+        {
+            let lights = self.world.get_component_array::<LightComponent>();
+            let dense_lights = lights.as_slice();
+            if let Some(light) = dense_lights.first() {
+                light_dir = [-light.direction.x, -light.direction.y, -light.direction.z, 0.0];
+                light_color = [light.color.x, light.color.y, light.color.z, 0.0];
+            }
+        }
+
+        // Update GlobalUbo
+        let ubo = crate::renderer::vulkan::pipeline::GlobalUbo {
+            view_proj,
+            light_dir,
+            light_color,
+        };
+        let ubo_size = std::mem::size_of::<crate::renderer::vulkan::pipeline::GlobalUbo>() as u64;
+        unsafe {
+            let data_ptr = self.vulkan.device.map_memory(self.ubo_memory, 0, ubo_size, vk::MemoryMapFlags::empty()).unwrap();
+            std::ptr::copy_nonoverlapping(&ubo as *const _ as *const u8, data_ptr as *mut u8, ubo_size as usize);
+            self.vulkan.device.unmap_memory(self.ubo_memory);
+        }
+
         // Wait for previous frame to finish
         unsafe {
             let _ = self.vulkan.device.wait_for_fences(std::slice::from_ref(&self.vulkan.in_flight_fence), true, u64::MAX);
         }
 
         // Acquire next image
-        let (image_index, _is_suboptimal) = unsafe {
-            let result = self.swapchain.swapchain_loader.acquire_next_image(
+        let result = unsafe {
+            self.swapchain.swapchain_loader.acquire_next_image(
                 self.swapchain.swapchain,
                 u64::MAX,
                 self.vulkan.image_available_semaphore,
                 vk::Fence::null(),
-            );
-            match result {
-                Ok(r) => r,
-                Err(_) => return, // Handle recreation later
+            )
+        };
+
+        let image_index = match result {
+            Ok((idx, suboptimal)) => {
+                if suboptimal || self.window.check_and_clear_resized() {
+                    self.recreate_swapchain();
+                    return;
+                }
+                idx
             }
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                self.recreate_swapchain();
+                return;
+            }
+            Err(e) => panic!("Failed to acquire image: {:?}", e),
         };
 
         unsafe {
@@ -472,46 +593,21 @@ impl Application {
                     }
                 }
 
-                // Extract Light
-                let mut light_dir = [0.0, -1.0, 0.0, 0.0];
-                let mut light_color = [1.0, 1.0, 1.0, 0.0];
-                {
-                    let lights = self.world.get_component_array::<LightComponent>();
-                    let dense_lights = lights.as_slice();
-                    if let Some(light) = dense_lights.first() {
-                        // We negate the direction because the shader expects a vector POINTING to the light
-                        light_dir = [-light.direction.x, -light.direction.y, -light.direction.z, 0.0];
-                        light_color = [light.color.x, light.color.y, light.color.z, 0.0];
-                    }
-                }
+                let viewport = vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: self.swapchain.extent.width as f32,
+                    height: self.swapchain.extent.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                };
+                self.vulkan.device.cmd_set_viewport(command_buffer, 0, std::slice::from_ref(&viewport));
 
-                // Extract Camera
-                let mut view_proj = crate::math::mat4::Mat4::identity();
-                {
-                    let cameras = self.world.get_component_array::<CameraComponent>();
-                    let transforms = self.world.get_component_array::<TransformComponent>();
-                    let dense_cams = cameras.as_slice();
-                    let cam_entities = cameras.dense_entities_slice();
-                    
-                    if let Some(&cam_entity) = cam_entities.first() {
-                        let cam = dense_cams[0];
-                        if transforms.has(cam_entity) {
-                            let cam_transform = transforms.get(cam_entity);
-                            
-                            let pitch = cam_transform.rotation.x;
-                            let yaw = cam_transform.rotation.y;
-                            let forward = Vec3::new(
-                                yaw.sin() * pitch.cos(),
-                                pitch.sin(),
-                                yaw.cos() * pitch.cos(),
-                            ).normalize();
-                            
-                            let center = cam_transform.position + forward;
-                            let view = crate::math::mat4::Mat4::look_at(cam_transform.position, center, Vec3::new(0.0, 1.0, 0.0));
-                            view_proj = cam.proj * view;
-                        }
-                    }
-                }
+                let scissor = vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: self.swapchain.extent,
+                };
+                self.vulkan.device.cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor));
 
                 let renders = self.world.get_component_array::<RenderComponent>();
                 let transforms = self.world.get_component_array::<TransformComponent>();
@@ -526,14 +622,10 @@ impl Application {
                         let entity_index = entities[i];
                         if transforms.has(entity_index) {
                             let transform = transforms.get(entity_index);
-                            
-                            // Push the mvp matrix (64 bytes) + light data (32 bytes)
+                            // Push the world matrix (64 bytes)
                             let world_matrix = *self.world_matrices.get(&entity_index).unwrap_or(&transform.matrix);
-                            let mvp = view_proj * world_matrix;
                             let push_constants = crate::renderer::vulkan::pipeline::PushConstants {
-                                mvp,
-                                light_dir,
-                                light_color,
+                                world: world_matrix,
                             };
                             let constants_ptr = &push_constants as *const _ as *const u8;
                             let constants_slice = std::slice::from_raw_parts(constants_ptr, std::mem::size_of::<crate::renderer::vulkan::pipeline::PushConstants>());
@@ -593,13 +685,26 @@ impl Application {
                 .swapchains(&swapchains)
                 .image_indices(&image_indices);
 
-            unsafe {
-                let _ = self.swapchain.swapchain_loader.queue_present(self.vulkan.graphics_queue, &present_info);
+            let result = unsafe {
+                self.swapchain.swapchain_loader.queue_present(self.vulkan.graphics_queue, &present_info)
+            };
+
+            match result {
+                Ok(suboptimal) => {
+                    if suboptimal || self.window.check_and_clear_resized() {
+                        self.recreate_swapchain();
+                    }
+                }
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    self.recreate_swapchain();
+                }
+                Err(e) => panic!("Failed to present image: {:?}", e),
             }
             
             // Clean up command buffer (in a real engine we'd reuse them per-frame in an array)
             unsafe {
                 self.vulkan.device.wait_for_fences(std::slice::from_ref(&self.vulkan.in_flight_fence), true, u64::MAX).unwrap();
+                self.vulkan.device.reset_command_pool(self.vulkan.command_pool, vk::CommandPoolResetFlags::empty()).unwrap();
                 self.vulkan.device.free_command_buffers(self.vulkan.command_pool, &command_buffers);
             }
     }

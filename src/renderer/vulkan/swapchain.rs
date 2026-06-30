@@ -192,18 +192,151 @@ impl Swapchain {
         true
     }
     
-    pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
+    pub fn cleanup_swapchain(&mut self, vulkan: &VulkanDevice) {
         unsafe {
             for &fb in &self.framebuffers {
                 vulkan.device.destroy_framebuffer(fb, None);
             }
+            self.framebuffers.clear();
             vulkan.device.destroy_image_view(self.depth_image_view, None);
             vulkan.device.destroy_image(self.depth_image, None);
             vulkan.device.free_memory(self.depth_image_memory, None);
             for &view in &self.image_views {
                 vulkan.device.destroy_image_view(view, None);
             }
+            self.image_views.clear();
             self.swapchain_loader.destroy_swapchain(self.swapchain, None);
+        }
+    }
+
+    pub fn recreate(&mut self, vulkan: &VulkanDevice, width: u32, height: u32) -> bool {
+        self.cleanup_swapchain(vulkan);
+        
+        let caps = unsafe {
+            self.surface_loader
+                .get_physical_device_surface_capabilities(vulkan.physical_device, self.surface)
+                .unwrap_or_default()
+        };
+
+        let mut image_count = caps.min_image_count + 1;
+        if caps.max_image_count > 0 && image_count > caps.max_image_count {
+            image_count = caps.max_image_count;
+        }
+
+        self.extent = vk::Extent2D { width, height };
+
+        let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
+            .surface(self.surface)
+            .min_image_count(image_count)
+            .image_color_space(self.format.color_space)
+            .image_format(self.format.format)
+            .image_extent(self.extent)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .pre_transform(caps.current_transform)
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(vk::PresentModeKHR::FIFO)
+            .clipped(true)
+            .image_array_layers(1);
+
+        self.swapchain = unsafe {
+            match self.swapchain_loader.create_swapchain(&swapchain_create_info, None) {
+                Ok(s) => s,
+                Err(_) => return false,
+            }
+        };
+
+        self.images = unsafe { self.swapchain_loader.get_swapchain_images(self.swapchain).unwrap_or_default() };
+        
+        for &img in &self.images {
+            let view_info = vk::ImageViewCreateInfo::default()
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(self.format.format)
+                .components(vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::R,
+                    g: vk::ComponentSwizzle::G,
+                    b: vk::ComponentSwizzle::B,
+                    a: vk::ComponentSwizzle::A,
+                })
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image(img);
+
+            if let Ok(view) = unsafe { vulkan.device.create_image_view(&view_info, None) } {
+                self.image_views.push(view);
+            } else { return false; }
+        }
+
+        let depth_format = vk::Format::D32_SFLOAT;
+        let depth_image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D { width, height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(depth_format)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        self.depth_image = unsafe {
+            match vulkan.device.create_image(&depth_image_info, None) {
+                Ok(img) => img,
+                Err(_) => return false,
+            }
+        };
+        
+        let mem_req = unsafe { vulkan.device.get_image_memory_requirements(self.depth_image) };
+        let mem_type_index = vulkan.find_memory_type(mem_req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL).unwrap_or(0);
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(mem_req.size)
+            .memory_type_index(mem_type_index);
+
+        self.depth_image_memory = unsafe {
+            match vulkan.device.allocate_memory(&alloc_info, None) {
+                Ok(mem) => mem,
+                Err(_) => return false,
+            }
+        };
+        
+        unsafe {
+            if vulkan.device.bind_image_memory(self.depth_image, self.depth_image_memory, 0).is_err() {
+                return false;
+            }
+        }
+
+        let depth_view_info = vk::ImageViewCreateInfo::default()
+            .image(self.depth_image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(depth_format)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::DEPTH,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+        self.depth_image_view = unsafe {
+            match vulkan.device.create_image_view(&depth_view_info, None) {
+                Ok(v) => v,
+                Err(_) => return false,
+            }
+        };
+
+        true
+    }
+    
+    pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
+        self.cleanup_swapchain(vulkan);
+        unsafe {
             self.surface_loader.destroy_surface(self.surface, None);
         }
     }

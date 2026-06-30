@@ -10,6 +10,9 @@ pub struct Window {
     hwnd: win32::HWND,
     hinstance: win32::HINSTANCE,
     should_close: bool,
+    pub width: u32,
+    pub height: u32,
+    resized: bool,
 }
 
 impl Window {
@@ -52,11 +55,16 @@ impl Window {
 
             win32::ShowWindow(hwnd, win32::SW_SHOW);
 
-            Self {
+            let window = Self {
                 hwnd,
                 hinstance,
                 should_close: false,
-            }
+                width: width as u32,
+                height: height as u32,
+                resized: false,
+            };
+
+            window
         }
     }
 
@@ -120,6 +128,29 @@ impl Window {
     /// Raw HINSTANCE handle, needed for Vulkan surface creation.
     pub fn hinstance(&self) -> win32::HINSTANCE {
         self.hinstance
+    }
+
+    /// Check if the window was resized since the last check.
+    pub fn check_and_clear_resized(&mut self) -> bool {
+        let mut rect = win32::RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        unsafe {
+            win32::GetClientRect(self.hwnd, &mut rect);
+        }
+        let w = (rect.right - rect.left) as u32;
+        let h = (rect.bottom - rect.top) as u32;
+
+        if w != self.width || h != self.height {
+            self.width = w;
+            self.height = h;
+            self.resized = true;
+        }
+
+        if self.resized {
+            self.resized = false;
+            true
+        } else {
+            false
+        }
     }
 }
 

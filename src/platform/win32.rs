@@ -103,6 +103,14 @@ pub struct POINT {
 }
 
 #[repr(C)]
+pub struct RECT {
+    pub left: LONG,
+    pub top: LONG,
+    pub right: LONG,
+    pub bottom: LONG,
+}
+
+#[repr(C)]
 pub struct MSG {
     pub hwnd: HWND,
     pub message: UINT,
@@ -144,10 +152,15 @@ extern "system" {
     ) -> BOOL;
 
     pub fn TranslateMessage(lpMsg: *const MSG) -> BOOL;
-
     pub fn DispatchMessageA(lpMsg: *const MSG) -> LRESULT;
 
     pub fn ShowWindow(hWnd: HWND, nCmdShow: i32) -> BOOL;
+    pub fn UpdateWindow(hWnd: HWND) -> BOOL;
+    
+    pub fn SetWindowLongPtrA(hWnd: HWND, nIndex: i32, dwNewLong: isize) -> isize;
+    pub fn GetWindowLongPtrA(hWnd: HWND, nIndex: i32) -> isize;
+    
+    pub fn GetClientRect(hWnd: HWND, lpRect: *mut RECT) -> BOOL;
 }
 
 #[link(name = "kernel32")]
@@ -155,6 +168,5 @@ extern "system" {
     pub fn GetModuleHandleA(lpModuleName: *const u8) -> HMODULE;
     
     pub fn QueryPerformanceCounter(lpPerformanceCount: *mut i64) -> BOOL;
-    
     pub fn QueryPerformanceFrequency(lpFrequency: *mut i64) -> BOOL;
 }

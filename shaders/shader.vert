@@ -7,17 +7,20 @@ layout(location = 2) in vec2 inUV;
 layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec2 fragUV;
 
-layout(push_constant) uniform PushConstants {
-    mat4 mvp;
+layout(binding = 0) uniform GlobalUbo {
+    mat4 viewProj;
     vec4 lightDir;
     vec4 lightColor;
+} ubo;
+
+layout(push_constant) uniform PushConstants {
+    mat4 world;
 } pc;
 
 void main() {
-    gl_Position = pc.mvp * vec4(inPosition, 1.0);
-    // Since we don't have a separate normal matrix yet (no non-uniform scaling/rotations implemented on normals),
-    // we just pass the object space normal for now to get basic lighting working.
-    // In a real engine, we'd pass the world-space normal: mat3(model) * inNormal.
-    fragNormal = inNormal;
+    gl_Position = ubo.viewProj * pc.world * vec4(inPosition, 1.0);
+    // Transform normal to world space. 
+    // Assumes uniform scaling! (If non-uniform, use inverse transpose)
+    fragNormal = mat3(pc.world) * inNormal;
     fragUV = inUV;
 }

@@ -12,10 +12,16 @@ pub struct Vertex {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct PushConstants {
-    pub mvp: crate::math::mat4::Mat4,
+pub struct GlobalUbo {
+    pub view_proj: crate::math::mat4::Mat4,
     pub light_dir: [f32; 4],
     pub light_color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PushConstants {
+    pub world: crate::math::mat4::Mat4,
 }
 
 pub struct Pipeline {
@@ -25,7 +31,7 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn new(vulkan: &VulkanDevice, render_pass: vk::RenderPass, extent: vk::Extent2D) -> Option<Self> {
+    pub fn new(vulkan: &VulkanDevice, render_pass: vk::RenderPass, _extent: vk::Extent2D) -> Option<Self> {
         // Attempt to load shaders from disk. If missing, return None gracefully.
         let vert_code = std::fs::read("shaders/vert.spv").ok()?;
         let frag_code = std::fs::read("shaders/frag.spv").ok()?;
@@ -78,23 +84,9 @@ impl Pipeline {
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
 
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent,
-        };
-
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-            .viewports(std::slice::from_ref(&viewport))
-            .scissors(std::slice::from_ref(&scissor));
+            .viewport_count(1)
+            .scissor_count(1);
 
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .depth_clamp_enable(false)
@@ -130,14 +122,21 @@ impl Pipeline {
             .offset(0)
             .size(std::mem::size_of::<PushConstants>() as u32);
 
-        let sampler_layout_binding = vk::DescriptorSetLayoutBinding::default()
+        let ubo_layout_binding = vk::DescriptorSetLayoutBinding::default()
             .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
+
+        let sampler_layout_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
 
+        let bindings = [ubo_layout_binding, sampler_layout_binding];
         let descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(std::slice::from_ref(&sampler_layout_binding));
+            .bindings(&bindings);
 
         let descriptor_set_layout = unsafe { vulkan.device.create_descriptor_set_layout(&descriptor_set_layout_info, None).ok()? };
 
@@ -159,6 +158,12 @@ impl Pipeline {
             .layout(layout)
             .render_pass(render_pass)
             .subpass(0);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
+            .dynamic_states(&dynamic_states);
+
+        let pipeline_info = pipeline_info.dynamic_state(&dynamic_state_info);
 
         let handle = unsafe {
             vulkan.device
