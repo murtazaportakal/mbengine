@@ -348,4 +348,4 @@ Having completed the foundational architecture (Phases 1-21), this section outli
 
 ---
 
-*Start the next session with: "Continue from ENGINE_ROADMAP.md — build Epic 2: Offscreen Rendering (The Viewport) to transition the engine into a full Editor."*
+*Start the next session with: "Continue from ENGINE_ROADMAP.md — proceed with Epic 1 Phase D (Advanced Post-Processing)."*
