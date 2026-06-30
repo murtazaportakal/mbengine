@@ -93,8 +93,9 @@ pub const VK_Q: usize = 0x51;
 pub const VK_S: usize = 0x53;
 pub const VK_W: usize = 0x57;
 
-pub type WNDPROC =
-    Option<unsafe extern "system" fn(hwnd: HWND, uMsg: UINT, wParam: WPARAM, lParam: LPARAM) -> LRESULT>;
+pub type WNDPROC = Option<
+    unsafe extern "system" fn(hwnd: HWND, uMsg: UINT, wParam: WPARAM, lParam: LPARAM) -> LRESULT,
+>;
 
 #[repr(C)]
 pub struct WNDCLASSEXA {
@@ -172,17 +173,17 @@ extern "system" {
 
     pub fn ShowWindow(hWnd: HWND, nCmdShow: i32) -> BOOL;
     pub fn UpdateWindow(hWnd: HWND) -> BOOL;
-    
+
     pub fn SetWindowLongPtrA(hWnd: HWND, nIndex: i32, dwNewLong: isize) -> isize;
     pub fn GetWindowLongPtrA(hWnd: HWND, nIndex: i32) -> isize;
-    
+
     pub fn GetClientRect(hWnd: HWND, lpRect: *mut RECT) -> BOOL;
 }
 
 #[link(name = "kernel32")]
 extern "system" {
     pub fn GetModuleHandleA(lpModuleName: *const u8) -> HMODULE;
-    
+
     pub fn QueryPerformanceCounter(lpPerformanceCount: *mut i64) -> BOOL;
     pub fn QueryPerformanceFrequency(lpFrequency: *mut i64) -> BOOL;
 }

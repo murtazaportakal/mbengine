@@ -38,7 +38,11 @@ where
     /// # Safety
     /// The returned `HashMap` must not outlive the `ArenaAllocator`.
     pub fn with_capacity(arena: &mut ArenaAllocator, capacity: usize) -> Self {
-        Self::with_capacity_and_hasher(arena, capacity, std::collections::hash_map::RandomState::new())
+        Self::with_capacity_and_hasher(
+            arena,
+            capacity,
+            std::collections::hash_map::RandomState::new(),
+        )
     }
 }
 
@@ -48,19 +52,26 @@ where
     S: BuildHasher,
 {
     /// Create a new HashMap with a specific capacity and hasher.
-    pub fn with_capacity_and_hasher(arena: &mut ArenaAllocator, capacity: usize, build_hasher: S) -> Self {
+    pub fn with_capacity_and_hasher(
+        arena: &mut ArenaAllocator,
+        capacity: usize,
+        build_hasher: S,
+    ) -> Self {
         let entries = if capacity > 0 {
             let p = arena.allocate_array::<Entry<K, V>>(capacity);
             assert!(!p.is_null(), "HashMap: arena exhausted during allocation");
-            
+
             unsafe {
                 for i in 0..capacity {
-                    ptr::write(p.add(i), Entry {
-                        hash: 0,
-                        probe_dist: 0,
-                        key: MaybeUninit::uninit(),
-                        value: MaybeUninit::uninit(),
-                    });
+                    ptr::write(
+                        p.add(i),
+                        Entry {
+                            hash: 0,
+                            probe_dist: 0,
+                            key: MaybeUninit::uninit(),
+                            value: MaybeUninit::uninit(),
+                        },
+                    );
                 }
             }
             p
@@ -96,7 +107,11 @@ where
 
     fn hash_key(&self, key: &K) -> u64 {
         let hash = self.build_hasher.hash_one(key);
-        if hash == 0 { 1 } else { hash }
+        if hash == 0 {
+            1
+        } else {
+            hash
+        }
     }
 
     /// Insert a key-value pair into the map.
@@ -161,7 +176,9 @@ where
 
     /// Retrieve a reference to the value associated with the given key.
     pub fn get(&self, key: &K) -> Option<&V> {
-        if self.capacity == 0 { return None; }
+        if self.capacity == 0 {
+            return None;
+        }
 
         let hash = self.hash_key(key);
         let mut idx = (hash as usize) % self.capacity;
@@ -188,7 +205,9 @@ where
 
     /// Remove a key-value pair from the map and return the value.
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        if self.capacity == 0 { return None; }
+        if self.capacity == 0 {
+            return None;
+        }
 
         let hash = self.hash_key(key);
         let mut idx = (hash as usize) % self.capacity;
@@ -243,19 +262,29 @@ where
 
     #[cold]
     fn grow(&mut self, arena: &mut ArenaAllocator) {
-        let new_capacity = if self.capacity == 0 { 8 } else { self.capacity * 2 };
-        
+        let new_capacity = if self.capacity == 0 {
+            8
+        } else {
+            self.capacity * 2
+        };
+
         let new_entries = arena.allocate_array::<Entry<K, V>>(new_capacity);
-        assert!(!new_entries.is_null(), "HashMap: arena exhausted during grow");
+        assert!(
+            !new_entries.is_null(),
+            "HashMap: arena exhausted during grow"
+        );
 
         unsafe {
             for i in 0..new_capacity {
-                ptr::write(new_entries.add(i), Entry {
-                    hash: 0,
-                    probe_dist: 0,
-                    key: MaybeUninit::uninit(),
-                    value: MaybeUninit::uninit(),
-                });
+                ptr::write(
+                    new_entries.add(i),
+                    Entry {
+                        hash: 0,
+                        probe_dist: 0,
+                        key: MaybeUninit::uninit(),
+                        value: MaybeUninit::uninit(),
+                    },
+                );
             }
         }
 
@@ -279,12 +308,14 @@ where
             }
         }
     }
-    }
+}
 
 impl<K, V, S> HashMap<K, V, S> {
     /// Clear the map, dropping all elements.
     pub fn clear(&mut self) {
-        if self.capacity == 0 { return; }
+        if self.capacity == 0 {
+            return;
+        }
 
         for i in 0..self.capacity {
             let slot = unsafe { &mut *self.entries.add(i) };

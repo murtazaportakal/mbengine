@@ -75,7 +75,10 @@ impl<T> ComponentArray<T> {
 
         // Allocate sparse array (entity-index → dense-index).
         let sparse = arena.allocate_array::<u32>(MAX_ENTITIES as usize);
-        assert!(!sparse.is_null(), "ComponentArray: arena exhausted allocating sparse array.");
+        assert!(
+            !sparse.is_null(),
+            "ComponentArray: arena exhausted allocating sparse array."
+        );
 
         // Initialise all slots to "no component" (0xFFFFFFFF = INVALID_INDEX).
         ptr::write_bytes(sparse, 0xFF, MAX_ENTITIES as usize);
@@ -90,7 +93,10 @@ impl<T> ComponentArray<T> {
             std::mem::size_of::<T>() * dense_capacity as usize,
             component_align,
         );
-        assert!(!dense_raw.is_null(), "ComponentArray: arena exhausted allocating dense array.");
+        assert!(
+            !dense_raw.is_null(),
+            "ComponentArray: arena exhausted allocating dense array."
+        );
         let dense = dense_raw as *mut T;
 
         // Allocate dense-to-entity reverse map.

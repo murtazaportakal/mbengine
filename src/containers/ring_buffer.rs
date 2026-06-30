@@ -56,7 +56,9 @@ impl<T> RingBuffer<T> {
 
         unsafe {
             // Write to the buffer
-            self.buffer.add(head & self.capacity_mask).write(MaybeUninit::new(value));
+            self.buffer
+                .add(head & self.capacity_mask)
+                .write(MaybeUninit::new(value));
         }
 
         // Increment head
@@ -77,7 +79,10 @@ impl<T> RingBuffer<T> {
 
         let value = unsafe {
             // Read from the buffer
-            self.buffer.add(tail & self.capacity_mask).read().assume_init()
+            self.buffer
+                .add(tail & self.capacity_mask)
+                .read()
+                .assume_init()
         };
 
         // Increment tail

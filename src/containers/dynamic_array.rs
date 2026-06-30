@@ -25,7 +25,10 @@ impl<T> DynamicArray<T> {
     pub fn with_capacity(arena: &mut ArenaAllocator, capacity: usize) -> Self {
         let ptr = if capacity > 0 {
             let p = arena.allocate_array::<T>(capacity);
-            assert!(!p.is_null(), "DynamicArray: arena exhausted during allocation");
+            assert!(
+                !p.is_null(),
+                "DynamicArray: arena exhausted during allocation"
+            );
             p
         } else {
             ptr::null_mut()
@@ -123,7 +126,10 @@ impl<T> DynamicArray<T> {
         };
 
         let new_ptr = arena.allocate_array::<T>(new_capacity);
-        assert!(!new_ptr.is_null(), "DynamicArray: arena exhausted during grow");
+        assert!(
+            !new_ptr.is_null(),
+            "DynamicArray: arena exhausted during grow"
+        );
 
         if !self.ptr.is_null() && self.len > 0 {
             unsafe {

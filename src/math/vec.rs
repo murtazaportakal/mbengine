@@ -1,7 +1,7 @@
 //! Vector types optimized for game development.
 
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign, Neg};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 // ── Vec2 ────────────────────────────────────────────────────────────────────
 
@@ -161,56 +161,371 @@ impl From<Vec3> for Vec4 {
 
 // ── Operator Overloads ──────────────────────────────────────────────────────
 
-
-
 // Expand for Vec2
-impl Add for Vec2 { type Output = Self; #[inline] fn add(self, o: Self) -> Self { Self { x: self.x + o.x, y: self.y + o.y } } }
-impl AddAssign for Vec2 { #[inline] fn add_assign(&mut self, o: Self) { *self = *self + o; } }
-impl Sub for Vec2 { type Output = Self; #[inline] fn sub(self, o: Self) -> Self { Self { x: self.x - o.x, y: self.y - o.y } } }
-impl SubAssign for Vec2 { #[inline] fn sub_assign(&mut self, o: Self) { *self = *self - o; } }
-impl Mul for Vec2 { type Output = Self; #[inline] fn mul(self, o: Self) -> Self { Self { x: self.x * o.x, y: self.y * o.y } } }
-impl MulAssign for Vec2 { #[inline] fn mul_assign(&mut self, o: Self) { *self = *self * o; } }
-impl Div for Vec2 { type Output = Self; #[inline] fn div(self, o: Self) -> Self { Self { x: self.x / o.x, y: self.y / o.y } } }
-impl DivAssign for Vec2 { #[inline] fn div_assign(&mut self, o: Self) { *self = *self / o; } }
+impl Add for Vec2 {
+    type Output = Self;
+    #[inline]
+    fn add(self, o: Self) -> Self {
+        Self {
+            x: self.x + o.x,
+            y: self.y + o.y,
+        }
+    }
+}
+impl AddAssign for Vec2 {
+    #[inline]
+    fn add_assign(&mut self, o: Self) {
+        *self = *self + o;
+    }
+}
+impl Sub for Vec2 {
+    type Output = Self;
+    #[inline]
+    fn sub(self, o: Self) -> Self {
+        Self {
+            x: self.x - o.x,
+            y: self.y - o.y,
+        }
+    }
+}
+impl SubAssign for Vec2 {
+    #[inline]
+    fn sub_assign(&mut self, o: Self) {
+        *self = *self - o;
+    }
+}
+impl Mul for Vec2 {
+    type Output = Self;
+    #[inline]
+    fn mul(self, o: Self) -> Self {
+        Self {
+            x: self.x * o.x,
+            y: self.y * o.y,
+        }
+    }
+}
+impl MulAssign for Vec2 {
+    #[inline]
+    fn mul_assign(&mut self, o: Self) {
+        *self = *self * o;
+    }
+}
+impl Div for Vec2 {
+    type Output = Self;
+    #[inline]
+    fn div(self, o: Self) -> Self {
+        Self {
+            x: self.x / o.x,
+            y: self.y / o.y,
+        }
+    }
+}
+impl DivAssign for Vec2 {
+    #[inline]
+    fn div_assign(&mut self, o: Self) {
+        *self = *self / o;
+    }
+}
 
-impl Mul<f32> for Vec2 { type Output = Self; #[inline] fn mul(self, s: f32) -> Self { Self { x: self.x * s, y: self.y * s } } }
-impl MulAssign<f32> for Vec2 { #[inline] fn mul_assign(&mut self, s: f32) { *self = *self * s; } }
-impl Div<f32> for Vec2 { type Output = Self; #[inline] fn div(self, s: f32) -> Self { Self { x: self.x / s, y: self.y / s } } }
-impl DivAssign<f32> for Vec2 { #[inline] fn div_assign(&mut self, s: f32) { *self = *self / s; } }
-impl Neg for Vec2 { type Output = Self; #[inline] fn neg(self) -> Self { Self { x: -self.x, y: -self.y } } }
-impl Mul<Vec2> for f32 { type Output = Vec2; #[inline] fn mul(self, v: Vec2) -> Vec2 { v * self } }
-
+impl Mul<f32> for Vec2 {
+    type Output = Self;
+    #[inline]
+    fn mul(self, s: f32) -> Self {
+        Self {
+            x: self.x * s,
+            y: self.y * s,
+        }
+    }
+}
+impl MulAssign<f32> for Vec2 {
+    #[inline]
+    fn mul_assign(&mut self, s: f32) {
+        *self = *self * s;
+    }
+}
+impl Div<f32> for Vec2 {
+    type Output = Self;
+    #[inline]
+    fn div(self, s: f32) -> Self {
+        Self {
+            x: self.x / s,
+            y: self.y / s,
+        }
+    }
+}
+impl DivAssign<f32> for Vec2 {
+    #[inline]
+    fn div_assign(&mut self, s: f32) {
+        *self = *self / s;
+    }
+}
+impl Neg for Vec2 {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self {
+            x: -self.x,
+            y: -self.y,
+        }
+    }
+}
+impl Mul<Vec2> for f32 {
+    type Output = Vec2;
+    #[inline]
+    fn mul(self, v: Vec2) -> Vec2 {
+        v * self
+    }
+}
 
 // Expand for Vec3
-impl Add for Vec3 { type Output = Self; #[inline] fn add(self, o: Self) -> Self { Self { x: self.x + o.x, y: self.y + o.y, z: self.z + o.z } } }
-impl AddAssign for Vec3 { #[inline] fn add_assign(&mut self, o: Self) { *self = *self + o; } }
-impl Sub for Vec3 { type Output = Self; #[inline] fn sub(self, o: Self) -> Self { Self { x: self.x - o.x, y: self.y - o.y, z: self.z - o.z } } }
-impl SubAssign for Vec3 { #[inline] fn sub_assign(&mut self, o: Self) { *self = *self - o; } }
-impl Mul for Vec3 { type Output = Self; #[inline] fn mul(self, o: Self) -> Self { Self { x: self.x * o.x, y: self.y * o.y, z: self.z * o.z } } }
-impl MulAssign for Vec3 { #[inline] fn mul_assign(&mut self, o: Self) { *self = *self * o; } }
-impl Div for Vec3 { type Output = Self; #[inline] fn div(self, o: Self) -> Self { Self { x: self.x / o.x, y: self.y / o.y, z: self.z / o.z } } }
-impl DivAssign for Vec3 { #[inline] fn div_assign(&mut self, o: Self) { *self = *self / o; } }
+impl Add for Vec3 {
+    type Output = Self;
+    #[inline]
+    fn add(self, o: Self) -> Self {
+        Self {
+            x: self.x + o.x,
+            y: self.y + o.y,
+            z: self.z + o.z,
+        }
+    }
+}
+impl AddAssign for Vec3 {
+    #[inline]
+    fn add_assign(&mut self, o: Self) {
+        *self = *self + o;
+    }
+}
+impl Sub for Vec3 {
+    type Output = Self;
+    #[inline]
+    fn sub(self, o: Self) -> Self {
+        Self {
+            x: self.x - o.x,
+            y: self.y - o.y,
+            z: self.z - o.z,
+        }
+    }
+}
+impl SubAssign for Vec3 {
+    #[inline]
+    fn sub_assign(&mut self, o: Self) {
+        *self = *self - o;
+    }
+}
+impl Mul for Vec3 {
+    type Output = Self;
+    #[inline]
+    fn mul(self, o: Self) -> Self {
+        Self {
+            x: self.x * o.x,
+            y: self.y * o.y,
+            z: self.z * o.z,
+        }
+    }
+}
+impl MulAssign for Vec3 {
+    #[inline]
+    fn mul_assign(&mut self, o: Self) {
+        *self = *self * o;
+    }
+}
+impl Div for Vec3 {
+    type Output = Self;
+    #[inline]
+    fn div(self, o: Self) -> Self {
+        Self {
+            x: self.x / o.x,
+            y: self.y / o.y,
+            z: self.z / o.z,
+        }
+    }
+}
+impl DivAssign for Vec3 {
+    #[inline]
+    fn div_assign(&mut self, o: Self) {
+        *self = *self / o;
+    }
+}
 
-impl Mul<f32> for Vec3 { type Output = Self; #[inline] fn mul(self, s: f32) -> Self { Self { x: self.x * s, y: self.y * s, z: self.z * s } } }
-impl MulAssign<f32> for Vec3 { #[inline] fn mul_assign(&mut self, s: f32) { *self = *self * s; } }
-impl Div<f32> for Vec3 { type Output = Self; #[inline] fn div(self, s: f32) -> Self { Self { x: self.x / s, y: self.y / s, z: self.z / s } } }
-impl DivAssign<f32> for Vec3 { #[inline] fn div_assign(&mut self, s: f32) { *self = *self / s; } }
-impl Neg for Vec3 { type Output = Self; #[inline] fn neg(self) -> Self { Self { x: -self.x, y: -self.y, z: -self.z } } }
-impl Mul<Vec3> for f32 { type Output = Vec3; #[inline] fn mul(self, v: Vec3) -> Vec3 { v * self } }
+impl Mul<f32> for Vec3 {
+    type Output = Self;
+    #[inline]
+    fn mul(self, s: f32) -> Self {
+        Self {
+            x: self.x * s,
+            y: self.y * s,
+            z: self.z * s,
+        }
+    }
+}
+impl MulAssign<f32> for Vec3 {
+    #[inline]
+    fn mul_assign(&mut self, s: f32) {
+        *self = *self * s;
+    }
+}
+impl Div<f32> for Vec3 {
+    type Output = Self;
+    #[inline]
+    fn div(self, s: f32) -> Self {
+        Self {
+            x: self.x / s,
+            y: self.y / s,
+            z: self.z / s,
+        }
+    }
+}
+impl DivAssign<f32> for Vec3 {
+    #[inline]
+    fn div_assign(&mut self, s: f32) {
+        *self = *self / s;
+    }
+}
+impl Neg for Vec3 {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+        }
+    }
+}
+impl Mul<Vec3> for f32 {
+    type Output = Vec3;
+    #[inline]
+    fn mul(self, v: Vec3) -> Vec3 {
+        v * self
+    }
+}
 
 // Expand for Vec4
-impl Add for Vec4 { type Output = Self; #[inline] fn add(self, o: Self) -> Self { Self { x: self.x + o.x, y: self.y + o.y, z: self.z + o.z, w: self.w + o.w } } }
-impl AddAssign for Vec4 { #[inline] fn add_assign(&mut self, o: Self) { *self = *self + o; } }
-impl Sub for Vec4 { type Output = Self; #[inline] fn sub(self, o: Self) -> Self { Self { x: self.x - o.x, y: self.y - o.y, z: self.z - o.z, w: self.w - o.w } } }
-impl SubAssign for Vec4 { #[inline] fn sub_assign(&mut self, o: Self) { *self = *self - o; } }
-impl Mul for Vec4 { type Output = Self; #[inline] fn mul(self, o: Self) -> Self { Self { x: self.x * o.x, y: self.y * o.y, z: self.z * o.z, w: self.w * o.w } } }
-impl MulAssign for Vec4 { #[inline] fn mul_assign(&mut self, o: Self) { *self = *self * o; } }
-impl Div for Vec4 { type Output = Self; #[inline] fn div(self, o: Self) -> Self { Self { x: self.x / o.x, y: self.y / o.y, z: self.z / o.z, w: self.w / o.w } } }
-impl DivAssign for Vec4 { #[inline] fn div_assign(&mut self, o: Self) { *self = *self / o; } }
+impl Add for Vec4 {
+    type Output = Self;
+    #[inline]
+    fn add(self, o: Self) -> Self {
+        Self {
+            x: self.x + o.x,
+            y: self.y + o.y,
+            z: self.z + o.z,
+            w: self.w + o.w,
+        }
+    }
+}
+impl AddAssign for Vec4 {
+    #[inline]
+    fn add_assign(&mut self, o: Self) {
+        *self = *self + o;
+    }
+}
+impl Sub for Vec4 {
+    type Output = Self;
+    #[inline]
+    fn sub(self, o: Self) -> Self {
+        Self {
+            x: self.x - o.x,
+            y: self.y - o.y,
+            z: self.z - o.z,
+            w: self.w - o.w,
+        }
+    }
+}
+impl SubAssign for Vec4 {
+    #[inline]
+    fn sub_assign(&mut self, o: Self) {
+        *self = *self - o;
+    }
+}
+impl Mul for Vec4 {
+    type Output = Self;
+    #[inline]
+    fn mul(self, o: Self) -> Self {
+        Self {
+            x: self.x * o.x,
+            y: self.y * o.y,
+            z: self.z * o.z,
+            w: self.w * o.w,
+        }
+    }
+}
+impl MulAssign for Vec4 {
+    #[inline]
+    fn mul_assign(&mut self, o: Self) {
+        *self = *self * o;
+    }
+}
+impl Div for Vec4 {
+    type Output = Self;
+    #[inline]
+    fn div(self, o: Self) -> Self {
+        Self {
+            x: self.x / o.x,
+            y: self.y / o.y,
+            z: self.z / o.z,
+            w: self.w / o.w,
+        }
+    }
+}
+impl DivAssign for Vec4 {
+    #[inline]
+    fn div_assign(&mut self, o: Self) {
+        *self = *self / o;
+    }
+}
 
-impl Mul<f32> for Vec4 { type Output = Self; #[inline] fn mul(self, s: f32) -> Self { Self { x: self.x * s, y: self.y * s, z: self.z * s, w: self.w * s } } }
-impl MulAssign<f32> for Vec4 { #[inline] fn mul_assign(&mut self, s: f32) { *self = *self * s; } }
-impl Div<f32> for Vec4 { type Output = Self; #[inline] fn div(self, s: f32) -> Self { Self { x: self.x / s, y: self.y / s, z: self.z / s, w: self.w / s } } }
-impl DivAssign<f32> for Vec4 { #[inline] fn div_assign(&mut self, s: f32) { *self = *self / s; } }
-impl Neg for Vec4 { type Output = Self; #[inline] fn neg(self) -> Self { Self { x: -self.x, y: -self.y, z: -self.z, w: -self.w } } }
-impl Mul<Vec4> for f32 { type Output = Vec4; #[inline] fn mul(self, v: Vec4) -> Vec4 { v * self } }
+impl Mul<f32> for Vec4 {
+    type Output = Self;
+    #[inline]
+    fn mul(self, s: f32) -> Self {
+        Self {
+            x: self.x * s,
+            y: self.y * s,
+            z: self.z * s,
+            w: self.w * s,
+        }
+    }
+}
+impl MulAssign<f32> for Vec4 {
+    #[inline]
+    fn mul_assign(&mut self, s: f32) {
+        *self = *self * s;
+    }
+}
+impl Div<f32> for Vec4 {
+    type Output = Self;
+    #[inline]
+    fn div(self, s: f32) -> Self {
+        Self {
+            x: self.x / s,
+            y: self.y / s,
+            z: self.z / s,
+            w: self.w / s,
+        }
+    }
+}
+impl DivAssign<f32> for Vec4 {
+    #[inline]
+    fn div_assign(&mut self, s: f32) {
+        *self = *self / s;
+    }
+}
+impl Neg for Vec4 {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+            w: -self.w,
+        }
+    }
+}
+impl Mul<Vec4> for f32 {
+    type Output = Vec4;
+    #[inline]
+    fn mul(self, v: Vec4) -> Vec4 {
+        v * self
+    }
+}

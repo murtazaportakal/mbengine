@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub fn compile_shader(shader_path: &Path) -> Result<(), String> {
     let glslang_path = PathBuf::from("glslang/bin/glslangValidator.exe");
@@ -8,7 +8,8 @@ pub fn compile_shader(shader_path: &Path) -> Result<(), String> {
     }
 
     let mut spv_path = shader_path.to_path_buf();
-    spv_path.set_extension(format!("{}.spv", shader_path.extension().unwrap().to_str().unwrap()));
+    let ext = shader_path.extension().unwrap().to_str().unwrap();
+    spv_path.set_file_name(format!("{}.spv", ext));
 
     let output = Command::new(&glslang_path)
         .arg("-V")
@@ -29,15 +30,15 @@ pub fn compile_shader(shader_path: &Path) -> Result<(), String> {
 
 pub fn compile_all_shaders() {
     let shaders_dir = PathBuf::from("src/shaders");
-    if !shaders_dir.exists() { return; }
+    if !shaders_dir.exists() {
+        return;
+    }
 
-    for entry in std::fs::read_dir(&shaders_dir).unwrap() {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext == "vert" || ext == "frag" {
-                    let _ = compile_shader(&path);
-                }
+    for entry in std::fs::read_dir(&shaders_dir).unwrap().flatten() {
+        let path = entry.path();
+        if let Some(ext) = path.extension() {
+            if ext == "vert" || ext == "frag" {
+                let _ = compile_shader(&path);
             }
         }
     }

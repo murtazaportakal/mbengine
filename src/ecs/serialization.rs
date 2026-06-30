@@ -1,12 +1,12 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 
-use crate::ecs::world::World;
 use crate::ecs::components::{
-    TransformComponent, RenderComponent, CameraComponent, 
-    LightComponent, PointLightComponent, HierarchyComponent
+    CameraComponent, HierarchyComponent, LightComponent, PointLightComponent, RenderComponent,
+    TransformComponent,
 };
+use crate::ecs::world::World;
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct SerializedEntity {
@@ -27,7 +27,9 @@ pub struct Scene {
 }
 
 pub fn save_scene(world: &World, file_path: &str) {
-    let mut scene = Scene { entities: Vec::new() };
+    let mut scene = Scene {
+        entities: Vec::new(),
+    };
 
     // Get arrays
     let transforms = world.get_component_array::<TransformComponent>();
@@ -48,7 +50,7 @@ pub fn save_scene(world: &World, file_path: &str) {
     for &entity_index in entities {
         // entity_index is the raw index, not full EntityId with generation.
         // But for serialization we can just use the index, and let load assign new IDs.
-        
+
         let mut s_ent = SerializedEntity {
             id: entity_index,
             ..Default::default()
@@ -97,32 +99,48 @@ pub fn load_scene(world: &mut World, file_path: &str) {
                 // We'd need a clear() method on world, but we can't easily iterate all alive entities safely without a list.
                 // For simplicity, we just assume load_scene is called on a fresh world, or we ignore old entities.
                 // Let's print out what we loaded.
-                
-                crate::log_info!("Loaded {} entities from {}", scene.entities.len(), file_path);
-                
+
+                crate::log_info!(
+                    "Loaded {} entities from {}",
+                    scene.entities.len(),
+                    file_path
+                );
+
                 for s_ent in scene.entities {
                     let new_id = world.create_entity();
-                    
+
                     if let Some(transform) = s_ent.transform {
-                        unsafe { world.add_component(new_id, transform); }
+                        unsafe {
+                            world.add_component(new_id, transform);
+                        }
                     }
                     if let Some(render) = s_ent.render {
-                        unsafe { world.add_component(new_id, render); }
+                        unsafe {
+                            world.add_component(new_id, render);
+                        }
                     }
                     if let Some(camera) = s_ent.camera {
-                        unsafe { world.add_component(new_id, camera); }
+                        unsafe {
+                            world.add_component(new_id, camera);
+                        }
                     }
                     if let Some(light) = s_ent.light {
-                        unsafe { world.add_component(new_id, light); }
+                        unsafe {
+                            world.add_component(new_id, light);
+                        }
                     }
                     if let Some(point_light) = s_ent.point_light {
-                        unsafe { world.add_component(new_id, point_light); }
+                        unsafe {
+                            world.add_component(new_id, point_light);
+                        }
                     }
                     if let Some(hierarchy) = s_ent.hierarchy {
                         // The parent ID in hierarchy is the OLD entity index!
                         // We would need an ID map to map old IDs to new IDs.
                         // For a simple demo, we just assume IDs are somewhat sequential.
-                        unsafe { world.add_component(new_id, hierarchy); }
+                        unsafe {
+                            world.add_component(new_id, hierarchy);
+                        }
                     }
 
                     // We could also re-add physics bodies here based on naming or scale.

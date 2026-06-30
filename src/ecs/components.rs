@@ -1,6 +1,6 @@
-use crate::math::vec::Vec3;
 use crate::math::mat4::Mat4;
-use serde::{Serialize, Deserialize};
+use crate::math::vec::Vec3;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct TransformComponent {
@@ -28,7 +28,7 @@ impl TransformComponent {
         t.cols[3].x = self.position.x;
         t.cols[3].y = self.position.y;
         t.cols[3].z = self.position.z;
-        
+
         // Build scale matrix
         let mut s = Mat4::identity();
         s.cols[0].x = self.scale.x;

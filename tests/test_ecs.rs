@@ -29,6 +29,7 @@ struct Velocity {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 struct Health {
     current: i32,
     max: i32,
@@ -68,7 +69,9 @@ impl System for MovementSystem {
         for entity_idx in entity_indices {
             unsafe {
                 let vel = *world.get_component_array::<Velocity>().get(entity_idx);
-                let pos = world.get_component_array_mut::<Position>().get_mut(entity_idx);
+                let pos = world
+                    .get_component_array_mut::<Position>()
+                    .get_mut(entity_idx);
                 pos.x += vel.vx * dt;
                 pos.y += vel.vy * dt;
                 pos.z += vel.vz * dt;
@@ -99,7 +102,10 @@ fn test_full_ecs_smoke_test() {
     let init_ok = mem.init_default();
     assert!(init_ok, "MemorySubsystem::init() failed");
     assert!(mem.is_initialised(), "MemorySubsystem not initialised");
-    println!("    Arena capacity: {} MB", mem.persistent_arena().capacity() / MB);
+    println!(
+        "    Arena capacity: {} MB",
+        mem.persistent_arena().capacity() / MB
+    );
 
     // ── 2. World + component registration ──────────────────────────────
     let mut world = unsafe { World::new(mem.persistent_arena()) };
@@ -119,12 +125,20 @@ fn test_full_ecs_smoke_test() {
     assert!(world.is_alive(e1), "e1 should be alive");
     assert!(world.is_alive(e2), "e2 should be alive");
     assert!(world.is_alive(e3), "e3 should be alive");
-    assert_eq!(world.alive_entity_count(), 3, "should have 3 alive entities");
+    assert_eq!(
+        world.alive_entity_count(),
+        3,
+        "should have 3 alive entities"
+    );
 
     // Destroy e2 and verify.
     world.destroy_entity(e2);
     assert!(!world.is_alive(e2), "e2 should be dead after destroy");
-    assert_eq!(world.alive_entity_count(), 2, "should have 2 alive entities");
+    assert_eq!(
+        world.alive_entity_count(),
+        2,
+        "should have 2 alive entities"
+    );
 
     // Create a new entity — should recycle e2's slot with a new generation.
     let e4 = world.create_entity();
@@ -151,19 +165,72 @@ fn test_full_ecs_smoke_test() {
 
     // ── 4. Add / get / remove components ───────────────────────────────
     unsafe {
-        world.add_component(e1, Position { x: 1.0, y: 2.0, z: 3.0 });
-        world.add_component(e1, Velocity { vx: 10.0, vy: 0.0, vz: 0.0 });
-        world.add_component(e1, Health { current: 100, max: 100 });
+        world.add_component(
+            e1,
+            Position {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+        );
+        world.add_component(
+            e1,
+            Velocity {
+                vx: 10.0,
+                vy: 0.0,
+                vz: 0.0,
+            },
+        );
+        world.add_component(
+            e1,
+            Health {
+                current: 100,
+                max: 100,
+            },
+        );
 
-        world.add_component(e3, Position { x: 5.0, y: 5.0, z: 5.0 });
-        world.add_component(e3, Velocity { vx: 0.0, vy: -5.0, vz: 0.0 });
+        world.add_component(
+            e3,
+            Position {
+                x: 5.0,
+                y: 5.0,
+                z: 5.0,
+            },
+        );
+        world.add_component(
+            e3,
+            Velocity {
+                vx: 0.0,
+                vy: -5.0,
+                vz: 0.0,
+            },
+        );
 
-        world.add_component(e4, Position { x: 0.0, y: 0.0, z: 0.0 });
-        world.add_component(e4, Health { current: 50, max: 100 });
+        world.add_component(
+            e4,
+            Position {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+        world.add_component(
+            e4,
+            Health {
+                current: 50,
+                max: 100,
+            },
+        );
     }
 
-    assert!(world.has_component::<Position>(e1), "e1 should have Position");
-    assert!(world.has_component::<Velocity>(e1), "e1 should have Velocity");
+    assert!(
+        world.has_component::<Position>(e1),
+        "e1 should have Position"
+    );
+    assert!(
+        world.has_component::<Velocity>(e1),
+        "e1 should have Velocity"
+    );
     assert!(world.has_component::<Health>(e1), "e1 should have Health");
 
     unsafe {
@@ -208,7 +275,14 @@ fn test_full_ecs_smoke_test() {
     // ── 6. System execution ────────────────────────────────────────────
     // Re-add velocity to e1 for the movement test.
     unsafe {
-        world.add_component(e1, Velocity { vx: 10.0, vy: 0.0, vz: 0.0 });
+        world.add_component(
+            e1,
+            Velocity {
+                vx: 10.0,
+                vy: 0.0,
+                vz: 0.0,
+            },
+        );
     }
 
     let pos_type_id = get_component_type_id::<Position>();
@@ -245,7 +319,14 @@ fn test_full_ecs_smoke_test() {
     // ── 7. Stale handle detection ──────────────────────────────────────
     let e5 = world.create_entity();
     unsafe {
-        world.add_component(e5, Position { x: 99.0, y: 99.0, z: 99.0 });
+        world.add_component(
+            e5,
+            Position {
+                x: 99.0,
+                y: 99.0,
+                z: 99.0,
+            },
+        );
     }
     let stale_handle = e5;
 

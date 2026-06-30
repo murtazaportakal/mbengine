@@ -58,7 +58,10 @@ impl World {
             std::mem::size_of::<EntityManager>(),
             std::mem::align_of::<EntityManager>(),
         );
-        assert!(!em_ptr.is_null(), "World: arena exhausted allocating EntityManager.");
+        assert!(
+            !em_ptr.is_null(),
+            "World: arena exhausted allocating EntityManager."
+        );
 
         let entity_manager = em_ptr as *mut EntityManager;
         ptr::write(entity_manager, EntityManager::init(arena));
@@ -100,7 +103,10 @@ impl World {
             std::mem::size_of::<ComponentArray<T>>(),
             std::mem::align_of::<ComponentArray<T>>(),
         );
-        assert!(!mem.is_null(), "World::register_component: arena exhausted.");
+        assert!(
+            !mem.is_null(),
+            "World::register_component: arena exhausted."
+        );
 
         let array_ptr = mem as *mut ComponentArray<T>;
         ptr::write(array_ptr, ComponentArray::<T>::init(arena, dense_capacity));
@@ -108,10 +114,7 @@ impl World {
         // Store both the raw pointer and the trait object pointer.
         let ops: *mut dyn ComponentArrayOps = array_ptr;
 
-        self.component_arrays[type_id as usize] = Some(ComponentArrayEntry {
-            ptr: mem,
-            ops,
-        });
+        self.component_arrays[type_id as usize] = Some(ComponentArrayEntry { ptr: mem, ops });
 
         if type_id as u32 >= self.registered_component_count {
             self.registered_component_count = type_id as u32 + 1;
@@ -176,7 +179,10 @@ impl World {
     /// # Safety
     /// The component type T must be registered. The entity must be alive.
     pub unsafe fn add_component<T: 'static>(&mut self, id: EntityId, component: T) {
-        debug_assert!(self.is_alive(id), "World::add_component: entity is not alive.");
+        debug_assert!(
+            self.is_alive(id),
+            "World::add_component: entity is not alive."
+        );
 
         let type_id = get_component_type_id::<T>();
         let index = get_entity_index(id);
@@ -191,7 +197,10 @@ impl World {
     /// The component type T must be registered. The entity must be alive
     /// and have this component.
     pub unsafe fn remove_component<T: 'static>(&mut self, id: EntityId) {
-        debug_assert!(self.is_alive(id), "World::remove_component: entity is not alive.");
+        debug_assert!(
+            self.is_alive(id),
+            "World::remove_component: entity is not alive."
+        );
 
         let type_id = get_component_type_id::<T>();
         let index = get_entity_index(id);
@@ -205,7 +214,10 @@ impl World {
     /// # Safety
     /// The entity must be alive and have the component.
     pub unsafe fn get_component<T: 'static>(&self, id: EntityId) -> &T {
-        debug_assert!(self.is_alive(id), "World::get_component: entity is not alive.");
+        debug_assert!(
+            self.is_alive(id),
+            "World::get_component: entity is not alive."
+        );
         self.get_component_array::<T>().get(get_entity_index(id))
     }
 
@@ -214,7 +226,10 @@ impl World {
     /// # Safety
     /// The entity must be alive and have the component.
     pub unsafe fn get_component_mut<T: 'static>(&mut self, id: EntityId) -> &mut T {
-        debug_assert!(self.is_alive(id), "World::get_component_mut: entity is not alive.");
+        debug_assert!(
+            self.is_alive(id),
+            "World::get_component_mut: entity is not alive."
+        );
         self.get_component_array_mut::<T>()
             .get_mut(get_entity_index(id))
     }

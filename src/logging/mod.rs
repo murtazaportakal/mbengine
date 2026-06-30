@@ -1,3 +1,3 @@
 pub mod logger;
 
-pub use logger::{Logger, Severity, set_global_logger, global_logger};
+pub use logger::{global_logger, set_global_logger, Logger, Severity};

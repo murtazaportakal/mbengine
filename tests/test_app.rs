@@ -12,7 +12,7 @@ fn test_application_boot() {
             return;
         }
     };
-    
+
     // Simulate a few frames without calling run() to avoid an infinite loop in CI
     for _ in 0..10 {
         app.window.poll_events(&mut app.input);
@@ -20,11 +20,11 @@ fn test_application_boot() {
         app.world.update_systems(dt as f32);
         app.memory.frame_arena().reset(false);
     }
-    
+
     // Explicitly call the shutdown sequence usually handled in run()
     app.vulkan.wait_idle();
     app.swapchain.shutdown(&app.vulkan);
     app.vulkan.shutdown();
-    
+
     // Drop will happen implicitly at scope exit, destroying World before MemorySubsystem.
 }

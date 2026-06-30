@@ -21,7 +21,7 @@ lto = true
 
 [dependencies]
 ash = "0.38"
-image = "0.25"
+image = { version = "0.25", features = ["hdr"] }
 memoffset = "0.9.1"
 tobj = "4.0"
 rapier3d = "0.17"

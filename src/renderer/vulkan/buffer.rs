@@ -1,7 +1,7 @@
 //! Vulkan Memory Buffer Abstraction.
 
-use ash::vk;
 use crate::renderer::vulkan::VulkanDevice;
+use ash::vk;
 
 pub struct Buffer {
     pub handle: vk::Buffer,
@@ -11,7 +11,12 @@ pub struct Buffer {
 
 impl Buffer {
     /// Create a new raw buffer and bind memory to it.
-    pub fn new(vulkan: &VulkanDevice, size: u64, usage: vk::BufferUsageFlags, properties: vk::MemoryPropertyFlags) -> Option<Self> {
+    pub fn new(
+        vulkan: &VulkanDevice,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Option<Self> {
         let buffer_info = vk::BufferCreateInfo::default()
             .size(size)
             .usage(usage)
@@ -21,7 +26,8 @@ impl Buffer {
 
         let mem_requirements = unsafe { vulkan.device.get_buffer_memory_requirements(handle) };
 
-        let memory_type_index = vulkan.find_memory_type(mem_requirements.memory_type_bits, properties)?;
+        let memory_type_index =
+            vulkan.find_memory_type(mem_requirements.memory_type_bits, properties)?;
 
         let alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(mem_requirements.size)
@@ -33,7 +39,11 @@ impl Buffer {
             vulkan.device.bind_buffer_memory(handle, memory, 0).ok()?;
         }
 
-        Some(Self { handle, memory, size })
+        Some(Self {
+            handle,
+            memory,
+            size,
+        })
     }
 
     /// Upload CPU data directly into HOST_VISIBLE buffer memory.
@@ -42,15 +52,23 @@ impl Buffer {
         assert!(data_size <= self.size);
 
         unsafe {
-            let data_ptr = vulkan.device.map_memory(self.memory, 0, data_size, vk::MemoryMapFlags::empty()).unwrap();
-            let mut align = ash::util::Align::new(data_ptr, std::mem::align_of::<T>() as u64, data_size);
+            let data_ptr = vulkan
+                .device
+                .map_memory(self.memory, 0, data_size, vk::MemoryMapFlags::empty())
+                .unwrap();
+            let mut align =
+                ash::util::Align::new(data_ptr, std::mem::align_of::<T>() as u64, data_size);
             align.copy_from_slice(data);
             vulkan.device.unmap_memory(self.memory);
         }
     }
 
     /// Create a Device Local buffer and stage CPU data into it.
-    pub fn new_device_local<T: Copy>(vulkan: &VulkanDevice, data: &[T], usage: vk::BufferUsageFlags) -> Option<Self> {
+    pub fn new_device_local<T: Copy>(
+        vulkan: &VulkanDevice,
+        data: &[T],
+        usage: vk::BufferUsageFlags,
+    ) -> Option<Self> {
         let buffer_size = (data.len() * std::mem::size_of::<T>()) as u64;
 
         // 1. Create Staging Buffer
@@ -76,7 +94,12 @@ impl Buffer {
         let cmd = vulkan.begin_single_time_commands()?;
         let copy_region = vk::BufferCopy::default().size(buffer_size);
         unsafe {
-            vulkan.device.cmd_copy_buffer(cmd, staging_buffer.handle, device_buffer.handle, std::slice::from_ref(&copy_region));
+            vulkan.device.cmd_copy_buffer(
+                cmd,
+                staging_buffer.handle,
+                device_buffer.handle,
+                std::slice::from_ref(&copy_region),
+            );
         }
         vulkan.end_single_time_commands(cmd);
 

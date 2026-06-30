@@ -1,10 +1,9 @@
 //! Mesh and Asset Loading.
 
-use crate::renderer::vulkan::pipeline::Vertex;
 use crate::renderer::vulkan::buffer::Buffer;
+use crate::renderer::vulkan::pipeline::Vertex;
 use crate::renderer::vulkan::VulkanDevice;
 use ash::vk;
-
 
 pub struct Mesh {
     pub vertex_buffer: Buffer,
@@ -21,15 +20,15 @@ impl Mesh {
             ignore_points: true,
             ignore_lines: true,
         };
-        
+
         let (models, _materials) = tobj::load_obj(path, &options).ok()?;
-        
+
         let mut loaded_meshes = Vec::new();
 
         for model in models {
             let mesh = &model.mesh;
             let mut vertices = Vec::new();
-            
+
             let num_vertices = mesh.positions.len() / 3;
             for i in 0..num_vertices {
                 let pos = [
@@ -37,7 +36,7 @@ impl Mesh {
                     mesh.positions[i * 3 + 1],
                     mesh.positions[i * 3 + 2],
                 ];
-                
+
                 let normal = if !mesh.normals.is_empty() {
                     [
                         mesh.normals[i * 3],
@@ -47,7 +46,7 @@ impl Mesh {
                 } else {
                     [0.0, 1.0, 0.0]
                 };
-                
+
                 let uv = if !mesh.texcoords.is_empty() {
                     [
                         mesh.texcoords[i * 2],
@@ -67,17 +66,11 @@ impl Mesh {
                 continue;
             }
 
-            let vertex_buffer = Buffer::new_device_local(
-                vulkan,
-                &vertices,
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-            )?;
+            let vertex_buffer =
+                Buffer::new_device_local(vulkan, &vertices, vk::BufferUsageFlags::VERTEX_BUFFER)?;
 
-            let index_buffer = Buffer::new_device_local(
-                vulkan,
-                &indices,
-                vk::BufferUsageFlags::INDEX_BUFFER,
-            )?;
+            let index_buffer =
+                Buffer::new_device_local(vulkan, &indices, vk::BufferUsageFlags::INDEX_BUFFER)?;
 
             loaded_meshes.push(Self {
                 vertex_buffer,

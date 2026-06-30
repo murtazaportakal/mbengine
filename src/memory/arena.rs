@@ -52,7 +52,10 @@ impl ArenaAllocator {
     /// - The block must remain valid for the lifetime of this allocator.
     /// - The caller is responsible for ensuring no aliasing violations.
     pub unsafe fn new(base_memory: *mut u8, total_bytes: usize) -> Self {
-        debug_assert!(!base_memory.is_null(), "ArenaAllocator: base memory must not be null.");
+        debug_assert!(
+            !base_memory.is_null(),
+            "ArenaAllocator: base memory must not be null."
+        );
         debug_assert!(total_bytes > 0, "ArenaAllocator: total bytes must be > 0.");
 
         Self {

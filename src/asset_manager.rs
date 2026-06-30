@@ -1,10 +1,16 @@
+use crate::renderer::vulkan::{Mesh, Texture, VulkanDevice};
 use std::collections::HashMap;
-use crate::renderer::vulkan::{Texture, Mesh, VulkanDevice};
 
 pub struct AssetManager {
     textures: HashMap<String, Texture>,
     meshes: Vec<Mesh>,
     model_map: HashMap<String, Vec<usize>>,
+}
+
+impl Default for AssetManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AssetManager {
@@ -17,12 +23,34 @@ impl AssetManager {
     }
 
     /// Loads a texture from file and caches it. Returns a reference to it.
-    pub fn load_texture(&mut self, vulkan: &VulkanDevice, name: &str, path: &str) -> Option<&Texture> {
+    pub fn load_texture(
+        &mut self,
+        vulkan: &VulkanDevice,
+        name: &str,
+        path: &str,
+    ) -> Option<&Texture> {
         if !self.textures.contains_key(name) {
             if let Some(tex) = Texture::load_from_file(vulkan, path) {
                 self.textures.insert(name.to_string(), tex);
             } else {
                 crate::log_info!("Failed to load texture: {}", path);
+                return None;
+            }
+        }
+        self.textures.get(name)
+    }
+
+    pub fn load_hdr_texture(
+        &mut self,
+        vulkan: &VulkanDevice,
+        name: &str,
+        path: &str,
+    ) -> Option<&Texture> {
+        if !self.textures.contains_key(name) {
+            if let Some(tex) = Texture::load_hdr(vulkan, path) {
+                self.textures.insert(name.to_string(), tex);
+            } else {
+                crate::log_info!("Failed to load HDR texture: {}", path);
                 return None;
             }
         }

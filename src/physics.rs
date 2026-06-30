@@ -1,7 +1,7 @@
+use crate::ecs::components::{RigidBodyComponent, TransformComponent};
 use crate::ecs::system::System;
-use crate::ecs::world::World;
 use crate::ecs::types::ComponentMask;
-use crate::ecs::components::{TransformComponent, RigidBodyComponent};
+use crate::ecs::world::World;
 use crate::math::vec::Vec3;
 
 use rapier3d::prelude::*;
@@ -20,6 +20,12 @@ pub struct PhysicsSystem {
     pub ccd_solver: CCDSolver,
     pub query_pipeline: QueryPipeline,
     required_components: ComponentMask,
+}
+
+impl Default for PhysicsSystem {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PhysicsSystem {
@@ -72,7 +78,7 @@ impl System for PhysicsSystem {
                 updates.push((entities[i], rb_comp.handle));
             }
         }
-        
+
         let transforms = world.get_component_array_mut::<TransformComponent>();
         for (entity, handle) in updates {
             if transforms.has(entity) {
@@ -80,7 +86,7 @@ impl System for PhysicsSystem {
                     let translation = rb.translation();
                     let transform = unsafe { transforms.get_mut(entity) };
                     transform.position = Vec3::new(translation.x, translation.y, translation.z);
-                    
+
                     // Convert rotation (Quaternion -> Euler)
                     let rot = rb.rotation().euler_angles();
                     transform.rotation = Vec3::new(rot.0, rot.1, rot.2);

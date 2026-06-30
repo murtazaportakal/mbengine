@@ -73,8 +73,9 @@ impl Window {
         input.update();
 
         let mut msg: win32::MSG = unsafe { std::mem::zeroed() };
-        
-        while unsafe { win32::PeekMessageA(&mut msg, ptr::null_mut(), 0, 0, win32::PM_REMOVE) } != 0 {
+
+        while unsafe { win32::PeekMessageA(&mut msg, ptr::null_mut(), 0, 0, win32::PM_REMOVE) } != 0
+        {
             if msg.message == win32::WM_QUIT {
                 self.should_close = true;
                 return false;
@@ -96,13 +97,13 @@ impl Window {
                 win32::WM_MOUSEMOVE => {
                     let x = (msg.lParam & 0xFFFF) as i16 as i32;
                     let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as i32;
-                    
+
                     if input.first_mouse {
                         input.mouse_x = x;
                         input.mouse_y = y;
                         input.first_mouse = false;
                     }
-                    
+
                     input.mouse_dx += x - input.mouse_x;
                     input.mouse_dy += y - input.mouse_y;
                     input.mouse_x = x;
@@ -116,15 +117,19 @@ impl Window {
                 win32::WM_MBUTTONUP => input.keys[win32::VK_MBUTTON] = false,
                 _ => {}
             }
-            
-            crate::app::egui_win32::translate_win32_to_egui(&msg, &mut input.egui_input);
-            
+
+            crate::app::egui_win32::translate_win32_to_egui(
+                &msg,
+                &mut input.egui_input,
+                input.ui_scale,
+            );
+
             unsafe {
                 win32::TranslateMessage(&msg);
                 win32::DispatchMessageA(&msg);
             }
         }
-        
+
         !self.should_close
     }
 
@@ -140,7 +145,12 @@ impl Window {
 
     /// Check if the window was resized since the last check.
     pub fn check_and_clear_resized(&mut self) -> bool {
-        let mut rect = win32::RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut rect = win32::RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
         unsafe {
             win32::GetClientRect(self.hwnd, &mut rect);
         }

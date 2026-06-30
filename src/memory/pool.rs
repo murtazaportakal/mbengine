@@ -61,7 +61,10 @@ impl PoolAllocator {
         block_size: usize,
         block_alignment: usize,
     ) -> Self {
-        debug_assert!(!base_memory.is_null(), "PoolAllocator: base memory must not be null.");
+        debug_assert!(
+            !base_memory.is_null(),
+            "PoolAllocator: base memory must not be null."
+        );
         debug_assert!(total_bytes > 0, "PoolAllocator: total bytes must be > 0.");
         debug_assert!(
             block_size >= std::mem::size_of::<FreeNode>(),
@@ -137,7 +140,10 @@ impl PoolAllocator {
             return;
         }
 
-        debug_assert!(self.owns(ptr), "PoolAllocator::free: pointer does not belong to this pool.");
+        debug_assert!(
+            self.owns(ptr),
+            "PoolAllocator::free: pointer does not belong to this pool."
+        );
 
         // Push onto the head of the free-list.
         let node = ptr as *mut FreeNode;

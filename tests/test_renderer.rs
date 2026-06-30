@@ -1,7 +1,7 @@
 //! Integration tests for Renderer Foundation.
 
 use engine::platform::Window;
-use engine::renderer::vulkan::{VulkanDevice, Swapchain};
+use engine::renderer::vulkan::{Swapchain, VulkanDevice};
 
 #[test]
 fn test_vulkan_initialization() {
@@ -14,10 +14,10 @@ fn test_vulkan_initialization() {
             return;
         }
     };
-    
+
     // Create a headless window for the surface
     let window = Window::new("Vulkan Smoke Test", 800, 600);
-    
+
     // Attempt to create the Swapchain
     let mut swapchain = match Swapchain::new(&vulkan, &window, 800, 600) {
         Some(s) => s,
@@ -26,10 +26,10 @@ fn test_vulkan_initialization() {
             return;
         }
     };
-    
+
     assert!(!swapchain.images.is_empty());
     assert_eq!(swapchain.image_views.len(), swapchain.images.len());
-    
+
     // Cleanup
     use engine::renderer::RenderDevice;
     swapchain.shutdown(&vulkan);

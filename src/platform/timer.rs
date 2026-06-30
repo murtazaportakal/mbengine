@@ -46,7 +46,7 @@ impl Timer {
         }
         (now - self.start_time) as f64 / self.frequency
     }
-    
+
     /// Get the elapsed time in milliseconds.
     #[inline]
     pub fn elapsed_ms(&self) -> f64 {

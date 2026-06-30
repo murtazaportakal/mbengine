@@ -1,6 +1,5 @@
-use ash::vk;
 use crate::renderer::vulkan::VulkanDevice;
-
+use ash::vk;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -21,6 +20,7 @@ pub struct PointLight {
 #[derive(Clone, Copy, Debug)]
 pub struct GlobalUbo {
     pub view_proj: crate::math::mat4::Mat4,
+    pub light_space_matrix: crate::math::mat4::Mat4,
     pub camera_pos: [f32; 4],
     pub light_dir: [f32; 4],
     pub light_color: [f32; 4],
@@ -45,7 +45,7 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn new(vulkan: &VulkanDevice, render_pass: vk::RenderPass, _extent: vk::Extent2D) -> Option<Self> {
+    pub fn new(vulkan: &VulkanDevice, color_format: vk::Format) -> Option<Self> {
         // Attempt to load shaders from disk. If missing, return None gracefully.
         let vert_code = std::fs::read("shaders/vert.spv").ok()?;
         let frag_code = std::fs::read("shaders/frag.spv").ok()?;
@@ -148,21 +148,53 @@ impl Pipeline {
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
 
-        let bindings = [ubo_layout_binding, sampler_layout_binding];
-        let descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(&bindings);
+        let env_map_layout_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(2)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
 
-        let descriptor_set_layout = unsafe { vulkan.device.create_descriptor_set_layout(&descriptor_set_layout_info, None).ok()? };
+        let shadow_map_layout_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(3)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
+        let bindings = [
+            ubo_layout_binding,
+            sampler_layout_binding,
+            env_map_layout_binding,
+            shadow_map_layout_binding,
+        ];
+        let descriptor_set_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+
+        let descriptor_set_layout = unsafe {
+            vulkan
+                .device
+                .create_descriptor_set_layout(&descriptor_set_layout_info, None)
+                .ok()?
+        };
 
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
             .push_constant_ranges(std::slice::from_ref(&push_constant_range))
             .set_layouts(std::slice::from_ref(&descriptor_set_layout));
 
-        let layout = unsafe { vulkan.device.create_pipeline_layout(&pipeline_layout_info, None).ok()? };
+        let layout = unsafe {
+            vulkan
+                .device
+                .create_pipeline_layout(&pipeline_layout_info, None)
+                .ok()?
+        };
 
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
-            .dynamic_states(&dynamic_states);
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let color_attachment_formats = [color_format];
+        let mut pipeline_rendering_info = vk::PipelineRenderingCreateInfoKHR::default()
+            .color_attachment_formats(&color_attachment_formats)
+            .depth_attachment_format(vk::Format::D32_SFLOAT);
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)
@@ -175,13 +207,16 @@ impl Pipeline {
             .depth_stencil_state(&depth_stencil)
             .dynamic_state(&dynamic_state_info)
             .layout(layout)
-            .render_pass(render_pass)
-            .subpass(0);
-
+            .push_next(&mut pipeline_rendering_info);
 
         let handle = unsafe {
-            vulkan.device
-                .create_graphics_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&pipeline_info), None)
+            vulkan
+                .device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&pipeline_info),
+                    None,
+                )
                 .map_err(|e| e.1)
                 .ok()?[0]
         };
@@ -191,10 +226,14 @@ impl Pipeline {
             vulkan.device.destroy_shader_module(frag_module, None);
         }
 
-        Some(Self { layout, handle, descriptor_set_layout })
+        Some(Self {
+            layout,
+            handle,
+            descriptor_set_layout,
+        })
     }
 
-    fn create_shader_module(vulkan: &VulkanDevice, code: &[u8]) -> Option<vk::ShaderModule> {
+    pub fn create_shader_module(vulkan: &VulkanDevice, code: &[u8]) -> Option<vk::ShaderModule> {
         let (prefix, code_u32, suffix) = unsafe { code.align_to::<u32>() };
         if !prefix.is_empty() || !suffix.is_empty() {
             return None;
@@ -208,7 +247,9 @@ impl Pipeline {
         unsafe {
             vulkan.device.destroy_pipeline(self.handle, None);
             vulkan.device.destroy_pipeline_layout(self.layout, None);
-            vulkan.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
     }
 }

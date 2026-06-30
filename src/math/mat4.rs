@@ -1,8 +1,8 @@
 //! Column-major 4x4 matrix.
 
 use crate::math::{Vec3, Vec4};
+use serde::{Deserialize, Serialize};
 use std::ops::{Mul, MulAssign};
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[repr(C, align(16))]
@@ -27,7 +27,9 @@ impl Mat4 {
 
     #[inline]
     pub const fn new(c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4) -> Self {
-        Self { cols: [c0, c1, c2, c3] }
+        Self {
+            cols: [c0, c1, c2, c3],
+        }
     }
 
     #[inline(always)]
@@ -88,14 +90,35 @@ impl Mat4 {
     /// y points down, depth is [0, 1].
     pub fn perspective(fov_y_radians: f32, aspect_ratio: f32, z_near: f32, z_far: f32) -> Self {
         let f = 1.0 / (fov_y_radians / 2.0).tan();
-        
+
         let mut result = Self::ZERO;
         result.cols[0].x = f / aspect_ratio;
         result.cols[1].y = -f; // Invert Y for Vulkan
         result.cols[2].z = z_far / (z_near - z_far);
         result.cols[2].w = -1.0;
-        result.cols[3].z = -(z_far * z_near) / (z_far - z_near);
-        
+        result.cols[3].z = (z_far * z_near) / (z_near - z_far);
+
+        result
+    }
+
+    /// Creates an orthographic projection matrix (Vulkan conventions: y down, z [0, 1]).
+    pub fn orthographic(
+        left: f32,
+        right: f32,
+        bottom: f32,
+        top: f32,
+        z_near: f32,
+        z_far: f32,
+    ) -> Self {
+        let mut result = Self::ZERO;
+        result.cols[0].x = 2.0 / (right - left);
+        result.cols[1].y = 2.0 / (bottom - top); // Invert Y for Vulkan (top-bottom) wait, normally bottom is positive Y in Vulkan. If bottom=-10, top=10, then 2/(-20) = -0.1. So y points down.
+        result.cols[2].z = 1.0 / (z_near - z_far);
+
+        result.cols[3].x = -(right + left) / (right - left);
+        result.cols[3].y = -(bottom + top) / (bottom - top);
+        result.cols[3].z = z_near / (z_near - z_far);
+        result.cols[3].w = 1.0;
         result
     }
 
@@ -143,7 +166,7 @@ impl Mul<Mat4> for Mat4 {
                         3 => self.cols[k].w,
                         _ => unreachable!(),
                     };
-                    
+
                     let rhs_elem = match k {
                         0 => rhs.cols[c].x,
                         1 => rhs.cols[c].y,
@@ -182,10 +205,22 @@ impl Mul<Vec4> for Mat4 {
     #[inline]
     fn mul(self, rhs: Vec4) -> Self::Output {
         Vec4 {
-            x: self.cols[0].x * rhs.x + self.cols[1].x * rhs.y + self.cols[2].x * rhs.z + self.cols[3].x * rhs.w,
-            y: self.cols[0].y * rhs.x + self.cols[1].y * rhs.y + self.cols[2].y * rhs.z + self.cols[3].y * rhs.w,
-            z: self.cols[0].z * rhs.x + self.cols[1].z * rhs.y + self.cols[2].z * rhs.z + self.cols[3].z * rhs.w,
-            w: self.cols[0].w * rhs.x + self.cols[1].w * rhs.y + self.cols[2].w * rhs.z + self.cols[3].w * rhs.w,
+            x: self.cols[0].x * rhs.x
+                + self.cols[1].x * rhs.y
+                + self.cols[2].x * rhs.z
+                + self.cols[3].x * rhs.w,
+            y: self.cols[0].y * rhs.x
+                + self.cols[1].y * rhs.y
+                + self.cols[2].y * rhs.z
+                + self.cols[3].y * rhs.w,
+            z: self.cols[0].z * rhs.x
+                + self.cols[1].z * rhs.y
+                + self.cols[2].z * rhs.z
+                + self.cols[3].z * rhs.w,
+            w: self.cols[0].w * rhs.x
+                + self.cols[1].w * rhs.y
+                + self.cols[2].w * rhs.z
+                + self.cols[3].w * rhs.w,
         }
     }
 }

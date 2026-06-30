@@ -369,10 +369,7 @@ impl MemorySubsystem {
                     0,
                 );
                 if block == platform::MAP_FAILED {
-                    eprintln!(
-                        "[MemorySubsystem] mmap failed (requested {} bytes).",
-                        size
-                    );
+                    eprintln!("[MemorySubsystem] mmap failed (requested {} bytes).", size);
                     return std::ptr::null_mut();
                 }
                 block

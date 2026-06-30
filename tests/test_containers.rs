@@ -46,7 +46,6 @@ fn test_dynamic_array() {
     mem.init_default();
     let arena = mem.frame_arena();
 
-
     let mut arr = DynamicArray::<i32>::with_capacity(arena, 2);
 
     assert!(arr.is_empty());
@@ -85,7 +84,7 @@ fn test_ring_buffer() {
     let ring = RingBuffer::<i32>::new(arena, 4);
 
     assert!(ring.is_empty());
-    
+
     assert_eq!(ring.push(10), Ok(()));
     assert_eq!(ring.push(20), Ok(()));
     assert_eq!(ring.push(30), Ok(()));
@@ -119,7 +118,7 @@ fn test_ring_buffer_invalid_capacity() {
     let mut mem = MemorySubsystem::new();
     mem.init_default();
     let arena = mem.frame_arena();
-    
+
     let _ring = RingBuffer::<i32>::new(arena, 3);
 }
 
@@ -153,7 +152,7 @@ fn test_hash_map() {
     // Force a resize (load factor > 90% for capacity 4 is 3.6, so inserting 4th will resize)
     map.insert(arena, "four", 4);
     println!("Insert 4th OK (resized)");
-    
+
     assert_eq!(map.get(&"one"), Some(&1));
     assert_eq!(map.get(&"two"), Some(&22));
     assert_eq!(map.get(&"three"), Some(&3));
@@ -168,7 +167,7 @@ fn test_hash_map() {
 
     map.clear();
     println!("Clear OK");
-    
+
     drop(map);
 
     mem.shutdown();
@@ -190,12 +189,12 @@ fn test_fixed_string() {
     s.push(' ');
     s.push_str("World!");
     assert_eq!(s.as_str(), "Hello, World!");
-    
+
     assert_eq!(s.len(), 13);
-    
+
     let parsed = FixedString::<16>::try_from_str("Rust").unwrap();
     assert_eq!(parsed.as_str(), "Rust");
-    
+
     // Test PartialEq
     let s2 = FixedString::<16>::try_from_str("Hello, World!").unwrap();
     assert_eq!(s, s2);

@@ -13,18 +13,22 @@ pub struct Swapchain {
     pub extent: vk::Extent2D,
     pub images: Vec<vk::Image>,
     pub image_views: Vec<vk::ImageView>,
-    pub framebuffers: Vec<vk::Framebuffer>,
 }
 
 impl Swapchain {
     pub fn new(vulkan: &VulkanDevice, window: &Window, width: u32, height: u32) -> Option<Self> {
-        let win32_surface_loader = ash::khr::win32_surface::Instance::new(&vulkan.entry, &vulkan.instance);
-        
+        let win32_surface_loader =
+            ash::khr::win32_surface::Instance::new(&vulkan.entry, &vulkan.instance);
+
         let create_info = vk::Win32SurfaceCreateInfoKHR::default()
             .hinstance(window.hinstance() as isize)
             .hwnd(window.hwnd() as isize);
 
-        let surface = unsafe { win32_surface_loader.create_win32_surface(&create_info, None).ok()? };
+        let surface = unsafe {
+            win32_surface_loader
+                .create_win32_surface(&create_info, None)
+                .ok()?
+        };
         let surface_loader = ash::khr::surface::Instance::new(&vulkan.entry, &vulkan.instance);
 
         // Check if graphics queue can present to this surface
@@ -50,7 +54,10 @@ impl Swapchain {
 
         let format = formats
             .into_iter()
-            .find(|f| f.format == vk::Format::B8G8R8A8_SRGB && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
+            .find(|f| {
+                f.format == vk::Format::B8G8R8A8_SRGB
+                    && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+            })
             .unwrap_or(vk::SurfaceFormatKHR {
                 format: vk::Format::B8G8R8A8_SRGB,
                 color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
@@ -67,7 +74,18 @@ impl Swapchain {
             image_count = caps.max_image_count;
         }
 
-        let extent = vk::Extent2D { width, height };
+        let mut actual_extent = vk::Extent2D { width, height };
+        if caps.current_extent.width != u32::MAX {
+            actual_extent = caps.current_extent;
+        } else {
+            actual_extent.width = actual_extent
+                .width
+                .clamp(caps.min_image_extent.width, caps.max_image_extent.width);
+            actual_extent.height = actual_extent
+                .height
+                .clamp(caps.min_image_extent.height, caps.max_image_extent.height);
+        }
+        let extent = actual_extent;
 
         let swapchain_loader = ash::khr::swapchain::Device::new(&vulkan.instance, &vulkan.device);
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
@@ -84,10 +102,18 @@ impl Swapchain {
             .clipped(true)
             .image_array_layers(1);
 
-        let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_create_info, None).ok()? };
+        let swapchain = unsafe {
+            swapchain_loader
+                .create_swapchain(&swapchain_create_info, None)
+                .ok()?
+        };
 
-        let images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap_or_default() };
-        
+        let images = unsafe {
+            swapchain_loader
+                .get_swapchain_images(swapchain)
+                .unwrap_or_default()
+        };
+
         let mut image_views = Vec::with_capacity(images.len());
         for &img in &images {
             let view_info = vk::ImageViewCreateInfo::default()
@@ -121,48 +147,23 @@ impl Swapchain {
             extent,
             images,
             image_views,
-            framebuffers: Vec::new(),
         })
     }
 
-    pub fn create_framebuffers(&mut self, vulkan: &VulkanDevice, render_pass: vk::RenderPass) -> bool {
-        self.framebuffers.clear();
-        for &view in &self.image_views {
-            let attachments = [view];
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
-                .attachments(&attachments)
-                .width(self.extent.width)
-                .height(self.extent.height)
-                .layers(1);
-
-            let fb = unsafe { vulkan.device.create_framebuffer(&fb_info, None) };
-            if let Ok(fb) = fb {
-                self.framebuffers.push(fb);
-            } else {
-                return false;
-            }
-        }
-        true
-    }
-    
     pub fn cleanup_swapchain(&mut self, vulkan: &VulkanDevice) {
         unsafe {
-            for &fb in &self.framebuffers {
-                vulkan.device.destroy_framebuffer(fb, None);
-            }
-            self.framebuffers.clear();
             for &view in &self.image_views {
                 vulkan.device.destroy_image_view(view, None);
             }
             self.image_views.clear();
-            self.swapchain_loader.destroy_swapchain(self.swapchain, None);
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
         }
     }
 
     pub fn recreate(&mut self, vulkan: &VulkanDevice, width: u32, height: u32) -> bool {
         self.cleanup_swapchain(vulkan);
-        
+
         let caps = unsafe {
             self.surface_loader
                 .get_physical_device_surface_capabilities(vulkan.physical_device, self.surface)
@@ -178,8 +179,12 @@ impl Swapchain {
         if caps.current_extent.width != u32::MAX {
             final_extent = caps.current_extent;
         } else {
-            final_extent.width = final_extent.width.clamp(caps.min_image_extent.width, caps.max_image_extent.width);
-            final_extent.height = final_extent.height.clamp(caps.min_image_extent.height, caps.max_image_extent.height);
+            final_extent.width = final_extent
+                .width
+                .clamp(caps.min_image_extent.width, caps.max_image_extent.width);
+            final_extent.height = final_extent
+                .height
+                .clamp(caps.min_image_extent.height, caps.max_image_extent.height);
         }
         self.extent = final_extent;
 
@@ -198,14 +203,21 @@ impl Swapchain {
             .image_array_layers(1);
 
         self.swapchain = unsafe {
-            match self.swapchain_loader.create_swapchain(&swapchain_create_info, None) {
+            match self
+                .swapchain_loader
+                .create_swapchain(&swapchain_create_info, None)
+            {
                 Ok(s) => s,
                 Err(_) => return false,
             }
         };
 
-        self.images = unsafe { self.swapchain_loader.get_swapchain_images(self.swapchain).unwrap_or_default() };
-        
+        self.images = unsafe {
+            self.swapchain_loader
+                .get_swapchain_images(self.swapchain)
+                .unwrap_or_default()
+        };
+
         for &img in &self.images {
             let view_info = vk::ImageViewCreateInfo::default()
                 .view_type(vk::ImageViewType::TYPE_2D)
@@ -227,12 +239,14 @@ impl Swapchain {
 
             if let Ok(view) = unsafe { vulkan.device.create_image_view(&view_info, None) } {
                 self.image_views.push(view);
-            } else { return false; }
+            } else {
+                return false;
+            }
         }
 
         true
     }
-    
+
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
         self.cleanup_swapchain(vulkan);
         unsafe {

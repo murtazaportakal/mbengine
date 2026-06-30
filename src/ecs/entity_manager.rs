@@ -101,7 +101,10 @@ impl EntityManager {
         } else {
             // Allocate a fresh slot.
             if self.next_fresh_index >= MAX_ENTITIES {
-                debug_assert!(false, "EntityManager::create_entity: all entity slots exhausted.");
+                debug_assert!(
+                    false,
+                    "EntityManager::create_entity: all entity slots exhausted."
+                );
                 return INVALID_ENTITY;
             }
             index = self.next_fresh_index;

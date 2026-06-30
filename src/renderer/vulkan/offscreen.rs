@@ -1,5 +1,5 @@
-use ash::vk;
 use crate::renderer::vulkan::VulkanDevice;
+use ash::vk;
 
 pub struct OffscreenTarget {
     pub width: u32,
@@ -15,31 +15,16 @@ pub struct OffscreenTarget {
 
     pub framebuffer: vk::Framebuffer,
     pub sampler: vk::Sampler,
-    
-    // An egui descriptor set representing this texture. 
-    // We update this via `EguiBackend` when recreating the target.
-    pub descriptor_set: vk::DescriptorSet, 
+
+    pub descriptor_set: vk::DescriptorSet,
 }
 
 impl OffscreenTarget {
-    pub fn new(
-        vulkan: &VulkanDevice, 
-        render_pass: vk::RenderPass, 
-        width: u32, 
-        height: u32
-    ) -> Option<Self> {
-        let (color_image, color_memory, color_view) = Self::create_color_resources(vulkan, width, height)?;
-        let (depth_image, depth_memory, depth_view) = Self::create_depth_resources(vulkan, width, height)?;
-
-        let attachments = [color_view, depth_view];
-        let fb_info = vk::FramebufferCreateInfo::default()
-            .render_pass(render_pass)
-            .attachments(&attachments)
-            .width(width)
-            .height(height)
-            .layers(1);
-
-        let framebuffer = unsafe { vulkan.device.create_framebuffer(&fb_info, None).ok()? };
+    pub fn new(vulkan: &VulkanDevice, width: u32, height: u32) -> Option<Self> {
+        let (color_image, color_memory, color_view) =
+            Self::create_color_resources(vulkan, width, height)?;
+        let (depth_image, depth_memory, depth_view) =
+            Self::create_depth_resources(vulkan, width, height)?;
 
         let sampler_info = vk::SamplerCreateInfo::default()
             .mag_filter(vk::Filter::LINEAR)
@@ -64,19 +49,28 @@ impl OffscreenTarget {
             depth_image,
             depth_memory,
             depth_view,
-            framebuffer,
+            framebuffer: vk::Framebuffer::null(),
             sampler,
             descriptor_set: vk::DescriptorSet::null(),
         })
     }
 
-    fn create_color_resources(vulkan: &VulkanDevice, width: u32, height: u32) -> Option<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
+    fn create_color_resources(
+        vulkan: &VulkanDevice,
+        width: u32,
+        height: u32,
+    ) -> Option<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
+        let format = vk::Format::R16G16B16A16_SFLOAT;
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
-            .format(vk::Format::B8G8R8A8_SRGB)
+            .format(format)
             .tiling(vk::ImageTiling::OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
@@ -85,7 +79,10 @@ impl OffscreenTarget {
 
         let image = unsafe { vulkan.device.create_image(&image_info, None).ok()? };
         let mem_req = unsafe { vulkan.device.get_image_memory_requirements(image) };
-        let memory_type_index = vulkan.find_memory_type(mem_req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
+        let memory_type_index = vulkan.find_memory_type(
+            mem_req.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
 
         let alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(mem_req.size)
@@ -97,7 +94,7 @@ impl OffscreenTarget {
         let view_info = vk::ImageViewCreateInfo::default()
             .image(image)
             .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk::Format::B8G8R8A8_SRGB)
+            .format(format)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
@@ -111,12 +108,20 @@ impl OffscreenTarget {
         Some((image, memory, view))
     }
 
-    fn create_depth_resources(vulkan: &VulkanDevice, width: u32, height: u32) -> Option<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
+    fn create_depth_resources(
+        vulkan: &VulkanDevice,
+        width: u32,
+        height: u32,
+    ) -> Option<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
         let depth_format = vk::Format::D32_SFLOAT;
 
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .format(depth_format)
@@ -128,7 +133,10 @@ impl OffscreenTarget {
 
         let image = unsafe { vulkan.device.create_image(&image_info, None).ok()? };
         let mem_req = unsafe { vulkan.device.get_image_memory_requirements(image) };
-        let memory_type_index = vulkan.find_memory_type(mem_req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
+        let memory_type_index = vulkan.find_memory_type(
+            mem_req.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
 
         let alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(mem_req.size)
@@ -158,7 +166,7 @@ impl OffscreenTarget {
         unsafe {
             vulkan.device.destroy_sampler(self.sampler, None);
             vulkan.device.destroy_framebuffer(self.framebuffer, None);
-            
+
             vulkan.device.destroy_image_view(self.color_view, None);
             vulkan.device.destroy_image(self.color_image, None);
             vulkan.device.free_memory(self.color_memory, None);

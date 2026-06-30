@@ -75,7 +75,10 @@ impl StackAllocator {
     ///   `total_bytes` bytes.
     /// - The block must remain valid for the lifetime of this allocator.
     pub unsafe fn new(base_memory: *mut u8, total_bytes: usize) -> Self {
-        debug_assert!(!base_memory.is_null(), "StackAllocator: base memory must not be null.");
+        debug_assert!(
+            !base_memory.is_null(),
+            "StackAllocator: base memory must not be null."
+        );
         debug_assert!(total_bytes > 0, "StackAllocator: total bytes must be > 0.");
 
         Self {
@@ -125,8 +128,8 @@ impl StackAllocator {
 
         // Write the header immediately before the aligned payload.
         unsafe {
-            let header_ptr =
-                (aligned_payload - std::mem::size_of::<AllocationHeader>()) as *mut AllocationHeader;
+            let header_ptr = (aligned_payload - std::mem::size_of::<AllocationHeader>())
+                as *mut AllocationHeader;
             ptr::write(
                 header_ptr,
                 AllocationHeader {
@@ -176,8 +179,8 @@ impl StackAllocator {
 
         // Locate the header just before the payload.
         let payload_addr = ptr as usize;
-        let header = (payload_addr - std::mem::size_of::<AllocationHeader>())
-            as *const AllocationHeader;
+        let header =
+            (payload_addr - std::mem::size_of::<AllocationHeader>()) as *const AllocationHeader;
 
         // Rewind the bump pointer to where it was before this allocation.
         self.current_offset = (*header).prev_offset;

@@ -57,7 +57,7 @@ impl Logger {
         entry.message.push_str(&msg[..len]);
 
         let buf = self.buffer.lock().unwrap();
-        
+
         // If the ring buffer is full, pop the oldest to make room
         if let Err(_) = buf.push(entry) {
             let _ = buf.pop();

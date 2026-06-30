@@ -336,3 +336,11 @@ Having completed the foundational architecture (Phases 1-21), this section outli
 |---|---|---|
 | **P2** | `ecs/system.rs` | Declare read/write access requirements for systems. |
 | **P3** | `ecs/scheduler.rs` | Build a dependency graph and use a thread pool to run non-overlapping systems concurrently. |
+
+### Epic: Advanced PBR & Render Graph
+| Priority | Status | Feature | Description |
+|---|---|---|---|
+| **P1** | **DONE** | Render Graph Architecture | Shift from hardcoded RenderPasses to a dynamic, node-based Render Graph to automatically manage Vulkan image transitions, subpasses, and memory aliasing. |
+| **P1** | **DONE** | Physically Based Rendering (PBR) | Implement full metallic-roughness PBR pipelines, Image-Based Lighting (IBL), Irradiance volumes, and HDR tonemapping (ACES). |
+| **P2** | **DONE** | Global Illumination & Shadows | Cascaded Shadow Maps (CSM) for directional lights, Omnidirectional shadows for point lights, and Voxel Cone Tracing or Screen Space Global Illumination (SSGI). |
+| **P3** | **TODO (Phase D)** | Post-Processing Stack | Bloom, Screen Space Ambient Occlusion (SSAO), Depth of Field (DoF), Motion Blur, and Temporal Anti-Aliasing (TAA). |

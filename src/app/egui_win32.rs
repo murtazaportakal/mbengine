@@ -1,16 +1,16 @@
-use egui::{Event, Key, PointerButton, Pos2, RawInput, Vec2};
 use crate::platform::win32;
+use egui::{Event, Key, PointerButton, Pos2, RawInput, Vec2};
 
-pub fn translate_win32_to_egui(msg: &win32::MSG, raw_input: &mut RawInput) {
+pub fn translate_win32_to_egui(msg: &win32::MSG, raw_input: &mut RawInput, pixels_per_point: f32) {
     match msg.message {
         win32::WM_MOUSEMOVE => {
-            let x = (msg.lParam & 0xFFFF) as i16 as f32;
-            let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as f32;
+            let x = (msg.lParam & 0xFFFF) as i16 as f32 / pixels_per_point;
+            let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as f32 / pixels_per_point;
             raw_input.events.push(Event::PointerMoved(Pos2::new(x, y)));
         }
         win32::WM_LBUTTONDOWN | win32::WM_LBUTTONUP => {
-            let x = (msg.lParam & 0xFFFF) as i16 as f32;
-            let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as f32;
+            let x = (msg.lParam & 0xFFFF) as i16 as f32 / pixels_per_point;
+            let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as f32 / pixels_per_point;
             let pressed = msg.message == win32::WM_LBUTTONDOWN;
             raw_input.events.push(Event::PointerButton {
                 pos: Pos2::new(x, y),
@@ -20,8 +20,8 @@ pub fn translate_win32_to_egui(msg: &win32::MSG, raw_input: &mut RawInput) {
             });
         }
         win32::WM_RBUTTONDOWN | win32::WM_RBUTTONUP => {
-            let x = (msg.lParam & 0xFFFF) as i16 as f32;
-            let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as f32;
+            let x = (msg.lParam & 0xFFFF) as i16 as f32 / pixels_per_point;
+            let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as f32 / pixels_per_point;
             let pressed = msg.message == win32::WM_RBUTTONDOWN;
             raw_input.events.push(Event::PointerButton {
                 pos: Pos2::new(x, y),
@@ -31,8 +31,8 @@ pub fn translate_win32_to_egui(msg: &win32::MSG, raw_input: &mut RawInput) {
             });
         }
         win32::WM_MBUTTONDOWN | win32::WM_MBUTTONUP => {
-            let x = (msg.lParam & 0xFFFF) as i16 as f32;
-            let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as f32;
+            let x = (msg.lParam & 0xFFFF) as i16 as f32 / pixels_per_point;
+            let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as f32 / pixels_per_point;
             let pressed = msg.message == win32::WM_MBUTTONDOWN;
             raw_input.events.push(Event::PointerButton {
                 pos: Pos2::new(x, y),
@@ -111,9 +111,9 @@ fn translate_key(vk: usize) -> Option<Key> {
         win32::VK_ESCAPE => Some(Key::Escape),
         win32::VK_SPACE => Some(Key::Space),
         win32::VK_TAB => Some(Key::Tab),
-        0x0D => Some(Key::Enter), // VK_RETURN
+        0x0D => Some(Key::Enter),     // VK_RETURN
         0x08 => Some(Key::Backspace), // VK_BACK
-        0x2E => Some(Key::Delete), // VK_DELETE
+        0x2E => Some(Key::Delete),    // VK_DELETE
         0x25 => Some(Key::ArrowLeft),
         0x26 => Some(Key::ArrowUp),
         0x27 => Some(Key::ArrowRight),

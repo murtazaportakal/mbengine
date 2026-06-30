@@ -3,7 +3,6 @@
 use crate::renderer::RenderDevice;
 use ash::vk;
 
-
 pub struct VulkanDevice {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
@@ -13,11 +12,11 @@ pub struct VulkanDevice {
     pub graphics_queue: vk::Queue,
     pub graphics_queue_family_index: u32,
     pub command_pool: vk::CommandPool,
-    
+
     // Sync primitives for a single frame
-    pub image_available_semaphore: vk::Semaphore,
-    pub render_finished_semaphore: vk::Semaphore,
-    pub in_flight_fence: vk::Fence,
+    pub image_available_semaphores: [vk::Semaphore; 2],
+    pub render_finished_semaphores: [vk::Semaphore; 8],
+    pub in_flight_fences: [vk::Fence; 2],
 }
 
 impl VulkanDevice {
@@ -34,24 +33,81 @@ impl VulkanDevice {
             .application_version(0)
             .engine_name(engine_name)
             .engine_version(0)
-            .api_version(vk::make_api_version(0, 1, 2, 0));
+            .api_version(vk::make_api_version(0, 1, 3, 0));
 
-        let extension_names = vec![
+        let mut extension_names = vec![
             ash::khr::surface::NAME.as_ptr(),
             ash::khr::win32_surface::NAME.as_ptr(),
         ];
 
+        // Add debug utils
+        extension_names.push(ash::ext::debug_utils::NAME.as_ptr());
+
+        let layer_names = [c"VK_LAYER_KHRONOS_validation"];
+        let layer_names_raw: Vec<*const std::ffi::c_char> =
+            layer_names.iter().map(|name| name.as_ptr()).collect();
+
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info)
-            .enabled_extension_names(&extension_names);
+            .enabled_extension_names(&extension_names)
+            .enabled_layer_names(&layer_names_raw);
 
-        let instance = unsafe { entry.create_instance(&create_info, None).ok()? };
+        let instance = unsafe {
+            entry
+                .create_instance(&create_info, None)
+                .expect("Validation layers might not be installed")
+        };
+
+        // Debug utils callback
+        unsafe extern "system" fn vulkan_debug_callback(
+            message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+            _message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+            p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+            _user_data: *mut std::os::raw::c_void,
+        ) -> vk::Bool32 {
+            let callback_data = *p_callback_data;
+            let message_id_name = if callback_data.p_message_id_name.is_null() {
+                std::borrow::Cow::from("")
+            } else {
+                std::ffi::CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy()
+            };
+            let message = if callback_data.p_message.is_null() {
+                std::borrow::Cow::from("")
+            } else {
+                std::ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy()
+            };
+            println!(
+                "[Validation] {:?} [{}] : {}",
+                message_severity, message_id_name, message
+            );
+            vk::FALSE
+        }
+
+        let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+            .message_severity(
+                vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                    | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                    | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+            )
+            .message_type(
+                vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                    | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                    | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+            )
+            .pfn_user_callback(Some(vulkan_debug_callback));
+
+        let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
+        let _debug_messenger = unsafe {
+            debug_utils_loader
+                .create_debug_utils_messenger(&debug_info, None)
+                .ok()
+        };
 
         let pdevices = unsafe { instance.enumerate_physical_devices().unwrap_or_default() };
-        
+
         let (physical_device, queue_family_index) = pdevices.into_iter().find_map(|pdevice| {
             let props = unsafe { instance.get_physical_device_queue_family_properties(pdevice) };
-            
+
             for (index, info) in props.iter().enumerate() {
                 if info.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
                     return Some((pdevice, index as u32));
@@ -60,7 +116,8 @@ impl VulkanDevice {
             None
         })?;
 
-        let memory_properties = unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
         let priorities = [1.0];
         let queue_info = vk::DeviceQueueCreateInfo::default()
@@ -69,31 +126,54 @@ impl VulkanDevice {
 
         let device_extension_names = vec![
             ash::khr::swapchain::NAME.as_ptr(),
+            ash::khr::dynamic_rendering::NAME.as_ptr(),
         ];
 
-        let features = vk::PhysicalDeviceFeatures::default();
-        
+        let mut dynamic_rendering =
+            vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
+
+        // Standard features to enable
+        let features = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
+
+        let mut features2 = vk::PhysicalDeviceFeatures2::default()
+            .features(features)
+            .push_next(&mut dynamic_rendering);
+
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_info))
             .enabled_extension_names(&device_extension_names)
-            .enabled_features(&features);
+            .push_next(&mut features2);
 
-        let device = unsafe { instance.create_device(physical_device, &device_create_info, None).ok()? };
-        
+        let device = unsafe {
+            instance
+                .create_device(physical_device, &device_create_info, None)
+                .ok()?
+        };
+
         let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
         let pool_create_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family_index);
-            
+
         let command_pool = unsafe { device.create_command_pool(&pool_create_info, None).ok()? };
 
         let semaphore_info = vk::SemaphoreCreateInfo::default();
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
-        let image_available_semaphore = unsafe { device.create_semaphore(&semaphore_info, None).ok()? };
-        let render_finished_semaphore = unsafe { device.create_semaphore(&semaphore_info, None).ok()? };
-        let in_flight_fence = unsafe { device.create_fence(&fence_info, None).ok()? };
+        let mut image_available_semaphores = [vk::Semaphore::null(); 2];
+        let mut render_finished_semaphores = [vk::Semaphore::null(); 8];
+        let mut in_flight_fences = [vk::Fence::null(); 2];
+
+        for i in 0..2 {
+            image_available_semaphores[i] =
+                unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
+            in_flight_fences[i] = unsafe { device.create_fence(&fence_info, None).unwrap() };
+        }
+        for i in 0..8 {
+            render_finished_semaphores[i] =
+                unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
+        }
 
         Some(Self {
             entry,
@@ -104,17 +184,23 @@ impl VulkanDevice {
             graphics_queue,
             graphics_queue_family_index: queue_family_index,
             command_pool,
-            image_available_semaphore,
-            render_finished_semaphore,
-            in_flight_fence,
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
         })
     }
 
     /// Find a memory type matching the required properties.
-    pub fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> Option<u32> {
+    pub fn find_memory_type(
+        &self,
+        type_filter: u32,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Option<u32> {
         for i in 0..self.memory_properties.memory_type_count {
             if (type_filter & (1 << i)) != 0
-                && self.memory_properties.memory_types[i as usize].property_flags.contains(properties)
+                && self.memory_properties.memory_types[i as usize]
+                    .property_flags
+                    .contains(properties)
             {
                 return Some(i);
             }
@@ -134,7 +220,9 @@ impl VulkanDevice {
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
         unsafe {
-            self.device.begin_command_buffer(command_buffer, &begin_info).ok()?;
+            self.device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .ok()?;
         }
 
         Some(command_buffer)
@@ -148,11 +236,16 @@ impl VulkanDevice {
             let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
             self.device
-                .queue_submit(self.graphics_queue, std::slice::from_ref(&submit_info), vk::Fence::null())
+                .queue_submit(
+                    self.graphics_queue,
+                    std::slice::from_ref(&submit_info),
+                    vk::Fence::null(),
+                )
                 .unwrap();
 
             self.device.queue_wait_idle(self.graphics_queue).unwrap();
-            self.device.free_command_buffers(self.command_pool, &command_buffers);
+            self.device
+                .free_command_buffers(self.command_pool, &command_buffers);
         }
     }
 }
@@ -166,9 +259,13 @@ impl RenderDevice for VulkanDevice {
 
     fn shutdown(&mut self) {
         unsafe {
-            self.device.destroy_semaphore(self.render_finished_semaphore, None);
-            self.device.destroy_semaphore(self.image_available_semaphore, None);
-            self.device.destroy_fence(self.in_flight_fence, None);
+            for i in 0..2 {
+                self.device
+                    .destroy_semaphore(self.render_finished_semaphores[i], None);
+                self.device
+                    .destroy_semaphore(self.image_available_semaphores[i], None);
+                self.device.destroy_fence(self.in_flight_fences[i], None);
+            }
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
@@ -178,7 +275,7 @@ impl RenderDevice for VulkanDevice {
 
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
-        // Shutdown is expected to be called manually, but if not, 
+        // Shutdown is expected to be called manually, but if not,
         // we could call it here. For safety, we assume explicit shutdown.
     }
 }
