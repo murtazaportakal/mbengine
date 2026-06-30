@@ -61,14 +61,32 @@ impl Window {
         }
     }
 
-    /// Pump messages. Returns `false` if the window should close (e.g., received WM_QUIT).
-    pub fn poll_events(&mut self) -> bool {
+    /// Pump messages and update input state. Returns `false` if the window should close.
+    pub fn poll_events(&mut self, input: &mut crate::app::Input) -> bool {
+        input.update();
+
         let mut msg: win32::MSG = unsafe { std::mem::zeroed() };
         
         while unsafe { win32::PeekMessageA(&mut msg, ptr::null_mut(), 0, 0, win32::PM_REMOVE) } != 0 {
             if msg.message == win32::WM_QUIT {
                 self.should_close = true;
                 return false;
+            }
+
+            match msg.message {
+                win32::WM_KEYDOWN => {
+                    let vk = msg.wParam;
+                    if vk < 256 {
+                        input.keys[vk] = true;
+                    }
+                }
+                win32::WM_KEYUP => {
+                    let vk = msg.wParam;
+                    if vk < 256 {
+                        input.keys[vk] = false;
+                    }
+                }
+                _ => {}
             }
             
             unsafe {

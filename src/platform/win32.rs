@@ -63,6 +63,12 @@ pub const PM_REMOVE: UINT = 0x0001;
 pub const WM_QUIT: UINT = 0x0012;
 pub const WM_CLOSE: UINT = 0x0010;
 pub const WM_DESTROY: UINT = 0x0002;
+pub const WM_KEYDOWN: UINT = 0x0100;
+pub const WM_KEYUP: UINT = 0x0101;
+pub const WM_MOUSEMOVE: UINT = 0x0200;
+
+pub const VK_ESCAPE: usize = 0x1B;
+pub const VK_SPACE: usize = 0x20;
 
 pub type WNDPROC =
     Option<unsafe extern "system" fn(hwnd: HWND, uMsg: UINT, wParam: WPARAM, lParam: LPARAM) -> LRESULT>;

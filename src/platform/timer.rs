@@ -52,6 +52,14 @@ impl Timer {
     pub fn elapsed_ms(&self) -> f64 {
         self.elapsed_seconds() * 1000.0
     }
+
+    /// Returns elapsed seconds and resets the timer.
+    #[inline]
+    pub fn tick(&mut self) -> f64 {
+        let dt = self.elapsed_seconds();
+        self.reset();
+        dt
+    }
 }
 
 impl Default for Timer {

@@ -29,6 +29,18 @@ impl Mat4 {
         Self { cols: [c0, c1, c2, c3] }
     }
 
+    #[inline(always)]
+    pub fn identity() -> Self {
+        Self {
+            cols: [
+                Vec4::new(1.0, 0.0, 0.0, 0.0),
+                Vec4::new(0.0, 1.0, 0.0, 0.0),
+                Vec4::new(0.0, 0.0, 1.0, 0.0),
+                Vec4::new(0.0, 0.0, 0.0, 1.0),
+            ],
+        }
+    }
+
     /// Creates a translation matrix.
     #[inline]
     pub fn translation(v: Vec3) -> Self {

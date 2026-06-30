@@ -184,28 +184,51 @@ All assertions passing. **20 unit tests + 1 integration test = 21 total.**
 ## Backlog — Prioritised Next Steps
 
 
+## Completed — Math & Rendering
+
 ### Phase 5: Math Library
-| Priority | File(s) | Description |
-|---|---|---|
-| **P1** | `src/math/vec.rs` | SIMD-friendly Vec2/Vec3/Vec4 types (16-byte aligned). |
-| **P1** | `src/math/mat4.rs` | Column-major 4×4 matrix. |
-| **P1** | `src/math/quat.rs` | Quaternion for rotations. |
-| **P2** | `src/math/transform.rs` | Position + Rotation + Scale, SoA-friendly. |
-| **P2** | `src/math/aabb.rs` | Axis-aligned bounding box for broad-phase. |
+- **`src/math/vec.rs`**: SIMD-friendly Vec2/Vec3/Vec4 types (16-byte aligned).
+- **`src/math/mat4.rs`**: Column-major 4×4 matrix.
+- **`src/math/quat.rs`**: Quaternion for rotations.
 
 ### Phase 6: Renderer Foundation
-| Priority | File(s) | Description |
-|---|---|---|
-| **P2** | `src/renderer/device.rs` | Abstract render backend interface (Vulkan impl via `ash` crate). |
-| **P2** | `src/renderer/vulkan/device.rs` | Instance, physical/logical device, queues. |
-| **P2** | `src/renderer/vulkan/swapchain.rs` | Swapchain creation and present. |
-| **P3** | `src/renderer/vulkan/pipeline.rs` | Shader modules, pipeline layout, graphics pipeline. |
+- **`src/renderer/device.rs`**: Abstract render backend interface.
+- **`src/renderer/vulkan/device.rs`**: Vulkan Instance, physical/logical device, queues.
+- **`src/renderer/vulkan/swapchain.rs`**: Swapchain creation and present.
 
 ### Phase 7: Game Loop & Application
+- **`src/app/application.rs`**: Main loop, ECS execution, frame cleanup.
+- **`src/app/input.rs`**: Keyboard/mouse state mapping.
+
+### Phase 8: Graphics Pipeline
+- **`src/renderer/vulkan/render_pass.rs`**: Vulkan RenderPass setup.
+- **`src/renderer/vulkan/pipeline.rs`**: Graphics pipeline and shaders.
+- **Shaders**: `shaders/shader.vert` and `shaders/shader.frag` (glslc compiled).
+
+### Phase 9: Resource Management & Buffers
+- **`src/renderer/vulkan/buffer.rs`**: CPU HOST_VISIBLE staging and GPU DEVICE_LOCAL buffer allocations.
+- **Vertices**: Hardcoded `Vertex` struct streamed to GPU VRAM.
+
+---
+
+## Backlog — Prioritised Next Steps
+
+### Phase 10: ECS Rendering Systems
+- **`src/ecs/components.rs`**: Defined `TransformComponent` and `RenderComponent`.
+- **`src/renderer/vulkan/pipeline.rs`**: Push Constants setup.
+- **`src/app/application.rs`**: Mapped Entity components to Vulkan Push Constants and `cmd_draw` calls.
+
+---
+
+## Backlog — Prioritised Next Steps
+
+### Phase 11: Camera & Depth Buffering
 | Priority | File(s) | Description |
 |---|---|---|
-| **P2** | `src/app/application.rs` | Main loop: Init → while(running) { Input → Update → Render → FrameArena.reset() } → Shutdown. |
-| **P2** | `src/app/input.rs` | Keyboard/mouse state, event queue. |
+| **P1** | `src/math/mat4.rs` | Implement `perspective` and `look_at` matrix generation. |
+| **P1** | `src/ecs/components.rs` | Add `CameraComponent`. |
+| **P2** | `src/renderer/vulkan/swapchain.rs` | Add Depth buffer attachment (`vk::Format::D32_SFLOAT`). |
+| **P2** | `src/renderer/vulkan/pipeline.rs` | Enable depth testing in `vk::PipelineDepthStencilStateCreateInfo`. |
 
 ---
 
@@ -224,4 +247,4 @@ All assertions passing. **20 unit tests + 1 integration test = 21 total.**
 
 ---
 
-*Start the next session with: "Continue from ENGINE_ROADMAP.md — build Phase 5: Math Library"*
+*Start the next session with: "Continue from ENGINE_ROADMAP.md — build Phase 11: Camera & Depth Buffering"*

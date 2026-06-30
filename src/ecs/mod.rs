@@ -1,11 +1,13 @@
-mod types;
-mod component_array;
-mod entity_manager;
-mod system;
-mod world;
+pub mod types;
+pub mod component_array;
+pub mod entity_manager;
+pub mod system;
+pub mod world;
+pub mod components;
 
 pub use types::*;
-pub use component_array::{ComponentArray, ComponentArrayOps};
-pub use entity_manager::EntityManager;
-pub use system::System;
-pub use world::World;
+pub use component_array::*;
+pub use entity_manager::*;
+pub use system::*;
+pub use world::*;
+pub use components::*;
