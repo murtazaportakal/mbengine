@@ -6,3 +6,6 @@ pub mod logging;
 pub mod math;
 pub mod renderer;
 pub mod app;
+pub mod asset_manager;
+pub mod physics;
+pub mod utils;

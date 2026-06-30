@@ -4,6 +4,7 @@ pub mod entity_manager;
 pub mod system;
 pub mod world;
 pub mod components;
+pub mod serialization;
 
 pub use types::*;
 pub use component_array::*;

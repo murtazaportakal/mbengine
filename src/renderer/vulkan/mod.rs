@@ -5,6 +5,8 @@ pub mod pipeline;
 pub mod buffer;
 pub mod mesh;
 pub mod texture;
+pub mod egui_backend;
+pub mod offscreen;
 
 pub use device::VulkanDevice;
 pub use swapchain::Swapchain;
@@ -13,3 +15,5 @@ pub use pipeline::Pipeline;
 pub use buffer::Buffer;
 pub use mesh::Mesh;
 pub use texture::Texture;
+pub use egui_backend::EguiBackend;
+pub use offscreen::OffscreenTarget;

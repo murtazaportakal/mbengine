@@ -9,6 +9,7 @@ pub struct Input {
     pub mouse_dx: i32,
     pub mouse_dy: i32,
     pub first_mouse: bool,
+    pub egui_input: egui::RawInput,
 }
 
 impl Default for Input {
@@ -27,6 +28,7 @@ impl Input {
             mouse_dx: 0,
             mouse_dy: 0,
             first_mouse: true,
+            egui_input: egui::RawInput::default(),
         }
     }
 

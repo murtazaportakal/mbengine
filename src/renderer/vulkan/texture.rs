@@ -12,6 +12,12 @@ pub struct Texture {
 }
 
 impl Texture {
+    pub fn load_from_file(vulkan: &VulkanDevice, path: &str) -> Option<Self> {
+        let img = image::open(path).ok()?.into_rgba8();
+        let (width, height) = img.dimensions();
+        Self::from_rgba8(vulkan, width, height, &img)
+    }
+
     /// Generates a procedural 256x256 checkerboard texture.
     pub fn new_checkerboard(vulkan: &VulkanDevice) -> Option<Self> {
         let width = 256;
@@ -30,6 +36,10 @@ impl Texture {
             }
         }
 
+        Self::from_rgba8(vulkan, width as u32, height as u32, &pixels)
+    }
+
+    pub fn from_rgba8(vulkan: &VulkanDevice, width: u32, height: u32, pixels: &[u8]) -> Option<Self> {
         // 1. Create Staging Buffer
         let buffer_size = pixels.len() as u64;
         let staging_buffer = Buffer::new(
@@ -38,7 +48,7 @@ impl Texture {
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
-        staging_buffer.upload(vulkan, &pixels);
+        staging_buffer.upload(vulkan, pixels);
 
         // 2. Create Image
         let image_info = vk::ImageCreateInfo::default()

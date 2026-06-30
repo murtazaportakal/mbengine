@@ -108,8 +108,16 @@ impl Window {
                     input.mouse_x = x;
                     input.mouse_y = y;
                 }
+                win32::WM_LBUTTONDOWN => input.keys[win32::VK_LBUTTON] = true,
+                win32::WM_LBUTTONUP => input.keys[win32::VK_LBUTTON] = false,
+                win32::WM_RBUTTONDOWN => input.keys[win32::VK_RBUTTON] = true,
+                win32::WM_RBUTTONUP => input.keys[win32::VK_RBUTTON] = false,
+                win32::WM_MBUTTONDOWN => input.keys[win32::VK_MBUTTON] = true,
+                win32::WM_MBUTTONUP => input.keys[win32::VK_MBUTTON] = false,
                 _ => {}
             }
+            
+            crate::app::egui_win32::translate_win32_to_egui(&msg, &mut input.egui_input);
             
             unsafe {
                 win32::TranslateMessage(&msg);

@@ -65,10 +65,26 @@ pub const WM_CLOSE: UINT = 0x0010;
 pub const WM_DESTROY: UINT = 0x0002;
 pub const WM_KEYDOWN: UINT = 0x0100;
 pub const WM_KEYUP: UINT = 0x0101;
+pub const WM_CHAR: UINT = 0x0102;
 pub const WM_MOUSEMOVE: UINT = 0x0200;
+pub const WM_LBUTTONDOWN: UINT = 0x0201;
+pub const WM_LBUTTONUP: UINT = 0x0202;
+pub const WM_RBUTTONDOWN: UINT = 0x0204;
+pub const WM_RBUTTONUP: UINT = 0x0205;
+pub const WM_MBUTTONDOWN: UINT = 0x0207;
+pub const WM_MBUTTONUP: UINT = 0x0208;
+pub const WM_MOUSEWHEEL: UINT = 0x020A;
+
+pub const VK_LBUTTON: usize = 0x01;
+pub const VK_RBUTTON: usize = 0x02;
+pub const VK_MBUTTON: usize = 0x04;
 
 pub const VK_ESCAPE: usize = 0x1B;
 pub const VK_SPACE: usize = 0x20;
+pub const VK_SHIFT: usize = 0x10;
+pub const VK_TAB: usize = 0x09;
+pub const VK_F5: usize = 0x74;
+pub const VK_F9: usize = 0x78;
 
 pub const VK_A: usize = 0x41;
 pub const VK_D: usize = 0x44;

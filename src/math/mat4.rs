@@ -2,8 +2,9 @@
 
 use crate::math::{Vec3, Vec4};
 use std::ops::{Mul, MulAssign};
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[repr(C, align(16))]
 pub struct Mat4 {
     /// Columns of the matrix.
@@ -96,6 +97,30 @@ impl Mat4 {
         result.cols[3].z = -(z_far * z_near) / (z_far - z_near);
         
         result
+    }
+
+    /// Computes the inverse of this matrix using nalgebra.
+    pub fn try_inverse(&self) -> Option<Self> {
+        let mut na_mat = nalgebra::Matrix4::zeros();
+        for c in 0..4 {
+            na_mat[(0, c)] = self.cols[c].x;
+            na_mat[(1, c)] = self.cols[c].y;
+            na_mat[(2, c)] = self.cols[c].z;
+            na_mat[(3, c)] = self.cols[c].w;
+        }
+
+        if let Some(inv) = na_mat.try_inverse() {
+            let mut result = Self::ZERO;
+            for c in 0..4 {
+                result.cols[c].x = inv[(0, c)];
+                result.cols[c].y = inv[(1, c)];
+                result.cols[c].z = inv[(2, c)];
+                result.cols[c].w = inv[(3, c)];
+            }
+            Some(result)
+        } else {
+            None
+        }
     }
 }
 

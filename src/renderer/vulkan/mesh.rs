@@ -4,7 +4,7 @@ use crate::renderer::vulkan::pipeline::Vertex;
 use crate::renderer::vulkan::buffer::Buffer;
 use crate::renderer::vulkan::VulkanDevice;
 use ash::vk;
-use std::collections::HashMap;
+
 
 pub struct Mesh {
     pub vertex_buffer: Buffer,
@@ -13,118 +13,84 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    /// Loads a simple .obj file. Currently parses `v` and `f`, generating vertex colors from `vn`.
-    pub fn load_obj(path: &str, vulkan: &VulkanDevice) -> Option<Self> {
-        let contents = std::fs::read_to_string(path).ok()?;
+    /// Loads an .obj file with potentially multiple sub-meshes using `tobj`.
+    pub fn load_models(path: &str, vulkan: &VulkanDevice) -> Option<Vec<Self>> {
+        let options = tobj::LoadOptions {
+            single_index: true,
+            triangulate: true,
+            ignore_points: true,
+            ignore_lines: true,
+        };
         
-        let mut positions = Vec::new();
-        let mut normals = Vec::new();
-        let mut uvs = Vec::new();
+        let (models, _materials) = tobj::load_obj(path, &options).ok()?;
         
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        
-        // Maps a tuple of (pos_idx, uv_idx, norm_idx) to a unique Vertex index.
-        let mut unique_vertices: HashMap<(usize, usize, usize), u32> = HashMap::new();
+        let mut loaded_meshes = Vec::new();
 
-        for line in contents.lines() {
-            let mut parts = line.split_whitespace();
-            let Some(cmd) = parts.next() else { continue };
+        for model in models {
+            let mesh = &model.mesh;
+            let mut vertices = Vec::new();
+            
+            let num_vertices = mesh.positions.len() / 3;
+            for i in 0..num_vertices {
+                let pos = [
+                    mesh.positions[i * 3],
+                    mesh.positions[i * 3 + 1],
+                    mesh.positions[i * 3 + 2],
+                ];
+                
+                let normal = if !mesh.normals.is_empty() {
+                    [
+                        mesh.normals[i * 3],
+                        mesh.normals[i * 3 + 1],
+                        mesh.normals[i * 3 + 2],
+                    ]
+                } else {
+                    [0.0, 1.0, 0.0]
+                };
+                
+                let uv = if !mesh.texcoords.is_empty() {
+                    [
+                        mesh.texcoords[i * 2],
+                        // tobj usually gives V as top-down, but Vulkan is also top-down, or we flip it if needed.
+                        mesh.texcoords[i * 2 + 1],
+                    ]
+                } else {
+                    [0.0, 0.0]
+                };
 
-            match cmd {
-                "v" => {
-                    let x = parts.next()?.parse::<f32>().ok()?;
-                    let y = parts.next()?.parse::<f32>().ok()?;
-                    let z = parts.next()?.parse::<f32>().ok()?;
-                    positions.push([x, y, z]);
-                }
-                "vt" => {
-                    let u = parts.next()?.parse::<f32>().ok()?;
-                    let v = parts.next()?.parse::<f32>().ok()?;
-                    uvs.push([u, v]);
-                }
-                "vn" => {
-                    let nx = parts.next()?.parse::<f32>().ok()?;
-                    let ny = parts.next()?.parse::<f32>().ok()?;
-                    let nz = parts.next()?.parse::<f32>().ok()?;
-                    normals.push([nx, ny, nz]);
-                }
-                "f" => {
-                    // Face format: v/vt/vn. We might not have vt.
-                    // Process each vertex in the face (assuming triangles)
-                    let mut face_indices = Vec::new();
-                    
-                    for part in parts {
-                        let sub_parts: Vec<&str> = part.split('/').collect();
-                        // OBJ is 1-indexed
-                        let p_idx = sub_parts[0].parse::<usize>().ok()? - 1;
-                        let mut uv_idx = 0;
-                        let mut n_idx = 0;
-                        
-                        if sub_parts.len() >= 2 && !sub_parts[1].is_empty() {
-                            uv_idx = sub_parts[1].parse::<usize>().ok()? - 1;
-                        }
-                        if sub_parts.len() >= 3 && !sub_parts[2].is_empty() {
-                            n_idx = sub_parts[2].parse::<usize>().ok()? - 1;
-                        }
-
-                        let key = (p_idx, uv_idx, n_idx);
-                        
-                        let idx = *unique_vertices.entry(key).or_insert_with(|| {
-                            let new_idx = vertices.len() as u32;
-                            let pos = positions[p_idx];
-                            
-                            let normal = if n_idx < normals.len() {
-                                normals[n_idx]
-                            } else {
-                                [0.0, 1.0, 0.0]
-                            };
-
-                            let uv = if uv_idx < uvs.len() {
-                                uvs[uv_idx]
-                            } else {
-                                [0.0, 0.0]
-                            };
-                            
-                            vertices.push(Vertex { pos, normal, uv });
-                            new_idx
-                        });
-                        
-                        face_indices.push(idx);
-                    }
-                    
-                    // Simple triangulation (if face has > 3 vertices, make a fan)
-                    for i in 1..(face_indices.len() - 1) {
-                        indices.push(face_indices[0]);
-                        indices.push(face_indices[i]);
-                        indices.push(face_indices[i + 1]);
-                    }
-                }
-                _ => {}
+                vertices.push(Vertex { pos, normal, uv });
             }
+
+            let indices = mesh.indices.clone();
+
+            if vertices.is_empty() || indices.is_empty() {
+                continue;
+            }
+
+            let vertex_buffer = Buffer::new_device_local(
+                vulkan,
+                &vertices,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+            )?;
+
+            let index_buffer = Buffer::new_device_local(
+                vulkan,
+                &indices,
+                vk::BufferUsageFlags::INDEX_BUFFER,
+            )?;
+
+            loaded_meshes.push(Self {
+                vertex_buffer,
+                index_buffer,
+                index_count: indices.len() as u32,
+            });
         }
 
-        if vertices.is_empty() || indices.is_empty() {
-            return None;
+        if loaded_meshes.is_empty() {
+            None
+        } else {
+            Some(loaded_meshes)
         }
-
-        let vertex_buffer = Buffer::new_device_local(
-            vulkan,
-            &vertices,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-        )?;
-
-        let index_buffer = Buffer::new_device_local(
-            vulkan,
-            &indices,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-        )?;
-
-        Some(Self {
-            vertex_buffer,
-            index_buffer,
-            index_count: indices.len() as u32,
-        })
     }
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {

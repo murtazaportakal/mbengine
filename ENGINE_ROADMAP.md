@@ -211,70 +211,128 @@ All assertions passing. **20 unit tests + 1 integration test = 21 total.**
 
 ---
 
-## Backlog — Prioritised Next Steps
+## Completed — Gameplay & Rendering Systems
 
 ### Phase 10: ECS Rendering Systems
 - **`src/ecs/components.rs`**: Defined `TransformComponent` and `RenderComponent`.
 - **`src/renderer/vulkan/pipeline.rs`**: Push Constants setup.
 - **`src/app/application.rs`**: Mapped Entity components to Vulkan Push Constants and `cmd_draw` calls.
 
+### Phase 11: Camera & Depth Buffering
+- **`src/math/mat4.rs`**: Implemented `perspective` and `look_at` matrix generation.
+- **`src/ecs/components.rs`**: Added `CameraComponent`.
+- **`src/renderer/vulkan/swapchain.rs`**: Added Depth buffer attachment (`vk::Format::D32_SFLOAT`).
+- **`src/renderer/vulkan/pipeline.rs`**: Enabled depth testing.
+
+### Phase 12: Interactive Camera Controls (Fly/FPS Camera)
+- **`src/app/input.rs`**: Added mouse delta tracking and keyboard states.
+- **`src/app/application.rs`**: Hooked up input to WASD translation and mouse rotation for the camera.
+
+### Phase 13: Mesh Loading & Index Buffers
+- **`src/renderer/vulkan/mesh.rs`**: Custom zero-dependency `.obj` parser and index buffer creation.
+- **`src/app/application.rs`**: Loaded `cube.obj` and enabled indexed drawing.
+
+### Phase 14: Lighting (Directional Lights & Basic Shading)
+- **`src/ecs/components.rs`**: Added `LightComponent`.
+- **`shaders/shader.*`**: Updated shaders to calculate Lambertian diffuse lighting.
+
+### Phase 15: Textures & Materials (Descriptor Sets & Samplers)
+- **`src/renderer/vulkan/texture.rs`**: Generated procedural checkerboard texture and uploaded to `vk::Image`.
+- **`src/app/application.rs`, `pipeline.rs`**: Setup descriptor pools, layout, and bound them for rendering.
+
+### Phase 16: Scene Graph & Hierarchy (Parent/Child Transforms)
+- **`src/ecs/components.rs`**: Added `HierarchyComponent`.
+- **`src/app/application.rs`**: Computed nested `world_matrices` dynamically during the render loop (e.g. Moon orbiting Planet).
+
 ---
 
 ## Backlog — Prioritised Next Steps
 
-### Phase 11: Camera & Depth Buffering
+### Phase 17: Asset Management & Real Image Loading
 | Priority | File(s) | Description |
 |---|---|---|
-| **P1** | `src/math/mat4.rs` | Implement `perspective` and `look_at` matrix generation. |
-| **P1** | `src/ecs/components.rs` | Add `CameraComponent`. |
-| **P2** | `src/renderer/vulkan/swapchain.rs` | Add Depth buffer attachment (`vk::Format::D32_SFLOAT`). |
-| **P2** | `src/renderer/vulkan/pipeline.rs` | Enable depth testing in `vk::PipelineDepthStencilStateCreateInfo`. |
+| **P1** | `Cargo.toml`, `texture.rs` | Add `image` crate. Update texture loader to parse `.png` and `.jpg` from disk. |
+| **P1** | `asset_manager.rs` | Create a system to load and cache textures so they aren't duplicated in VRAM. |
 
-### Phase 12: Interactive Camera Controls (Fly/FPS Camera)
+### Phase 18: Complex Model Loading (GLTF/OBJ)
 | Priority | File(s) | Description |
 |---|---|---|
-| **P1** | `src/app/input.rs`, `src/platform/window.rs` | Add mouse delta tracking and handle `WM_MOUSEMOVE`. |
-| **P1** | `src/app/application.rs` | Hook up input to translate and rotate the camera in 3D space. |
+| **P1** | `Cargo.toml`, `mesh.rs` | Add `tobj` or `gltf` crate. |
+| **P1** | `mesh.rs` | Load complex meshes with multiple sub-meshes and parse materials. |
+| **P1** | `ecs/components.rs` | Update components to reference cached asset IDs. |
 
-### Phase 13: Mesh Loading & Index Buffers
+### Phase 19: Advanced Lighting & PBR Materials
 | Priority | File(s) | Description |
 |---|---|---|
-| **P1** | `src/renderer/vulkan/mesh.rs` | Custom zero-dependency `.obj` parser and index buffer creation. |
-| **P1** | `src/app/application.rs` | Load `cube.obj`, update ECS entities to reference mesh indices, and use `cmd_draw_indexed`. |
+| **P1** | `shaders/shader.frag` | Upgrade fragment shader to handle Physically Based Rendering (PBR). |
+| **P2** | `ecs/components.rs` | Add `PointLightComponent` and allow multiple light sources in the UBO. |
 
-### Phase 14: Lighting (Directional Lights & Basic Shading)
+### Phase 20: Physics & Collisions
 | Priority | File(s) | Description |
 |---|---|---|
-| **P1** | `src/ecs/components.rs` | Add `LightComponent`. |
-| **P1** | `shaders/shader.*`, `src/renderer/vulkan/pipeline.rs` | Update shaders and `PushConstants` to calculate diffuse lighting. |
+| **P1** | `Cargo.toml`, `physics.rs` | Integrate a physics engine like `rapier3d`. |
+| **P1** | `ecs/components.rs` | Add `RigidBodyComponent` and `ColliderComponent`. |
+| **P1** | `application.rs` | Sync physics simulation state with visual `TransformComponent` each frame. |
 
-### Phase 15: Textures & Materials (Descriptor Sets & Samplers)
+### Phase 21: Scene Serialization & UI
 | Priority | File(s) | Description |
 |---|---|---|
-| **P1** | `src/renderer/vulkan/texture.rs` | Generate a procedural texture and upload to `vk::Image`. |
-| **P1** | `src/app/application.rs`, `pipeline.rs` | Setup descriptor pools, layout, and bind them for rendering. |
-
-### Phase 16: Scene Graph & Hierarchy (Parent/Child Transforms)
-| Priority | File(s) | Description |
-|---|---|---|
-| **P1** | `src/ecs/components.rs` | Add `HierarchyComponent`. |
-| **P1** | `src/app/application.rs` | Compute nested `world_matrices` dynamically during the render loop. |
+| **P1** | `ecs/serialization.rs` | Use `serde` to save and load entities and components to/from JSON. |
+| **P2** | `ui.rs` | Integrate `egui` to create a real-time developer interface to tweak variables without recompiling. |
 
 ---
 
 ## Session Handoff Notes
 
-- **All files compile cleanly** under Rust stable 1.96.0 with `cargo clippy` passing clean.
-- **Build system:** `Cargo.toml` at project root. `cargo build` / `cargo test`.
+- **All files compile cleanly** under Rust stable 1.96.0 with `cargo clippy` passing clean. Unused variables in `application.rs` have been fixed.
+- **Rendering is fully functional:** Swapchain resizing logic is fixed, avoiding Windows DWM warping. The pipeline uses dynamic viewport/scissor states correctly. 
+- **Next steps are Asset loading and PBR:** The engine is ready for real 3D models and textures.
+- **Build system:** `Cargo.toml` at project root. `cargo build` / `cargo run`.
 - **Toolchain:** `stable-x86_64-pc-windows-gnu` (MinGW linker).
-- **ECS uses `PersistentArena`** (not `ECSPool`). The sparse-set design needs variable-size arrays, not fixed-block pools. The `ECSPool` remains available for fixed-size runtime objects.
-- **Destruction order matters:** `World` must be dropped before `MemorySubsystem::shutdown()` is called, since World's `Drop` impl accesses arena memory. Use `drop(world)` or ensure correct declaration order.
-- **`MemoryConfig` defaults are tunable.** Current: 256 MB total.
-- **Entity capacity:** 1M max entities (20-bit index). Each ComponentArray sparse array costs 4 MB. With all 64 types registered, that's 256 MB.
-- **Component type limit:** 64 (fits in `u64` mask). Sufficient for most indie games.
-- **Test suite:** `tests/test_ecs.rs`, `tests/test_containers.rs`, `tests/test_platform.rs`. Comprehensive testing for ECS, memory, containers, and platform. All passing flawlessly.
-- **C++ source files are completely removed** (Phase 2 constraint completed).
 
 ---
 
-*Start the next session with: "Continue from ENGINE_ROADMAP.md — build Phase 11: Camera & Depth Buffering"*
+*Start the next session with: "Continue from ENGINE_ROADMAP.md — build Phase 17: Asset Management & Real Image Loading"*
+
+---
+
+## The Next-Generation Engine (V2 Master Plan)
+
+Having completed the foundational architecture (Phases 1-21), this section outlines the roadmap to transform this project into a full-fledged competitor to engines like Bevy and Fyrox. The focus is exclusively on **Developer Experience** and **Iteration Speed**.
+
+### Epic 1: The Editor Foundation (Egui Integration)
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `Cargo.toml` | Add `egui`. |
+| **P1** | `platform/win32.rs` | Translate Win32 messages (scroll, characters, resize) into `egui::RawInput`. |
+| **P1** | `renderer/vulkan/egui_backend.rs` | Custom pipeline to stream `egui` clipped meshes and render the UI overlay. |
+
+### Epic 2: Offscreen Rendering (The Viewport)
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `renderer/vulkan/offscreen.rs` | Create an offscreen render target (color + depth). |
+| **P1** | `app/application.rs` | Render the game to the offscreen texture, then pass it to `egui` to draw inside an Editor Window. |
+
+### Epic 3: ECS Reflection & Scene Inspector
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `ecs/reflection.rs` | Build a component registry to expose component fields dynamically. |
+| **P2** | `app/editor.rs` | Build the Hierarchy (Entity tree) and Inspector (Component properties) panels. |
+
+### Epic 4: Native DLL Hot-Reloading (The Killer Feature)
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `src/lib.rs` -> `host` vs `game` | Split the engine into a Host executable (Renderer + ECS Memory) and a Game DLL (Systems). |
+| **P1** | `platform/hot_reload.rs` | Watch the DLL file, seamlessly unload and reload it when recompiled, maintaining ECS state. |
+
+### Epic 5: Asset Pipeline & VFS
+| Priority | File(s) | Description |
+|---|---|---|
+| **P2** | `asset_manager.rs` | File watcher for hot-reloading shaders, textures, and models instantly. |
+| **P3** | `vfs.rs` | Virtual File System for packing assets into a release binary. |
+
+### Epic 6: Job System & Multithreading
+| Priority | File(s) | Description |
+|---|---|---|
+| **P2** | `ecs/system.rs` | Declare read/write access requirements for systems. |
+| **P3** | `ecs/scheduler.rs` | Build a dependency graph and use a thread pool to run non-overlapping systems concurrently. |

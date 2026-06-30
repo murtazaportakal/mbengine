@@ -11,17 +11,31 @@ pub struct Vertex {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PointLight {
+    pub position: [f32; 4],
+    pub color: [f32; 4],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct GlobalUbo {
     pub view_proj: crate::math::mat4::Mat4,
+    pub camera_pos: [f32; 4],
     pub light_dir: [f32; 4],
     pub light_color: [f32; 4],
+    pub point_lights: [PointLight; 4],
+    pub num_point_lights: u32,
+    pub _padding: [u32; 3],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PushConstants {
     pub world: crate::math::mat4::Mat4,
+    pub metallic: f32,
+    pub roughness: f32,
+    pub _padding: [f32; 2],
 }
 
 pub struct Pipeline {
@@ -93,8 +107,8 @@ impl Pipeline {
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::CLOCKWISE)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(false);
 
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
@@ -146,6 +160,10 @@ impl Pipeline {
 
         let layout = unsafe { vulkan.device.create_pipeline_layout(&pipeline_layout_info, None).ok()? };
 
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
+            .dynamic_states(&dynamic_states);
+
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)
             .vertex_input_state(&vertex_input_info)
@@ -155,15 +173,11 @@ impl Pipeline {
             .multisample_state(&multisampling)
             .color_blend_state(&color_blending)
             .depth_stencil_state(&depth_stencil)
+            .dynamic_state(&dynamic_state_info)
             .layout(layout)
             .render_pass(render_pass)
             .subpass(0);
 
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
-            .dynamic_states(&dynamic_states);
-
-        let pipeline_info = pipeline_info.dynamic_state(&dynamic_state_info);
 
         let handle = unsafe {
             vulkan.device

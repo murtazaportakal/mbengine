@@ -1,10 +1,11 @@
 //! Vector types optimized for game development.
 
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign, Neg};
+use serde::{Serialize, Deserialize};
 
 // ── Vec2 ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Vec2 {
     pub x: f32,
@@ -50,7 +51,7 @@ impl Vec2 {
 
 // ── Vec3 ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Vec3 {
     pub x: f32,
@@ -107,7 +108,7 @@ impl Vec3 {
 
 // ── Vec4 ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[repr(C, align(16))]
 pub struct Vec4 {
     pub x: f32,

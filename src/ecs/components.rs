@@ -1,7 +1,8 @@
 use crate::math::vec::Vec3;
 use crate::math::mat4::Mat4;
+use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct TransformComponent {
     pub position: Vec3,
     pub rotation: Vec3, // Euler angles for now
@@ -40,15 +41,28 @@ impl TransformComponent {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RenderComponent {
     // In the future this will hold mesh_id and material_id.
     // For now it acts as a tag to indicate this entity should be drawn.
     pub visible: bool,
     pub mesh_index: usize,
+    pub metallic: f32,
+    pub roughness: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+impl Default for RenderComponent {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            mesh_index: 0,
+            metallic: 0.0,
+            roughness: 0.5,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct CameraComponent {
     pub view: Mat4,
     pub proj: Mat4,
@@ -63,7 +77,7 @@ impl Default for CameraComponent {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct LightComponent {
     pub direction: Vec3,
     pub color: Vec3,
@@ -78,7 +92,33 @@ impl Default for LightComponent {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct PointLightComponent {
+    pub color: Vec3,
+    pub intensity: f32,
+}
+
+impl Default for PointLightComponent {
+    fn default() -> Self {
+        Self {
+            color: Vec3::new(1.0, 1.0, 1.0),
+            intensity: 1.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct HierarchyComponent {
     pub parent: Option<u32>,
+    pub local_matrix: crate::math::mat4::Mat4,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RigidBodyComponent {
+    pub handle: rapier3d::dynamics::RigidBodyHandle,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ColliderComponent {
+    pub handle: rapier3d::geometry::ColliderHandle,
 }

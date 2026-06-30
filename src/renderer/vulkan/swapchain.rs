@@ -13,9 +13,6 @@ pub struct Swapchain {
     pub extent: vk::Extent2D,
     pub images: Vec<vk::Image>,
     pub image_views: Vec<vk::ImageView>,
-    pub depth_image: vk::Image,
-    pub depth_image_memory: vk::DeviceMemory,
-    pub depth_image_view: vk::ImageView,
     pub framebuffers: Vec<vk::Framebuffer>,
 }
 
@@ -115,46 +112,6 @@ impl Swapchain {
             image_views.push(view);
         }
 
-        let depth_format = vk::Format::D32_SFLOAT;
-        let depth_image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D { width: extent.width, height: extent.height, depth: 1 })
-            .mip_levels(1)
-            .array_layers(1)
-            .format(depth_format)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let depth_image = unsafe { vulkan.device.create_image(&depth_image_info, None).ok()? };
-        let mem_req = unsafe { vulkan.device.get_image_memory_requirements(depth_image) };
-        let mem_type_index = vulkan.find_memory_type(mem_req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_req.size)
-            .memory_type_index(mem_type_index);
-
-        let depth_image_memory = unsafe { vulkan.device.allocate_memory(&alloc_info, None).ok()? };
-        unsafe {
-            vulkan.device.bind_image_memory(depth_image, depth_image_memory, 0).ok()?;
-        }
-
-        let depth_view_info = vk::ImageViewCreateInfo::default()
-            .image(depth_image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(depth_format)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::DEPTH,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-
-        let depth_image_view = unsafe { vulkan.device.create_image_view(&depth_view_info, None).ok()? };
-
         Some(Self {
             surface_loader,
             surface,
@@ -164,9 +121,6 @@ impl Swapchain {
             extent,
             images,
             image_views,
-            depth_image,
-            depth_image_memory,
-            depth_image_view,
             framebuffers: Vec::new(),
         })
     }
@@ -174,7 +128,7 @@ impl Swapchain {
     pub fn create_framebuffers(&mut self, vulkan: &VulkanDevice, render_pass: vk::RenderPass) -> bool {
         self.framebuffers.clear();
         for &view in &self.image_views {
-            let attachments = [view, self.depth_image_view];
+            let attachments = [view];
             let fb_info = vk::FramebufferCreateInfo::default()
                 .render_pass(render_pass)
                 .attachments(&attachments)
@@ -198,9 +152,6 @@ impl Swapchain {
                 vulkan.device.destroy_framebuffer(fb, None);
             }
             self.framebuffers.clear();
-            vulkan.device.destroy_image_view(self.depth_image_view, None);
-            vulkan.device.destroy_image(self.depth_image, None);
-            vulkan.device.free_memory(self.depth_image_memory, None);
             for &view in &self.image_views {
                 vulkan.device.destroy_image_view(view, None);
             }
@@ -223,7 +174,14 @@ impl Swapchain {
             image_count = caps.max_image_count;
         }
 
-        self.extent = vk::Extent2D { width, height };
+        let mut final_extent = vk::Extent2D { width, height };
+        if caps.current_extent.width != u32::MAX {
+            final_extent = caps.current_extent;
+        } else {
+            final_extent.width = final_extent.width.clamp(caps.min_image_extent.width, caps.max_image_extent.width);
+            final_extent.height = final_extent.height.clamp(caps.min_image_extent.height, caps.max_image_extent.height);
+        }
+        self.extent = final_extent;
 
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface)
@@ -271,65 +229,6 @@ impl Swapchain {
                 self.image_views.push(view);
             } else { return false; }
         }
-
-        let depth_format = vk::Format::D32_SFLOAT;
-        let depth_image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D { width, height, depth: 1 })
-            .mip_levels(1)
-            .array_layers(1)
-            .format(depth_format)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        self.depth_image = unsafe {
-            match vulkan.device.create_image(&depth_image_info, None) {
-                Ok(img) => img,
-                Err(_) => return false,
-            }
-        };
-        
-        let mem_req = unsafe { vulkan.device.get_image_memory_requirements(self.depth_image) };
-        let mem_type_index = vulkan.find_memory_type(mem_req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL).unwrap_or(0);
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_req.size)
-            .memory_type_index(mem_type_index);
-
-        self.depth_image_memory = unsafe {
-            match vulkan.device.allocate_memory(&alloc_info, None) {
-                Ok(mem) => mem,
-                Err(_) => return false,
-            }
-        };
-        
-        unsafe {
-            if vulkan.device.bind_image_memory(self.depth_image, self.depth_image_memory, 0).is_err() {
-                return false;
-            }
-        }
-
-        let depth_view_info = vk::ImageViewCreateInfo::default()
-            .image(self.depth_image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(depth_format)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::DEPTH,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-
-        self.depth_image_view = unsafe {
-            match vulkan.device.create_image_view(&depth_view_info, None) {
-                Ok(v) => v,
-                Err(_) => return false,
-            }
-        };
 
         true
     }
