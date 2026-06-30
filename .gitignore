@@ -13,3 +13,10 @@ Thumbs.db
 
 # Build artifacts
 /build
+
+# Shader tooling (downloaded locally)
+glslang/
+glslang.zip
+
+# Compiled SPIR-V shaders (rebuilt by build.rs)
+shaders/*.spv

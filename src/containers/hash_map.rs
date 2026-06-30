@@ -6,7 +6,7 @@
 //! of linked-list separate chaining.
 
 use crate::memory::ArenaAllocator;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::{BuildHasher, Hash};
 use std::mem::MaybeUninit;
 use std::ptr;
 

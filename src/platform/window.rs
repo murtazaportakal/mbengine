@@ -3,7 +3,6 @@
 //! Exposes a raw `HWND` for the renderer to attach to later.
 
 use crate::platform::win32;
-use std::ffi::c_void;
 use std::ptr;
 
 /// A Win32 window.
@@ -85,6 +84,21 @@ impl Window {
                     if vk < 256 {
                         input.keys[vk] = false;
                     }
+                }
+                win32::WM_MOUSEMOVE => {
+                    let x = (msg.lParam & 0xFFFF) as i16 as i32;
+                    let y = ((msg.lParam >> 16) & 0xFFFF) as i16 as i32;
+                    
+                    if input.first_mouse {
+                        input.mouse_x = x;
+                        input.mouse_y = y;
+                        input.first_mouse = false;
+                    }
+                    
+                    input.mouse_dx += x - input.mouse_x;
+                    input.mouse_dy += y - input.mouse_y;
+                    input.mouse_x = x;
+                    input.mouse_y = y;
                 }
                 _ => {}
             }

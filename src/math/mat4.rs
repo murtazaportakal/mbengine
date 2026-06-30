@@ -67,6 +67,22 @@ impl Mat4 {
         }
     }
 
+    /// Creates a look-at view matrix.
+    pub fn look_at(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+        let f = (center - eye).normalize();
+        let s = f.cross(up).normalize();
+        let u = s.cross(f);
+
+        Self {
+            cols: [
+                Vec4::new(s.x, u.x, -f.x, 0.0),
+                Vec4::new(s.y, u.y, -f.y, 0.0),
+                Vec4::new(s.z, u.z, -f.z, 0.0),
+                Vec4::new(-s.dot(eye), -u.dot(eye), f.dot(eye), 1.0),
+            ],
+        }
+    }
+
     /// Creates a perspective projection matrix (Vulkan clip space conventions).
     /// y points down, depth is [0, 1].
     pub fn perspective(fov_y_radians: f32, aspect_ratio: f32, z_near: f32, z_far: f32) -> Self {

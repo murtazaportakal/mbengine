@@ -6,12 +6,22 @@ use crate::renderer::vulkan::VulkanDevice;
 #[derive(Clone, Copy, Debug)]
 pub struct Vertex {
     pub pos: [f32; 3],
-    pub color: [f32; 3],
+    pub normal: [f32; 3],
+    pub uv: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PushConstants {
+    pub mvp: crate::math::mat4::Mat4,
+    pub light_dir: [f32; 4],
+    pub light_color: [f32; 4],
 }
 
 pub struct Pipeline {
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
+    pub descriptor_set_layout: vk::DescriptorSetLayout,
 }
 
 impl Pipeline {
@@ -52,7 +62,12 @@ impl Pipeline {
                 .binding(0)
                 .location(1)
                 .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(memoffset::offset_of!(Vertex, color) as u32),
+                .offset(memoffset::offset_of!(Vertex, normal) as u32),
+            vk::VertexInputAttributeDescription::default()
+                .binding(0)
+                .location(2)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(memoffset::offset_of!(Vertex, uv) as u32),
         ];
 
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
@@ -103,13 +118,32 @@ impl Pipeline {
             .logic_op(vk::LogicOp::COPY)
             .attachments(std::slice::from_ref(&color_blend_attachment));
 
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+
         let push_constant_range = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(std::mem::size_of::<crate::math::mat4::Mat4>() as u32);
+            .size(std::mem::size_of::<PushConstants>() as u32);
+
+        let sampler_layout_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
+        let descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .bindings(std::slice::from_ref(&sampler_layout_binding));
+
+        let descriptor_set_layout = unsafe { vulkan.device.create_descriptor_set_layout(&descriptor_set_layout_info, None).ok()? };
 
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
-            .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+            .push_constant_ranges(std::slice::from_ref(&push_constant_range))
+            .set_layouts(std::slice::from_ref(&descriptor_set_layout));
 
         let layout = unsafe { vulkan.device.create_pipeline_layout(&pipeline_layout_info, None).ok()? };
 
@@ -121,6 +155,7 @@ impl Pipeline {
             .rasterization_state(&rasterizer)
             .multisample_state(&multisampling)
             .color_blend_state(&color_blending)
+            .depth_stencil_state(&depth_stencil)
             .layout(layout)
             .render_pass(render_pass)
             .subpass(0);
@@ -137,7 +172,7 @@ impl Pipeline {
             vulkan.device.destroy_shader_module(frag_module, None);
         }
 
-        Some(Self { layout, handle })
+        Some(Self { layout, handle, descriptor_set_layout })
     }
 
     fn create_shader_module(vulkan: &VulkanDevice, code: &[u8]) -> Option<vk::ShaderModule> {
@@ -154,6 +189,7 @@ impl Pipeline {
         unsafe {
             vulkan.device.destroy_pipeline(self.handle, None);
             vulkan.device.destroy_pipeline_layout(self.layout, None);
+            vulkan.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
     }
 }

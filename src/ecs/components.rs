@@ -45,4 +45,40 @@ pub struct RenderComponent {
     // In the future this will hold mesh_id and material_id.
     // For now it acts as a tag to indicate this entity should be drawn.
     pub visible: bool,
+    pub mesh_index: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CameraComponent {
+    pub view: Mat4,
+    pub proj: Mat4,
+}
+
+impl Default for CameraComponent {
+    fn default() -> Self {
+        Self {
+            view: Mat4::identity(),
+            proj: Mat4::perspective(std::f32::consts::FRAC_PI_4, 800.0 / 600.0, 0.1, 100.0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LightComponent {
+    pub direction: Vec3,
+    pub color: Vec3,
+}
+
+impl Default for LightComponent {
+    fn default() -> Self {
+        Self {
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            color: Vec3::new(1.0, 1.0, 1.0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HierarchyComponent {
+    pub parent: Option<u32>,
 }

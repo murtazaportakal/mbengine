@@ -58,13 +58,14 @@ fn test_window_creation() {
     // Basic smoke test to ensure we can create and pump messages 
     // without crashing or failing FFI calls.
     let mut window = Window::new("Engine Test Window", 800, 600);
+    let mut input = engine::app::Input::new();
     
     assert!(!window.hwnd().is_null());
     assert!(!window.hinstance().is_null());
     
     // Poll a few times
     for _ in 0..10 {
-        assert!(window.poll_events());
+        assert!(window.poll_events(&mut input));
     }
     
     // Note: We don't manually destroy it here. In a real engine, we'd handle 

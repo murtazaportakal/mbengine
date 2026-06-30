@@ -230,6 +230,36 @@ All assertions passing. **20 unit tests + 1 integration test = 21 total.**
 | **P2** | `src/renderer/vulkan/swapchain.rs` | Add Depth buffer attachment (`vk::Format::D32_SFLOAT`). |
 | **P2** | `src/renderer/vulkan/pipeline.rs` | Enable depth testing in `vk::PipelineDepthStencilStateCreateInfo`. |
 
+### Phase 12: Interactive Camera Controls (Fly/FPS Camera)
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `src/app/input.rs`, `src/platform/window.rs` | Add mouse delta tracking and handle `WM_MOUSEMOVE`. |
+| **P1** | `src/app/application.rs` | Hook up input to translate and rotate the camera in 3D space. |
+
+### Phase 13: Mesh Loading & Index Buffers
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `src/renderer/vulkan/mesh.rs` | Custom zero-dependency `.obj` parser and index buffer creation. |
+| **P1** | `src/app/application.rs` | Load `cube.obj`, update ECS entities to reference mesh indices, and use `cmd_draw_indexed`. |
+
+### Phase 14: Lighting (Directional Lights & Basic Shading)
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `src/ecs/components.rs` | Add `LightComponent`. |
+| **P1** | `shaders/shader.*`, `src/renderer/vulkan/pipeline.rs` | Update shaders and `PushConstants` to calculate diffuse lighting. |
+
+### Phase 15: Textures & Materials (Descriptor Sets & Samplers)
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `src/renderer/vulkan/texture.rs` | Generate a procedural texture and upload to `vk::Image`. |
+| **P1** | `src/app/application.rs`, `pipeline.rs` | Setup descriptor pools, layout, and bind them for rendering. |
+
+### Phase 16: Scene Graph & Hierarchy (Parent/Child Transforms)
+| Priority | File(s) | Description |
+|---|---|---|
+| **P1** | `src/ecs/components.rs` | Add `HierarchyComponent`. |
+| **P1** | `src/app/application.rs` | Compute nested `world_matrices` dynamically during the render loop. |
+
 ---
 
 ## Session Handoff Notes

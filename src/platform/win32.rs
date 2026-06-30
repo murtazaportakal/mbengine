@@ -70,6 +70,13 @@ pub const WM_MOUSEMOVE: UINT = 0x0200;
 pub const VK_ESCAPE: usize = 0x1B;
 pub const VK_SPACE: usize = 0x20;
 
+pub const VK_A: usize = 0x41;
+pub const VK_D: usize = 0x44;
+pub const VK_E: usize = 0x45;
+pub const VK_Q: usize = 0x51;
+pub const VK_S: usize = 0x53;
+pub const VK_W: usize = 0x57;
+
 pub type WNDPROC =
     Option<unsafe extern "system" fn(hwnd: HWND, uMsg: UINT, wParam: WPARAM, lParam: LPARAM) -> LRESULT>;
 

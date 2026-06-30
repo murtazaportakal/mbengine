@@ -56,7 +56,7 @@ impl Logger {
         let len = msg.len().min(256);
         entry.message.push_str(&msg[..len]);
 
-        let mut buf = self.buffer.lock().unwrap();
+        let buf = self.buffer.lock().unwrap();
         
         // If the ring buffer is full, pop the oldest to make room
         if let Err(_) = buf.push(entry) {

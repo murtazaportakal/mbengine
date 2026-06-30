@@ -6,6 +6,9 @@ pub struct Input {
     pub keys_prev: [bool; 256],
     pub mouse_x: i32,
     pub mouse_y: i32,
+    pub mouse_dx: i32,
+    pub mouse_dy: i32,
+    pub first_mouse: bool,
 }
 
 impl Default for Input {
@@ -21,12 +24,17 @@ impl Input {
             keys_prev: [false; 256],
             mouse_x: 0,
             mouse_y: 0,
+            mouse_dx: 0,
+            mouse_dy: 0,
+            first_mouse: true,
         }
     }
 
     /// Called at the beginning of the frame to capture the previous frame's state.
     pub fn update(&mut self) {
         self.keys_prev.copy_from_slice(&self.keys);
+        self.mouse_dx = 0;
+        self.mouse_dy = 0;
     }
 
     /// Is the key currently held down?

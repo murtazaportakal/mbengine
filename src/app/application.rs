@@ -1,11 +1,10 @@
 //! The core game loop and application state.
 
 use crate::ecs::World;
-use crate::ecs::{TransformComponent, RenderComponent};
+use crate::ecs::{TransformComponent, RenderComponent, CameraComponent, LightComponent, HierarchyComponent};
 use crate::memory::{MemoryConfig, MemorySubsystem};
 use crate::platform::{Timer, Window, win32};
-use crate::renderer::vulkan::{Pipeline, RenderPass, Swapchain, VulkanDevice, Buffer};
-use crate::renderer::vulkan::pipeline::Vertex;
+use crate::renderer::vulkan::{Pipeline, RenderPass, Swapchain, VulkanDevice};
 use crate::renderer::RenderDevice;
 use crate::math::vec::Vec3;
 use ash::vk;
@@ -16,7 +15,11 @@ use ash::vk;
 pub struct Application {
     pub world: World,
     pub pipeline: Option<Pipeline>,
-    pub vertex_buffer: Option<Buffer>,
+    pub texture: Option<crate::renderer::vulkan::Texture>,
+    pub meshes: Vec<crate::renderer::vulkan::Mesh>,
+    pub world_matrices: std::collections::HashMap<u32, crate::math::mat4::Mat4>,
+    pub descriptor_pool: vk::DescriptorPool,
+    pub descriptor_set: vk::DescriptorSet,
     pub render_pass: RenderPass,
     pub swapchain: Swapchain,
     pub vulkan: VulkanDevice,
@@ -49,17 +52,57 @@ impl Application {
         
         let pipeline = Pipeline::new(&vulkan, render_pass.handle, swapchain.extent);
 
-        let vertices = [
-            Vertex { pos: [0.0, -0.5, 0.0], color: [1.0, 0.0, 0.0] },
-            Vertex { pos: [0.5, 0.5, 0.0], color: [0.0, 1.0, 0.0] },
-            Vertex { pos: [-0.5, 0.5, 0.0], color: [0.0, 0.0, 1.0] },
-        ];
+        let mut texture = None;
+        let mut descriptor_pool = vk::DescriptorPool::null();
+        let mut descriptor_set = vk::DescriptorSet::null();
 
-        let vertex_buffer = Buffer::new_device_local(
-            &vulkan,
-            &vertices,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-        );
+        if let Some(pipe) = &pipeline {
+            if let Some(tex) = crate::renderer::vulkan::Texture::new_checkerboard(&vulkan) {
+                // 1. Create Descriptor Pool
+                let pool_size = vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1);
+                
+                let pool_info = vk::DescriptorPoolCreateInfo::default()
+                    .pool_sizes(std::slice::from_ref(&pool_size))
+                    .max_sets(1);
+                
+                descriptor_pool = unsafe { vulkan.device.create_descriptor_pool(&pool_info, None).unwrap() };
+
+                // 2. Allocate Descriptor Set
+                let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(descriptor_pool)
+                    .set_layouts(std::slice::from_ref(&pipe.descriptor_set_layout));
+
+                descriptor_set = unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0] };
+
+                // 3. Update Descriptor Set
+                let image_info = vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(tex.view)
+                    .sampler(tex.sampler);
+                
+                let write_desc = vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_set)
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&image_info));
+                
+                unsafe { vulkan.device.update_descriptor_sets(std::slice::from_ref(&write_desc), &[]) };
+                
+                texture = Some(tex);
+            }
+        }
+
+        let mut meshes = Vec::new();
+        if let Some(cube_mesh) = crate::renderer::vulkan::Mesh::load_obj("cube.obj", &vulkan) {
+            meshes.push(cube_mesh);
+        } else {
+            crate::log_info!("Failed to load cube.obj. Rendering will fail.");
+        }
+
+        let world_matrices = std::collections::HashMap::new();
 
         if pipeline.is_none() {
             crate::log_info!("Shaders not found or failed to compile. Rendering will be skipped.");
@@ -72,26 +115,86 @@ impl Application {
         unsafe {
             world.register_component::<TransformComponent>(1000);
             world.register_component::<RenderComponent>(1000);
+            world.register_component::<CameraComponent>(1);
+            world.register_component::<LightComponent>(1);
+            world.register_component::<HierarchyComponent>(1000);
         }
 
-        // Spawn a few entities to render
-        for i in 0..3 {
-            let entity = world.create_entity();
-            let mut transform = TransformComponent::default();
-            transform.position = Vec3::new(-0.5 + (i as f32 * 0.5), 0.0, 0.0);
-            transform.scale = Vec3::new(0.5, 0.5, 1.0);
-            transform.update_matrix(); // Precompute the matrix for the shader
+        // Spawn a camera
+        let camera_entity = world.create_entity();
+        let mut cam_transform = TransformComponent::default();
+        cam_transform.position = Vec3::new(0.0, 3.0, -8.0);
+        cam_transform.rotation.x = -std::f32::consts::FRAC_PI_8; // Look slightly down
+        unsafe {
+            world.add_component(camera_entity, cam_transform);
+            let mut cam_comp = CameraComponent::default();
+            cam_comp.proj = crate::math::mat4::Mat4::perspective(std::f32::consts::FRAC_PI_4, width as f32 / height as f32, 0.1, 100.0);
+            world.add_component(camera_entity, cam_comp);
+        }
 
-            unsafe {
-                world.add_component(entity, transform);
-                world.add_component(entity, RenderComponent { visible: true });
-            }
+        // Spawn a directional light
+        let light_entity = world.create_entity();
+        unsafe {
+            world.add_component(light_entity, LightComponent {
+                // Pointing down and to the left/forward
+                direction: Vec3::new(-1.0, -1.0, 1.0).normalize(),
+                color: Vec3::new(1.0, 1.0, 1.0),
+            });
+        }
+
+        // Spawn a few entities in a hierarchy
+        // 1. Planet
+        let planet = world.create_entity();
+        unsafe {
+            world.add_component(planet, TransformComponent {
+                position: Vec3::new(0.0, 0.0, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                ..Default::default()
+            });
+            world.add_component(planet, RenderComponent {
+                visible: true,
+                mesh_index: 0,
+            });
+        }
+
+        // 2. Moon (Child of Planet)
+        let moon = world.create_entity();
+        unsafe {
+            world.add_component(moon, TransformComponent {
+                position: Vec3::new(2.5, 0.0, 0.0),
+                scale: Vec3::new(0.4, 0.4, 0.4),
+                ..Default::default()
+            });
+            world.add_component(moon, RenderComponent {
+                visible: true,
+                mesh_index: 0,
+            });
+            world.add_component(moon, HierarchyComponent { parent: Some(planet) });
+        }
+
+        // 3. Satellite (Child of Moon)
+        let satellite = world.create_entity();
+        unsafe {
+            world.add_component(satellite, TransformComponent {
+                position: Vec3::new(1.5, 0.0, 0.0),
+                scale: Vec3::new(0.2, 0.2, 0.2),
+                ..Default::default()
+            });
+            world.add_component(satellite, RenderComponent {
+                visible: true,
+                mesh_index: 0,
+            });
+            world.add_component(satellite, HierarchyComponent { parent: Some(moon) });
         }
 
         Some(Self {
             world,
             pipeline,
-            vertex_buffer,
+            texture,
+            meshes,
+            world_matrices,
+            descriptor_pool,
+            descriptor_set,
             render_pass,
             swapchain,
             vulkan,
@@ -120,15 +223,136 @@ impl Application {
             // 1. Update Game State (ECS)
             self.world.update_systems(dt as f32);
 
-            // Update entity transforms dynamically (for demonstration)
-            let transforms = self.world.get_component_array_mut::<TransformComponent>();
-            for transform in transforms.as_mut_slice() {
-                // Let's spin them around slightly
-                // We don't have proper Quaternions applied to the matrix yet, 
-                // so we just bounce the scale or position for fun.
-                transform.rotation.z += 1.0 * dt as f32; // Just mutating a property
-                transform.update_matrix(); // Recompute
+            // Camera Interactive Update
+            {
+                let cam_entity = {
+                    let cameras = self.world.get_component_array::<CameraComponent>();
+                    cameras.dense_entities_slice().first().copied()
+                };
+                
+                if let Some(cam_entity) = cam_entity {
+                    let transforms = self.world.get_component_array_mut::<TransformComponent>();
+                    if transforms.has(cam_entity) {
+                        let transform = unsafe { transforms.get_mut(cam_entity) };
+                        
+                        // Update pitch and yaw from mouse input
+                        let sensitivity = 0.001;
+                        transform.rotation.y += self.input.mouse_dx as f32 * sensitivity;
+                        transform.rotation.x -= self.input.mouse_dy as f32 * sensitivity;
+                        
+                        // Clamp pitch to avoid gimbal lock
+                        let max_pitch = std::f32::consts::FRAC_PI_2 - 0.01;
+                        if transform.rotation.x > max_pitch {
+                            transform.rotation.x = max_pitch;
+                        }
+                        if transform.rotation.x < -max_pitch {
+                            transform.rotation.x = -max_pitch;
+                        }
+                        
+                        let pitch = transform.rotation.x;
+                        let yaw = transform.rotation.y;
+                        
+                        // Calculate forward and right vectors
+                        let forward = Vec3::new(
+                            yaw.sin() * pitch.cos(),
+                            pitch.sin(),
+                            yaw.cos() * pitch.cos(),
+                        ).normalize();
+                        
+                        let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
+                        
+                        let speed = 2.0 * dt as f32;
+                        
+                        if self.input.is_key_down(win32::VK_W) {
+                            transform.position = transform.position + forward * speed;
+                        }
+                        if self.input.is_key_down(win32::VK_S) {
+                            transform.position = transform.position - forward * speed;
+                        }
+                        if self.input.is_key_down(win32::VK_A) {
+                            transform.position = transform.position - right * speed;
+                        }
+                        if self.input.is_key_down(win32::VK_D) {
+                            transform.position = transform.position + right * speed;
+                        }
+                        if self.input.is_key_down(win32::VK_E) {
+                            transform.position.y += speed;
+                        }
+                        if self.input.is_key_down(win32::VK_Q) {
+                            transform.position.y -= speed;
+                        }
+                    }
+                }
             }
+
+            // Compute World Matrices
+            let mut world_matrices = std::collections::HashMap::new();
+
+            // Collect entity metadata before mutably borrowing transforms
+            let render_entities: std::collections::HashSet<u32> = {
+                let renders = self.world.get_component_array::<RenderComponent>();
+                renders.dense_entities_slice().iter().copied().collect()
+            };
+            let hierarchy_roots: std::collections::HashSet<u32> = {
+                let hier = self.world.get_component_array::<HierarchyComponent>();
+                hier.dense_entities_slice().iter().copied().collect()
+            };
+
+            let transforms = self.world.get_component_array_mut::<TransformComponent>();
+            let entities = transforms.dense_entities_slice().to_vec();
+
+            for (i, transform) in transforms.as_mut_slice().iter_mut().enumerate() {
+                let entity = entities[i];
+
+                // Spin renderable entities (not camera/light)
+                if render_entities.contains(&entity) {
+                    if !hierarchy_roots.contains(&entity) {
+                        // Root entity (planet): slow spin
+                        transform.rotation.y += 1.0 * dt as f32;
+                    } else {
+                        // Child entities: spin faster
+                        transform.rotation.y += 2.5 * dt as f32;
+                    }
+                }
+
+                // Build local matrix: Translation * RotationY * Scale
+                let mut rot_y = crate::math::mat4::Mat4::identity();
+                let c = transform.rotation.y.cos();
+                let s = transform.rotation.y.sin();
+                rot_y.cols[0].x = c;
+                rot_y.cols[0].z = -s;
+                rot_y.cols[2].x = s;
+                rot_y.cols[2].z = c;
+
+                let mut t = crate::math::mat4::Mat4::identity();
+                t.cols[3].x = transform.position.x;
+                t.cols[3].y = transform.position.y;
+                t.cols[3].z = transform.position.z;
+
+                let mut sc = crate::math::mat4::Mat4::identity();
+                sc.cols[0].x = transform.scale.x;
+                sc.cols[1].y = transform.scale.y;
+                sc.cols[2].z = transform.scale.z;
+
+                transform.matrix = t * rot_y * sc;
+
+                world_matrices.insert(entity, transform.matrix);
+            }
+
+            // Resolve hierarchy: multiply child local by parent world
+            let hierarchies = self.world.get_component_array::<HierarchyComponent>();
+            for (i, hier) in hierarchies.as_slice().iter().enumerate() {
+                let entity = hierarchies.dense_entities_slice()[i];
+                if let Some(parent) = hier.parent {
+                    if let Some(&parent_world) = world_matrices.get(&parent) {
+                        if let Some(child_local) = world_matrices.get(&entity).copied() {
+                            world_matrices.insert(entity, parent_world * child_local);
+                        }
+                    }
+                }
+            }
+
+            self.world_matrices = world_matrices;
 
             // 2. Render Frame
             self.render_frame();
@@ -141,11 +365,17 @@ impl Application {
         
         self.vulkan.wait_idle();
         
+        if let Some(mut tex) = self.texture.take() {
+            tex.shutdown(&self.vulkan);
+        }
+        if self.descriptor_pool != vk::DescriptorPool::null() {
+            unsafe { self.vulkan.device.destroy_descriptor_pool(self.descriptor_pool, None) };
+        }
         if let Some(mut p) = self.pipeline.take() {
             p.shutdown(&self.vulkan);
         }
-        if let Some(mut vb) = self.vertex_buffer.take() {
-            vb.shutdown(&self.vulkan);
+        for mesh in &mut self.meshes {
+            mesh.shutdown(&self.vulkan);
         }
         self.render_pass.shutdown(&self.vulkan);
         self.swapchain.shutdown(&self.vulkan);
@@ -154,9 +384,9 @@ impl Application {
     
     fn render_frame(&mut self) {
         // Only draw if we successfully compiled shaders and uploaded vertices
-        let (pipeline, vertex_buffer) = match (&self.pipeline, &self.vertex_buffer) {
-            (Some(p), Some(vb)) => (p, vb),
-            _ => return, // Skip rendering if no pipeline/buffer (avoids deadlock)
+        let pipeline = match &self.pipeline {
+            Some(p) => p,
+            _ => return, // Skip rendering if no pipeline (avoids deadlock)
         };
 
         // Wait for previous frame to finish
@@ -207,6 +437,9 @@ impl Application {
                         float32: [0.1, 0.1, 0.1, 1.0],
                     },
                 },
+                vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
+                },
             ];
             let render_pass_begin_info = vk::RenderPassBeginInfo::default()
                 .render_pass(self.render_pass.handle)
@@ -224,21 +457,62 @@ impl Application {
                     vk::SubpassContents::INLINE,
                 );
 
-                self.vulkan.device.cmd_bind_pipeline(
-                    command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    pipeline.handle,
-                );
-                
-                // Bind Vertex Buffer
-                self.vulkan.device.cmd_bind_vertex_buffers(
-                    command_buffer,
-                    0,
-                    std::slice::from_ref(&vertex_buffer.handle),
-                    &[0],
-                );
+                if let Some(pipeline) = &self.pipeline {
+                    self.vulkan.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.handle);
+                    
+                    if self.descriptor_set != vk::DescriptorSet::null() {
+                        self.vulkan.device.cmd_bind_descriptor_sets(
+                            command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipeline.layout,
+                            0,
+                            std::slice::from_ref(&self.descriptor_set),
+                            &[],
+                        );
+                    }
+                }
 
-                // ECS Iteration for rendering
+                // Extract Light
+                let mut light_dir = [0.0, -1.0, 0.0, 0.0];
+                let mut light_color = [1.0, 1.0, 1.0, 0.0];
+                {
+                    let lights = self.world.get_component_array::<LightComponent>();
+                    let dense_lights = lights.as_slice();
+                    if let Some(light) = dense_lights.first() {
+                        // We negate the direction because the shader expects a vector POINTING to the light
+                        light_dir = [-light.direction.x, -light.direction.y, -light.direction.z, 0.0];
+                        light_color = [light.color.x, light.color.y, light.color.z, 0.0];
+                    }
+                }
+
+                // Extract Camera
+                let mut view_proj = crate::math::mat4::Mat4::identity();
+                {
+                    let cameras = self.world.get_component_array::<CameraComponent>();
+                    let transforms = self.world.get_component_array::<TransformComponent>();
+                    let dense_cams = cameras.as_slice();
+                    let cam_entities = cameras.dense_entities_slice();
+                    
+                    if let Some(&cam_entity) = cam_entities.first() {
+                        let cam = dense_cams[0];
+                        if transforms.has(cam_entity) {
+                            let cam_transform = transforms.get(cam_entity);
+                            
+                            let pitch = cam_transform.rotation.x;
+                            let yaw = cam_transform.rotation.y;
+                            let forward = Vec3::new(
+                                yaw.sin() * pitch.cos(),
+                                pitch.sin(),
+                                yaw.cos() * pitch.cos(),
+                            ).normalize();
+                            
+                            let center = cam_transform.position + forward;
+                            let view = crate::math::mat4::Mat4::look_at(cam_transform.position, center, Vec3::new(0.0, 1.0, 0.0));
+                            view_proj = cam.proj * view;
+                        }
+                    }
+                }
+
                 let renders = self.world.get_component_array::<RenderComponent>();
                 let transforms = self.world.get_component_array::<TransformComponent>();
                 
@@ -247,14 +521,22 @@ impl Application {
                 let entities = renders.dense_entities_slice();
 
                 for i in 0..dense_renders.len() {
-                    if dense_renders[i].visible {
+                    let render = &dense_renders[i];
+                    if render.visible {
                         let entity_index = entities[i];
                         if transforms.has(entity_index) {
                             let transform = transforms.get(entity_index);
                             
-                            // Push the model matrix (64 bytes)
-                            let constants_ptr = &transform.matrix as *const _ as *const u8;
-                            let constants_slice = std::slice::from_raw_parts(constants_ptr, std::mem::size_of::<crate::math::mat4::Mat4>());
+                            // Push the mvp matrix (64 bytes) + light data (32 bytes)
+                            let world_matrix = *self.world_matrices.get(&entity_index).unwrap_or(&transform.matrix);
+                            let mvp = view_proj * world_matrix;
+                            let push_constants = crate::renderer::vulkan::pipeline::PushConstants {
+                                mvp,
+                                light_dir,
+                                light_color,
+                            };
+                            let constants_ptr = &push_constants as *const _ as *const u8;
+                            let constants_slice = std::slice::from_raw_parts(constants_ptr, std::mem::size_of::<crate::renderer::vulkan::pipeline::PushConstants>());
 
                             self.vulkan.device.cmd_push_constants(
                                 command_buffer,
@@ -264,8 +546,16 @@ impl Application {
                                 constants_slice,
                             );
 
-                            // Draw 3 vertices for the triangle
-                            self.vulkan.device.cmd_draw(command_buffer, 3, 1, 0, 0);
+                            let mesh = &self.meshes[render.mesh_index];
+                            self.vulkan.device.cmd_bind_vertex_buffers(
+                                command_buffer, 0, &[mesh.vertex_buffer.handle], &[0]
+                            );
+                            self.vulkan.device.cmd_bind_index_buffer(
+                                command_buffer, mesh.index_buffer.handle, 0, vk::IndexType::UINT32
+                            );
+                            
+                            // Draw indexed
+                            self.vulkan.device.cmd_draw_indexed(command_buffer, mesh.index_count, 1, 0, 0, 0);
                             _draw_count += 1;
                         }
                     }
