@@ -1,0 +1,20 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2021"
+description = "Custom game engine — Data-Oriented Design, custom allocators, ECS"
+
+[lib]
+name = "engine"
+path = "src/lib.rs"
+
+[[test]]
+name = "test_ecs"
+path = "tests/test_ecs.rs"
+
+[profile.dev]
+overflow-checks = true
+
+[profile.release]
+opt-level = 3
+lto = true
