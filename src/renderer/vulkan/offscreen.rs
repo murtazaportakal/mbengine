@@ -20,9 +20,9 @@ pub struct OffscreenTarget {
 }
 
 impl OffscreenTarget {
-    pub fn new(vulkan: &VulkanDevice, width: u32, height: u32) -> Option<Self> {
+    pub fn new(vulkan: &VulkanDevice, width: u32, height: u32, color_format: vk::Format) -> Option<Self> {
         let (color_image, color_memory, color_view) =
-            Self::create_color_resources(vulkan, width, height)?;
+            Self::create_color_resources(vulkan, width, height, color_format)?;
         let (depth_image, depth_memory, depth_view) =
             Self::create_depth_resources(vulkan, width, height)?;
 
@@ -59,8 +59,8 @@ impl OffscreenTarget {
         vulkan: &VulkanDevice,
         width: u32,
         height: u32,
+        format: vk::Format,
     ) -> Option<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
-        let format = vk::Format::R16G16B16A16_SFLOAT;
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D {

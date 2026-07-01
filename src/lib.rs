@@ -9,3 +9,4 @@ pub mod physics;
 pub mod platform;
 pub mod renderer;
 pub mod utils;
+pub mod vfs;

@@ -101,7 +101,7 @@ fn registry() -> &'static Mutex<ComponentTypeRegistry> {
     REGISTRY.get_or_init(|| {
         Mutex::new(ComponentTypeRegistry {
             map: HashMap::new(),
-            next_id: 0,
+            next_id: 8,
         })
     })
 }
@@ -112,6 +112,17 @@ fn registry() -> &'static Mutex<ComponentTypeRegistry> {
 /// # Panics
 /// Panics if more than `MAX_COMPONENT_TYPES` distinct types are registered.
 pub fn get_component_type_id<T: 'static>() -> ComponentTypeId {
+    let name = std::any::type_name::<T>();
+    if name.contains("TransformComponent") { return 0; }
+    if name.contains("RenderComponent") { return 1; }
+    if name.contains("CameraComponent") { return 2; }
+    if name.contains("LightComponent") && !name.contains("PointLightComponent") { return 3; }
+    if name.contains("PointLightComponent") { return 4; }
+    if name.contains("HierarchyComponent") { return 5; }
+    if name.contains("RigidBodyComponent") { return 6; }
+    if name.contains("ColliderComponent") { return 7; }
+    
+    // Fallback for any other types
     let type_id = TypeId::of::<T>();
     let mut reg = registry().lock().unwrap();
 
@@ -143,7 +154,7 @@ pub fn build_mask(type_ids: &[ComponentTypeId]) -> ComponentMask {
 pub fn reset_component_registry() {
     let mut reg = registry().lock().unwrap();
     reg.map.clear();
-    reg.next_id = 0;
+    reg.next_id = 8;
 }
 
 #[cfg(test)]

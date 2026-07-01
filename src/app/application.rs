@@ -1,6 +1,5 @@
 //! The core game loop and application state.
 
-use crate::ecs::system::System;
 use crate::ecs::World;
 use crate::ecs::{
     CameraComponent, HierarchyComponent, LightComponent, RenderComponent, TransformComponent,
@@ -25,6 +24,12 @@ pub struct Application {
     pub descriptor_pool: vk::DescriptorPool,
     pub descriptor_set: vk::DescriptorSet,
     pub offscreen_target: crate::renderer::vulkan::OffscreenTarget,
+    pub sdr_target: crate::renderer::vulkan::OffscreenTarget,
+    pub bloom_target: crate::renderer::vulkan::bloom::BloomTarget,
+    pub post_process: crate::renderer::vulkan::PostProcessPipeline,
+    pub post_process_descriptor_pool: vk::DescriptorPool,
+    pub tonemap_descriptor_set: vk::DescriptorSet,
+    pub bloom_descriptor_sets: Vec<vk::DescriptorSet>,
     pub offscreen_texture_id: egui::TextureId,
     pub swapchain: Swapchain,
     pub vulkan: VulkanDevice,
@@ -36,27 +41,20 @@ pub struct Application {
     pub egui_backend: crate::renderer::vulkan::EguiBackend,
     pub physics: crate::physics::PhysicsSystem,
     pub selected_entity: Option<crate::ecs::EntityId>,
-    pub shader_rx: std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
-    pub _shader_watcher: notify::RecommendedWatcher,
     pub current_frame: usize,
+    pub bloom_threshold: f32,
     pub resource_tracker: std::collections::HashMap<
         crate::renderer::vulkan::render_graph::ResourceHandle,
         crate::renderer::vulkan::render_graph::ResourceState,
     >,
+    pub editor: crate::app::editor::Editor,
+    pub hot_reloader: Option<crate::app::hot_reload::HotReloader>,
 }
 
 impl Application {
     /// Initialize the engine subsystems.
     pub fn new(title: &str, width: i32, height: i32) -> Option<Self> {
         crate::utils::shader_compiler::compile_all_shaders();
-
-        use notify::{RecursiveMode, Watcher};
-        let (tx, shader_rx) = std::sync::mpsc::channel();
-        let mut _shader_watcher = notify::recommended_watcher(tx).unwrap();
-        let _ = _shader_watcher.watch(
-            std::path::Path::new("src/shaders"),
-            RecursiveMode::Recursive,
-        );
 
         // 1. Initialize Memory
         let mut memory = MemorySubsystem::default();
@@ -77,7 +75,61 @@ impl Application {
         let target_height = swapchain.extent.height;
 
         let offscreen_target =
-            crate::renderer::vulkan::OffscreenTarget::new(&vulkan, target_width, target_height)?;
+            crate::renderer::vulkan::OffscreenTarget::new(&vulkan, target_width, target_height, vk::Format::R16G16B16A16_SFLOAT)?;
+        let sdr_target =
+            crate::renderer::vulkan::OffscreenTarget::new(&vulkan, target_width, target_height, vk::Format::B8G8R8A8_UNORM)?;
+        let mip_levels = 6;
+        let bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(&vulkan, target_width / 2, target_height / 2, mip_levels)?;
+        let post_process = crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::B8G8R8A8_UNORM)?;
+
+        let pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(20), // give plenty of space
+        ];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&pool_sizes)
+            .max_sets(20);
+        let post_process_descriptor_pool = unsafe { 
+            match vulkan.device.create_descriptor_pool(&pool_info, None) {
+                Ok(pool) => pool,
+                Err(e) => {
+                    eprintln!("Failed to create descriptor pool: {:?}", e);
+                    return None;
+                }
+            }
+        };
+
+        let tonemap_alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(post_process_descriptor_pool)
+            .set_layouts(std::slice::from_ref(&post_process.tonemap_descriptor_set_layout));
+        let tonemap_descriptor_set = unsafe { 
+            match vulkan.device.allocate_descriptor_sets(&tonemap_alloc_info) {
+                Ok(sets) => sets[0],
+                Err(e) => {
+                    eprintln!("Failed to allocate tonemap descriptor sets: {:?}", e);
+                    return None;
+                }
+            }
+        };
+
+        let mut bloom_layouts = Vec::new();
+        for _ in 0..=mip_levels {
+            bloom_layouts.push(post_process.bloom_descriptor_set_layout);
+        }
+        let bloom_alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(post_process_descriptor_pool)
+            .set_layouts(&bloom_layouts);
+        let bloom_descriptor_sets = unsafe { 
+            match vulkan.device.allocate_descriptor_sets(&bloom_alloc_info) {
+                Ok(sets) => sets,
+                Err(e) => {
+                    eprintln!("Failed to allocate bloom descriptor sets: {:?}", e);
+                    return None;
+                }
+            }
+        };
+
         let pipeline = Pipeline::new(&vulkan, vk::Format::R16G16B16A16_SFLOAT);
 
         let mut asset_manager = crate::asset_manager::AssetManager::new();
@@ -483,11 +535,11 @@ impl Application {
             crate::renderer::vulkan::EguiBackend::new(&vulkan, swapchain.format.format);
         let offscreen_texture_id = egui_backend.register_user_texture(
             &vulkan,
-            offscreen_target.color_view,
-            offscreen_target.sampler,
+            sdr_target.color_view,
+            sdr_target.sampler,
         );
 
-        Some(Self {
+        let app = Self {
             world,
             pipeline,
             asset_manager,
@@ -497,6 +549,12 @@ impl Application {
             descriptor_pool,
             descriptor_set,
             offscreen_target,
+            sdr_target,
+            bloom_target,
+            post_process,
+            post_process_descriptor_pool,
+            tonemap_descriptor_set,
+            bloom_descriptor_sets,
             offscreen_texture_id,
             swapchain,
             vulkan,
@@ -508,11 +566,61 @@ impl Application {
             egui_backend,
             physics,
             selected_entity: None,
-            shader_rx,
-            _shader_watcher,
             current_frame: 0,
+            bloom_threshold: 1.0,
             resource_tracker: std::collections::HashMap::new(),
-        })
+            editor: crate::app::editor::Editor::new(),
+            hot_reloader: crate::app::hot_reload::HotReloader::new("target/debug/game.dll"),
+        };
+        app.update_post_process_descriptors();
+        Some(app)
+    }
+
+    pub fn update_post_process_descriptors(&self) {
+        let mut writes = Vec::new();
+        
+        let tonemap_color_info = [vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(self.offscreen_target.color_view)
+            .sampler(self.offscreen_target.sampler)];
+        let tonemap_bloom_info = [vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(self.bloom_target.full_view)
+            .sampler(self.bloom_target.sampler)];
+            
+        writes.push(vk::WriteDescriptorSet::default()
+            .dst_set(self.tonemap_descriptor_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&tonemap_color_info));
+        writes.push(vk::WriteDescriptorSet::default()
+            .dst_set(self.tonemap_descriptor_set)
+            .dst_binding(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&tonemap_bloom_info));
+
+        let mut bloom_infos = Vec::new();
+        for i in 0..=self.bloom_target.mip_levels as usize {
+            let view = if i == 0 {
+                self.offscreen_target.color_view
+            } else {
+                self.bloom_target.mip_views[i - 1]
+            };
+            bloom_infos.push([vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(view)
+                .sampler(self.bloom_target.sampler)]);
+        }
+        
+        for (i, info) in bloom_infos.iter().enumerate() {
+            writes.push(vk::WriteDescriptorSet::default()
+                .dst_set(self.bloom_descriptor_sets[i])
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(info));
+        }
+
+        unsafe { self.vulkan.device.update_descriptor_sets(&writes, &[]); }
     }
 
     pub fn recreate_swapchain(&mut self) {
@@ -533,17 +641,41 @@ impl Application {
 
         let target_width = self.swapchain.extent.width;
         let target_height = self.swapchain.extent.height;
+        
         self.offscreen_target.shutdown(&self.vulkan);
         self.offscreen_target = crate::renderer::vulkan::OffscreenTarget::new(
             &self.vulkan,
             target_width,
             target_height,
+            vk::Format::R16G16B16A16_SFLOAT,
         )
         .unwrap();
-        self.offscreen_texture_id = self.egui_backend.register_user_texture(
+
+        self.sdr_target.shutdown(&self.vulkan);
+        self.sdr_target = crate::renderer::vulkan::OffscreenTarget::new(
             &self.vulkan,
-            self.offscreen_target.color_view,
-            self.offscreen_target.sampler,
+            target_width,
+            target_height,
+            vk::Format::B8G8R8A8_UNORM,
+        )
+        .unwrap();
+
+        self.bloom_target.shutdown(&self.vulkan);
+        self.bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(
+            &self.vulkan,
+            target_width / 2,
+            target_height / 2,
+            6,
+        )
+        .unwrap();
+
+        self.update_post_process_descriptors();
+
+        self.egui_backend.update_user_texture(
+            &self.vulkan,
+            self.offscreen_texture_id,
+            self.sdr_target.color_view,
+            self.sdr_target.sampler,
         );
     }
 
@@ -557,155 +689,49 @@ impl Application {
         while self.window.poll_events(&mut self.input) {
             let dt = self.timer.tick();
 
+            // Auto-scale the UI based on window height (assume 720p is baseline 1.0)
+            let ppp = (self.window.height as f32 / 720.0).max(0.5);
+            self.input.ui_scale = ppp;
+            
             self.input.egui_input.screen_rect = Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::Vec2::new(
-                    self.window.width as f32 / 2.0,
-                    self.window.height as f32 / 2.0,
+                    self.window.width as f32 / ppp,
+                    self.window.height as f32 / ppp,
                 ),
             ));
 
             let raw_input = self.input.egui_input.take();
             self.egui_ctx.begin_frame(raw_input);
-            self.egui_ctx.set_zoom_factor(1.5);
+            self.egui_ctx.set_zoom_factor(ppp);
+
+            if let Some(reloader) = &mut self.hot_reloader {
+                reloader.update();
+                reloader.call_game_update(&mut self.world, &mut self.physics, dt as f32);
+            }
 
             let mut new_viewport_size = None;
             let mut raycast_request = None;
+            let mut viewport_hovered = false;
 
-            egui::SidePanel::left("hierarchy_panel")
+            self.editor.draw(&self.egui_ctx, &mut self.world, &mut self.physics, &mut self.selected_entity, &mut self.bloom_threshold, 1.0 / dt as f32);
+
+            egui::CentralPanel::default().show(&self.egui_ctx, |_ui| {});
+
+            egui::Window::new("Viewport")
                 .resizable(true)
-                .min_width(200.0)
+                .default_size(egui::vec2(800.0, 600.0))
                 .show(&self.egui_ctx, |ui| {
-                    ui.heading("Hierarchy");
-                    ui.label(format!("FPS: {:.1}", 1.0 / dt));
-                    ui.separator();
-                    if ui.button("Add Entity").clicked() {
-                        let new_entity = self.world.create_entity();
-                        let x = 0.0;
-                        let y = 0.0;
-                        let z = 0.0;
-                        unsafe {
-                            self.world.add_component(new_entity, TransformComponent {
-                                position: crate::math::vec::Vec3::new(x, y, z),
-                                rotation: crate::math::vec::Vec3::new(0.0, 0.0, 0.0),
-                                scale: crate::math::vec::Vec3::new(1.0, 1.0, 1.0),
-                                matrix: crate::math::mat4::Mat4::identity(),
-                            });
-                            self.world.add_component(new_entity, RenderComponent {
-                                mesh_index: 0,
-                                visible: true,
-                                metallic: 0.1,
-                                roughness: 0.8,
-                            });
-                        }
-                    }
-                    ui.separator();
-                    
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let entities = self.world.get_component_array::<TransformComponent>().dense_entities_slice();
-                        for entity in entities {
-                            let label = format!("Entity {}", entity);
-                            let is_selected = self.selected_entity == Some(*entity);
-                            if ui.selectable_label(is_selected, label).clicked() {
-                                self.selected_entity = Some(*entity);
-                            }
-                        }
-                    });
-                });
-
-            egui::SidePanel::right("inspector_panel")
-                .resizable(true)
-                .min_width(250.0)
-                .show(&self.egui_ctx, |ui| {
-                    ui.heading("Inspector");
-                    ui.separator();
-                    if let Some(entity_id) = self.selected_entity {
-                        ui.label(format!("Entity ID: {}", entity_id));
-                        ui.separator();
-
-                        let mut transform_changed = false;
-                        let mut new_position = crate::math::vec::Vec3::new(0.0, 0.0, 0.0);
-                        let mut new_rotation = crate::math::vec::Vec3::new(0.0, 0.0, 0.0);
-
-                        let transforms = self.world.get_component_array_mut::<TransformComponent>();
-                        if transforms.has(entity_id) {
-                            let transform = unsafe { transforms.get_mut(entity_id) };
-
-                            ui.collapsing("Transform", |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Pos X");
-                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.position.x).speed(0.1)).changed();
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Pos Y");
-                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.position.y).speed(0.1)).changed();
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Pos Z");
-                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.position.z).speed(0.1)).changed();
-                                });
-
-                                ui.horizontal(|ui| {
-                                    ui.label("Rot X");
-                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.rotation.x).speed(0.05)).changed();
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Rot Y");
-                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.rotation.y).speed(0.05)).changed();
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Rot Z");
-                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.rotation.z).speed(0.05)).changed();
-                                });
-
-                                ui.horizontal(|ui| {
-                                    ui.label("Scale  ");
-                                    ui.add(egui::DragValue::new(&mut transform.scale.x).speed(0.1));
-                                    ui.add(egui::DragValue::new(&mut transform.scale.y).speed(0.1));
-                                    ui.add(egui::DragValue::new(&mut transform.scale.z).speed(0.1));
-                                });
-                            });
-
-                            new_position = transform.position;
-                            new_rotation = transform.rotation;
-                        }
-
-                        if transform_changed {
-                            let rb_components = self.world.get_component_array::<crate::ecs::components::RigidBodyComponent>();
-                            if rb_components.has(entity_id) {
-                                let rb_comp = unsafe { rb_components.get(entity_id) };
-                                if let Some(rb) = self.physics.rigid_body_set.get_mut(rb_comp.handle) {
-                                    rb.set_translation(rapier3d::math::Vector::new(new_position.x, new_position.y, new_position.z), true);
-                                    let quat = rapier3d::math::Rotation::from_euler_angles(new_rotation.x, new_rotation.y, new_rotation.z);
-                                    rb.set_rotation(quat, true);
-                                }
-                            }
-                        }
-
-                        let renders = self.world.get_component_array_mut::<RenderComponent>();
-                        if renders.has(entity_id) {
-                            let render = unsafe { renders.get_mut(entity_id) };
-                            ui.collapsing("Render", |ui| {
-                                ui.checkbox(&mut render.visible, "Visible");
-                                ui.add(egui::Slider::new(&mut render.metallic, 0.0..=1.0).text("Metallic"));
-                                ui.add(egui::Slider::new(&mut render.roughness, 0.0..=1.0).text("Roughness"));
-                            });
-                        }
-                    } else {
-                        ui.label("No Entity Selected.");
-                    }
-                });
-
-            egui::CentralPanel::default().show(&self.egui_ctx, |ui| {
                 let size = ui.available_size();
                 new_viewport_size = Some((size.x.max(1.0) as u32, size.y.max(1.0) as u32));
                 let image = egui::Image::new(egui::load::SizedTexture::new(
                     self.offscreen_texture_id,
                     size,
                 ))
-                .sense(egui::Sense::click());
+                .sense(egui::Sense::click() | egui::Sense::drag());
                 
                 let response = ui.add(image);
+                viewport_hovered = response.hovered() || response.dragged();
                 
                 if response.clicked() {
                     self.selected_entity = None;
@@ -719,25 +745,19 @@ impl Application {
                 }
             });
 
+            let asset_events = self.asset_manager.poll_changes(&self.vulkan);
             let mut shader_changed = false;
-            while let Ok(event_res) = self.shader_rx.try_recv() {
-                if let Ok(event) = event_res {
-                    if let notify::EventKind::Modify(_) = event.kind {
-                        for path in event.paths {
-                            if let Some(ext) = path.extension() {
-                                if ext == "vert" || ext == "frag" {
-                                    if crate::utils::shader_compiler::compile_shader(&path).is_ok()
-                                    {
-                                        shader_changed = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
+            let mut texture_changed = false;
+
+            for event in asset_events {
+                match event {
+                    crate::asset_manager::AssetEvent::ShaderChanged => shader_changed = true,
+                    crate::asset_manager::AssetEvent::TextureChanged(_) => texture_changed = true,
+                    crate::asset_manager::AssetEvent::ModelChanged(_) => {}
                 }
             }
 
-            if shader_changed {
+            if shader_changed || texture_changed {
                 unsafe {
                     self.vulkan.device.device_wait_idle().unwrap();
                 }
@@ -825,13 +845,21 @@ impl Application {
                     self.offscreen_target.shutdown(&self.vulkan);
                     let _ = std::mem::replace(
                         &mut self.offscreen_target,
-                        crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h).unwrap(),
+                        crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h, vk::Format::R16G16B16A16_SFLOAT).unwrap(),
                     );
+                    self.sdr_target.shutdown(&self.vulkan);
+                    self.sdr_target = crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h, vk::Format::B8G8R8A8_UNORM).unwrap();
+                    
+                    self.bloom_target.shutdown(&self.vulkan);
+                    self.bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(&self.vulkan, w / 2, h / 2, 6).unwrap();
+
+                    self.update_post_process_descriptors();
+
                     self.egui_backend.update_user_texture(
                         &self.vulkan,
                         self.offscreen_texture_id,
-                        self.offscreen_target.color_view,
-                        self.offscreen_target.sampler,
+                        self.sdr_target.color_view,
+                        self.sdr_target.sampler,
                     );
                 }
             }
@@ -920,7 +948,40 @@ impl Application {
                                     }
                                 }
                             } else {
-                                self.selected_entity = None;
+                                // Fallback raycast for non-physics visual entities
+                                let mut best_dist = std::f32::MAX;
+                                let mut best_entity = None;
+
+                                let renders = self.world.get_component_array::<RenderComponent>();
+                                for entity in renders.dense_entities_slice().iter().copied() {
+                                    if let Some(matrix) = self.world_matrices.get(&entity) {
+                                        let center = crate::math::vec::Vec3::new(matrix.cols[3].x, matrix.cols[3].y, matrix.cols[3].z);
+                                        
+                                        let scale_x = crate::math::vec::Vec3::new(matrix.cols[0].x, matrix.cols[0].y, matrix.cols[0].z).length();
+                                        let scale_y = crate::math::vec::Vec3::new(matrix.cols[1].x, matrix.cols[1].y, matrix.cols[1].z).length();
+                                        let scale_z = crate::math::vec::Vec3::new(matrix.cols[2].x, matrix.cols[2].y, matrix.cols[2].z).length();
+                                        
+                                        // Assume base mesh fits roughly inside a unit sphere
+                                        let radius = scale_x.max(scale_y).max(scale_z) * 1.5; 
+                                        
+                                        let l = center - transform.position;
+                                        let tca = l.dot(world_dir);
+                                        
+                                        if tca >= 0.0 {
+                                            let d2 = l.length_sq() - tca * tca;
+                                            let r2 = radius * radius;
+                                            if d2 <= r2 {
+                                                let thc = (r2 - d2).sqrt();
+                                                let t = tca - thc;
+                                                if t >= 0.0 && t < best_dist {
+                                                    best_dist = t;
+                                                    best_entity = Some(entity);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                self.selected_entity = best_entity;
                             }
                         }
                     }
@@ -942,9 +1003,8 @@ impl Application {
                 crate::ecs::serialization::load_scene(&mut self.world, "scene.json");
             }
 
-            // 1. Update Game State (ECS & Physics)
+            // 1. Update Game State (ECS)
             self.world.update_systems(dt as f32);
-            self.physics.update(dt as f32, &mut self.world);
 
             // Camera Interactive Update
             {
@@ -959,7 +1019,7 @@ impl Application {
                         let transform = unsafe { transforms.get_mut(cam_entity) };
 
                         // Update pitch and yaw from mouse input
-                        if self.input.is_key_down(win32::VK_RBUTTON) {
+                        if viewport_hovered && self.input.is_key_down(win32::VK_RBUTTON) {
                             let sensitivity = 0.001;
                             transform.rotation.y += self.input.mouse_dx as f32 * sensitivity;
                             transform.rotation.x -= self.input.mouse_dy as f32 * sensitivity;
@@ -989,23 +1049,25 @@ impl Application {
 
                         let speed = 2.0 * dt as f32;
 
-                        if self.input.is_key_down(win32::VK_W) {
-                            transform.position = transform.position + forward * speed;
-                        }
-                        if self.input.is_key_down(win32::VK_S) {
-                            transform.position = transform.position - forward * speed;
-                        }
-                        if self.input.is_key_down(win32::VK_A) {
-                            transform.position = transform.position - right * speed;
-                        }
-                        if self.input.is_key_down(win32::VK_D) {
-                            transform.position = transform.position + right * speed;
-                        }
-                        if self.input.is_key_down(win32::VK_TAB) {
-                            transform.position.y += speed;
-                        }
-                        if self.input.is_key_down(win32::VK_SHIFT) {
-                            transform.position.y -= speed;
+                        if viewport_hovered {
+                            if self.input.is_key_down(win32::VK_W) {
+                                transform.position = transform.position + forward * speed;
+                            }
+                            if self.input.is_key_down(win32::VK_S) {
+                                transform.position = transform.position - forward * speed;
+                            }
+                            if self.input.is_key_down(win32::VK_A) {
+                                transform.position = transform.position - right * speed;
+                            }
+                            if self.input.is_key_down(win32::VK_D) {
+                                transform.position = transform.position + right * speed;
+                            }
+                            if self.input.is_key_down(win32::VK_TAB) {
+                                transform.position.y += speed;
+                            }
+                            if self.input.is_key_down(win32::VK_SHIFT) {
+                                transform.position.y -= speed;
+                            }
                         }
                     }
                 }
@@ -1014,32 +1076,11 @@ impl Application {
             // Compute World Matrices
             let mut world_matrices = std::collections::HashMap::new();
 
-            // Collect entity metadata before mutably borrowing transforms
-            let render_entities: std::collections::HashSet<u32> = {
-                let renders = self.world.get_component_array::<RenderComponent>();
-                renders.dense_entities_slice().iter().copied().collect()
-            };
-            let hierarchy_roots: std::collections::HashSet<u32> = {
-                let hier = self.world.get_component_array::<HierarchyComponent>();
-                hier.dense_entities_slice().iter().copied().collect()
-            };
-
             let transforms = self.world.get_component_array_mut::<TransformComponent>();
             let entities = transforms.dense_entities_slice().to_vec();
 
             for (i, transform) in transforms.as_mut_slice().iter_mut().enumerate() {
                 let entity = entities[i];
-
-                // Spin renderable entities (not camera/light)
-                if render_entities.contains(&entity) {
-                    if !hierarchy_roots.contains(&entity) {
-                        // Root entity (planet): slow spin
-                        transform.rotation.y += 1.0 * dt as f32;
-                    } else {
-                        // Child entities: spin faster
-                        transform.rotation.y += 2.5 * dt as f32;
-                    }
-                }
 
                 // Build local matrix: Translation * RotationY * Scale
                 let mut rot_y = crate::math::mat4::Mat4::identity();
@@ -1100,21 +1141,9 @@ impl Application {
 
         self.vulkan.wait_idle();
 
-        self.asset_manager.shutdown(&self.vulkan);
-        if self.descriptor_pool != vk::DescriptorPool::null() {
-            unsafe {
-                self.vulkan
-                    .device
-                    .destroy_descriptor_pool(self.descriptor_pool, None)
-            };
-        }
-        if let Some(mut p) = self.pipeline.take() {
-            p.shutdown(&self.vulkan);
-        }
-        self.egui_backend.shutdown(&self.vulkan);
-        self.offscreen_target.shutdown(&self.vulkan);
-        self.swapchain.shutdown(&self.vulkan);
-        self.vulkan.shutdown();
+        self.vulkan.wait_idle();
+        // All cleanup is now strictly handled by `impl Drop for Application`
+        // to prevent double-free crashes during application exit.
     }
 
     fn render_frame(
@@ -1273,22 +1302,23 @@ impl Application {
         }
 
         // Acquire next image
-        let result = unsafe {
-            self.swapchain.swapchain_loader.acquire_next_image(
+        let (image_index, _is_suboptimal) = unsafe {
+            match self.swapchain.swapchain_loader.acquire_next_image(
                 self.swapchain.swapchain,
                 u64::MAX,
                 self.vulkan.image_available_semaphores[self.current_frame],
                 vk::Fence::null(),
-            )
-        };
-
-        let image_index = match result {
-            Ok((idx, _suboptimal)) => idx,
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.recreate_swapchain();
-                return;
+            ) {
+                Ok(result) => result,
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    self.recreate_swapchain();
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("Failed to acquire next image: {:?}", e);
+                    return;
+                }
             }
-            Err(e) => panic!("Failed to acquire image: {:?}", e),
         };
 
         unsafe {
@@ -1517,14 +1547,25 @@ impl Application {
             },
         );
 
-        // 2. UI Render Pass
+        self.post_process.add_passes(
+            &mut render_graph,
+            &self.vulkan,
+            &self.offscreen_target,
+            &self.sdr_target,
+            &self.bloom_target,
+            self.tonemap_descriptor_set,
+            &self.bloom_descriptor_sets,
+            self.bloom_threshold,
+        );
+
+        // 3. UI Render Pass
         let swapchain_image = self.swapchain.images[image_index as usize];
         render_graph.add_pass(
             "UI",
             vec![
                 crate::renderer::vulkan::render_graph::PassResource {
                     handle: crate::renderer::vulkan::render_graph::ResourceHandle(
-                        self.offscreen_target.color_image,
+                        self.sdr_target.color_image,
                     ),
                     state: crate::renderer::vulkan::render_graph::ResourceState {
                         layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -1575,8 +1616,8 @@ impl Application {
                         clipped_primitives,
                         pixels_per_point,
                         [
-                            self.swapchain.extent.width as f32,
-                            self.swapchain.extent.height as f32,
+                            self.swapchain.extent.width as f32 / pixels_per_point,
+                            self.swapchain.extent.height as f32 / pixels_per_point,
                         ],
                     );
 
@@ -1644,14 +1685,14 @@ impl Application {
             .signal_semaphores(&signal_semaphores);
 
         unsafe {
-            self.vulkan
-                .device
-                .queue_submit(
-                    self.vulkan.graphics_queue,
-                    std::slice::from_ref(&submit_info),
-                    self.vulkan.in_flight_fences[self.current_frame],
-                )
-                .unwrap();
+            if let Err(e) = self.vulkan.device.queue_submit(
+                self.vulkan.graphics_queue,
+                std::slice::from_ref(&submit_info),
+                self.vulkan.in_flight_fences[self.current_frame],
+            ) {
+                eprintln!("QUEUE SUBMIT FAILED: {:?}", e);
+                return;
+            }
         }
 
         // Present
@@ -1697,6 +1738,48 @@ impl Application {
             self.vulkan
                 .device
                 .free_command_buffers(self.vulkan.command_pool, &command_buffers);
+        }
+    }
+}
+
+impl Drop for Application {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.vulkan.device.device_wait_idle();
+            
+            // 1. Game Resources
+            self.asset_manager.shutdown(&self.vulkan);
+            
+            // 2. Render Targets
+            self.sdr_target.shutdown(&self.vulkan);
+            self.bloom_target.shutdown(&self.vulkan);
+            self.offscreen_target.shutdown(&self.vulkan);
+            
+            // 3. Pipelines & UI
+            self.post_process.destroy(&self.vulkan);
+            if let Some(mut p) = self.pipeline.take() {
+                p.shutdown(&self.vulkan);
+            }
+            self.egui_backend.shutdown(&self.vulkan);
+            
+            // 4. Descriptor Pools & Buffers
+            if self.post_process_descriptor_pool != vk::DescriptorPool::null() {
+                self.vulkan.device.destroy_descriptor_pool(self.post_process_descriptor_pool, None);
+            }
+            if self.descriptor_pool != vk::DescriptorPool::null() {
+                self.vulkan.device.destroy_descriptor_pool(self.descriptor_pool, None);
+            }
+            if self.ubo_buffer != vk::Buffer::null() {
+                self.vulkan.device.destroy_buffer(self.ubo_buffer, None);
+            }
+            if self.ubo_memory != vk::DeviceMemory::null() {
+                self.vulkan.device.free_memory(self.ubo_memory, None);
+            }
+
+            // 5. Core Infrastructure
+            self.swapchain.shutdown(&self.vulkan);
+            self.window.shutdown();
+            self.vulkan.shutdown();
         }
     }
 }

@@ -170,6 +170,16 @@ impl Window {
             false
         }
     }
+
+    /// Explicitly destroy the window handle.
+    pub fn shutdown(&mut self) {
+        if !self.hwnd.is_null() {
+            unsafe {
+                win32::DestroyWindow(self.hwnd);
+            }
+            self.hwnd = std::ptr::null_mut();
+        }
+    }
 }
 
 /// Global Win32 message callback.

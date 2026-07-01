@@ -9,6 +9,7 @@ pub mod render_graph;
 pub mod shadow_pipeline;
 pub mod swapchain;
 pub mod texture;
+pub mod bloom;
 
 pub use buffer::Buffer;
 pub use device::VulkanDevice;
@@ -20,3 +21,4 @@ pub use post_process_pipeline::PostProcessPipeline;
 pub use shadow_pipeline::ShadowPipeline;
 pub use swapchain::Swapchain;
 pub use texture::Texture;
+pub use bloom::BloomTarget;

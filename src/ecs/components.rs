@@ -1,6 +1,7 @@
 use crate::math::mat4::Mat4;
 use crate::math::vec::Vec3;
 use serde::{Deserialize, Serialize};
+use crate::ecs::reflection::ReflectComponent;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct TransformComponent {
@@ -41,6 +42,47 @@ impl TransformComponent {
     }
 }
 
+impl ReflectComponent for TransformComponent {
+    fn name() -> &'static str { "Transform" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Pos X");
+            changed |= ui.add(egui::DragValue::new(&mut self.position.x).speed(0.1)).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("Pos Y");
+            changed |= ui.add(egui::DragValue::new(&mut self.position.y).speed(0.1)).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("Pos Z");
+            changed |= ui.add(egui::DragValue::new(&mut self.position.z).speed(0.1)).changed();
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Rot X");
+            changed |= ui.add(egui::DragValue::new(&mut self.rotation.x).speed(0.05)).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("Rot Y");
+            changed |= ui.add(egui::DragValue::new(&mut self.rotation.y).speed(0.05)).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("Rot Z");
+            changed |= ui.add(egui::DragValue::new(&mut self.rotation.z).speed(0.05)).changed();
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Scale  ");
+            changed |= ui.add(egui::DragValue::new(&mut self.scale.x).speed(0.1)).changed();
+            changed |= ui.add(egui::DragValue::new(&mut self.scale.y).speed(0.1)).changed();
+            changed |= ui.add(egui::DragValue::new(&mut self.scale.z).speed(0.1)).changed();
+        });
+        
+        changed
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RenderComponent {
     // In the future this will hold mesh_id and material_id.
@@ -59,6 +101,17 @@ impl Default for RenderComponent {
             metallic: 0.0,
             roughness: 0.5,
         }
+    }
+}
+
+impl ReflectComponent for RenderComponent {
+    fn name() -> &'static str { "Render" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        changed |= ui.checkbox(&mut self.visible, "Visible").changed();
+        changed |= ui.add(egui::Slider::new(&mut self.metallic, 0.0..=1.0).text("Metallic")).changed();
+        changed |= ui.add(egui::Slider::new(&mut self.roughness, 0.0..=1.0).text("Roughness")).changed();
+        changed
     }
 }
 
@@ -104,6 +157,28 @@ impl Default for PointLightComponent {
             color: Vec3::new(1.0, 1.0, 1.0),
             intensity: 1.0,
         }
+    }
+}
+
+impl ReflectComponent for PointLightComponent {
+    fn name() -> &'static str { "Point Light" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        changed |= ui.add(egui::Slider::new(&mut self.intensity, 0.0..=100.0).text("Intensity")).changed();
+        
+        // Color picker
+        let mut rgb = [self.color.x, self.color.y, self.color.z];
+        ui.horizontal(|ui| {
+            ui.label("Color");
+            if ui.color_edit_button_rgb(&mut rgb).changed() {
+                self.color.x = rgb[0];
+                self.color.y = rgb[1];
+                self.color.z = rgb[2];
+                changed = true;
+            }
+        });
+        
+        changed
     }
 }
 

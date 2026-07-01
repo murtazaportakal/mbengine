@@ -158,6 +158,8 @@ extern "system" {
 
     pub fn DefWindowProcA(hWnd: HWND, Msg: UINT, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
 
+    pub fn DestroyWindow(hWnd: HWND) -> BOOL;
+    
     pub fn PostQuitMessage(nExitCode: i32);
 
     pub fn PeekMessageA(
