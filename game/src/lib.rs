@@ -4,7 +4,6 @@ use std::collections::HashSet;
 
 #[no_mangle]
 pub extern "C" fn game_update(world: &mut World, physics: &mut PhysicsSystem, dt: f32) {
-    println!("game_update called, dt: {}", dt);
     // 1. Step the Physics Simulation
     physics.update(dt, world);
 
@@ -28,7 +27,6 @@ pub extern "C" fn game_update(world: &mut World, physics: &mut PhysicsSystem, dt
             if !hierarchy_roots.contains(&entity) {
                 // Root entity (planet): slow spin
                 transform.rotation.y += 1.0 * dt;
-                println!("Planet {} rotation: {}, dt: {}", entity, transform.rotation.y, dt);
             } else {
                 // Child entities: spin faster
                 transform.rotation.y += 2.5 * dt;
