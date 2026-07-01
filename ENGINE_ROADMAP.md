@@ -292,7 +292,6 @@ All assertions passing. **20 unit tests + 1 integration test = 21 total.**
 
 ---
 
-*Start the next session with: "Continue from ENGINE_ROADMAP.md — build Phase 17: Asset Management & Real Image Loading"*
 
 ---
 
