@@ -259,10 +259,16 @@ impl EguiBackend {
 
             match id {
                 egui::TextureId::Managed(0) => {
+                    if let Some(mut old_tex) = self.font_texture.take() {
+                        old_tex.shutdown(vulkan);
+                    }
                     self.font_texture = Some(texture);
                     self.font_descriptor_set = descriptor_set;
                 }
-                _ => {}
+                _ => {
+                    // Warning: Other managed textures are currently not tracked and will leak!
+                    crate::log_info!("Warning: Untracked egui texture updated: {:?}", id);
+                }
             }
             self.user_textures.insert(id, descriptor_set);
         }

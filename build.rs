@@ -8,6 +8,8 @@ fn main() {
     println!("cargo:rerun-if-changed=shaders/shadow.vert");
     println!("cargo:rerun-if-changed=shaders/post_process.vert");
     println!("cargo:rerun-if-changed=shaders/post_process.frag");
+    println!("cargo:rerun-if-changed=shaders/bloom_downsample.frag");
+    println!("cargo:rerun-if-changed=shaders/bloom_upsample.frag");
 
     // First try local glslangValidator
     let local_compiler = PathBuf::from("glslang")
@@ -101,5 +103,37 @@ fn main() {
 
     if !pp_frag_status.success() {
         panic!("Failed to compile post_process.frag");
+    }
+
+    // Compile Bloom Downsample Shader
+    let mut bloom_down_args = args.clone();
+    bloom_down_args.extend(vec![
+        "shaders/bloom_downsample.frag",
+        "-o",
+        "shaders/bloom_downsample_frag.spv",
+    ]);
+    let bloom_down_status = Command::new(&compiler)
+        .args(&bloom_down_args)
+        .status()
+        .expect("Failed to execute shader compiler for bloom_downsample.frag");
+
+    if !bloom_down_status.success() {
+        panic!("Failed to compile bloom_downsample.frag");
+    }
+
+    // Compile Bloom Upsample Shader
+    let mut bloom_up_args = args.clone();
+    bloom_up_args.extend(vec![
+        "shaders/bloom_upsample.frag",
+        "-o",
+        "shaders/bloom_upsample_frag.spv",
+    ]);
+    let bloom_up_status = Command::new(&compiler)
+        .args(&bloom_up_args)
+        .status()
+        .expect("Failed to execute shader compiler for bloom_upsample.frag");
+
+    if !bloom_up_status.success() {
+        panic!("Failed to compile bloom_upsample.frag");
     }
 }

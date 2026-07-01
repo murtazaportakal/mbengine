@@ -17,6 +17,10 @@ pub struct VulkanDevice {
     pub image_available_semaphores: [vk::Semaphore; 2],
     pub render_finished_semaphores: [vk::Semaphore; 8],
     pub in_flight_fences: [vk::Fence; 2],
+
+    // Debugging
+    pub debug_utils_loader: Option<ash::ext::debug_utils::Instance>,
+    pub debug_messenger: vk::DebugUtilsMessengerEXT,
 }
 
 impl VulkanDevice {
@@ -97,10 +101,10 @@ impl VulkanDevice {
             .pfn_user_callback(Some(vulkan_debug_callback));
 
         let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
-        let _debug_messenger = unsafe {
+        let debug_messenger = unsafe {
             debug_utils_loader
                 .create_debug_utils_messenger(&debug_info, None)
-                .ok()
+                .unwrap_or_else(|_| vk::DebugUtilsMessengerEXT::null())
         };
 
         let pdevices = unsafe { instance.enumerate_physical_devices().unwrap_or_default() };
@@ -187,6 +191,8 @@ impl VulkanDevice {
             image_available_semaphores,
             render_finished_semaphores,
             in_flight_fences,
+            debug_utils_loader: Some(debug_utils_loader),
+            debug_messenger,
         })
     }
 
@@ -259,15 +265,24 @@ impl RenderDevice for VulkanDevice {
 
     fn shutdown(&mut self) {
         unsafe {
-            for i in 0..2 {
+            for i in 0..8 {
                 self.device
                     .destroy_semaphore(self.render_finished_semaphores[i], None);
+            }
+            for i in 0..2 {
                 self.device
                     .destroy_semaphore(self.image_available_semaphores[i], None);
                 self.device.destroy_fence(self.in_flight_fences[i], None);
             }
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
+
+            if let Some(loader) = &self.debug_utils_loader {
+                if self.debug_messenger != vk::DebugUtilsMessengerEXT::null() {
+                    loader.destroy_debug_utils_messenger(self.debug_messenger, None);
+                }
+            }
+
             self.instance.destroy_instance(None);
         }
     }
