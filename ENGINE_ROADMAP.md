@@ -348,4 +348,9 @@ Having completed the foundational architecture (Phases 1-21), this section outli
 
 ---
 
-*Start the next session with: "Continue from ENGINE_ROADMAP.md — proceed with Epic 1 Phase D (Advanced Post-Processing)."*
+## Session Handoff Notes (July 1st, 2026)
+- **CRITICAL**: The previous session attempted to add Bloom and Tonemapping, but caused severe `ERROR_DEVICE_LOST` Vulkan crashes due to dropped temporary references in descriptor updates. The changes were NOT committed.
+- **Rollback & Stabilization**: The engine was rolled back to commit `712d7ef` to strip out the crashing post-process logic. The engine currently runs flawlessly without validation errors.
+- **UI Overhaul Completed**: Removed the buggy Kanban code entirely. Replaced it with fixed `egui::SidePanel`s for the Hierarchy and Inspector, and a `CentralPanel` for the Viewport. Raycast entity selection and deselection (clicking empty space) now works perfectly.
+
+*Start the next session with: "Continue from ENGINE_ROADMAP.md ?" proceed with re-implementing Epic 1 Phase D (Advanced Post-Processing), ensuring Vulkan descriptor lifetime safety."*

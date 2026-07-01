@@ -567,121 +567,153 @@ impl Application {
 
             let raw_input = self.input.egui_input.take();
             self.egui_ctx.begin_frame(raw_input);
-            self.egui_ctx.set_zoom_factor(2.0);
-
-            egui::Window::new("Engine Inspector").show(&self.egui_ctx, |ui| {
-                ui.label(format!("FPS: {:.1}", 1.0 / dt));
-                ui.label(format!(
-                    "Entities: {}",
-                    self.world
-                        .get_component_array::<TransformComponent>()
-                        .as_slice()
-                        .len()
-                ));
-
-                ui.separator();
-                if let Some(entity_id) = self.selected_entity {
-                    ui.label(format!("Selected Entity: {}", entity_id));
-
-                    let mut transform_changed = false;
-                    let mut new_position = crate::math::vec::Vec3::new(0.0, 0.0, 0.0);
-                    let mut new_rotation = crate::math::vec::Vec3::new(0.0, 0.0, 0.0);
-
-                    let transforms = self.world.get_component_array_mut::<TransformComponent>();
-                    if transforms.has(entity_id) {
-                        let transform = unsafe { transforms.get_mut(entity_id) };
-
-                        ui.horizontal(|ui| {
-                            ui.label("Position:");
-                            transform_changed |= ui
-                                .add(egui::DragValue::new(&mut transform.position.x).speed(0.1))
-                                .changed();
-                            transform_changed |= ui
-                                .add(egui::DragValue::new(&mut transform.position.y).speed(0.1))
-                                .changed();
-                            transform_changed |= ui
-                                .add(egui::DragValue::new(&mut transform.position.z).speed(0.1))
-                                .changed();
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Rotation:");
-                            transform_changed |= ui
-                                .add(egui::DragValue::new(&mut transform.rotation.x).speed(0.05))
-                                .changed();
-                            transform_changed |= ui
-                                .add(egui::DragValue::new(&mut transform.rotation.y).speed(0.05))
-                                .changed();
-                            transform_changed |= ui
-                                .add(egui::DragValue::new(&mut transform.rotation.z).speed(0.05))
-                                .changed();
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Scale:");
-                            ui.add(egui::DragValue::new(&mut transform.scale.x).speed(0.1));
-                            ui.add(egui::DragValue::new(&mut transform.scale.y).speed(0.1));
-                            ui.add(egui::DragValue::new(&mut transform.scale.z).speed(0.1));
-                        });
-
-                        new_position = transform.position;
-                        new_rotation = transform.rotation;
-                    }
-
-                    if transform_changed {
-                        let rb_components = self
-                            .world
-                            .get_component_array::<crate::ecs::components::RigidBodyComponent>();
-                        if rb_components.has(entity_id) {
-                            let rb_comp = unsafe { rb_components.get(entity_id) };
-                            if let Some(rb) = self.physics.rigid_body_set.get_mut(rb_comp.handle) {
-                                rb.set_translation(
-                                    rapier3d::math::Vector::new(
-                                        new_position.x,
-                                        new_position.y,
-                                        new_position.z,
-                                    ),
-                                    true,
-                                );
-                                // For rotation, Rapier expects a UnitQuaternion. We'll construct it from Euler angles.
-                                let quat = rapier3d::math::Rotation::from_euler_angles(
-                                    new_rotation.x,
-                                    new_rotation.y,
-                                    new_rotation.z,
-                                );
-                                rb.set_rotation(quat, true);
-                            }
-                        }
-                    }
-
-                    ui.separator();
-                    if ui.button("Deselect").clicked() {
-                        self.selected_entity = None;
-                    }
-                } else {
-                    ui.label("No Entity Selected.");
-                }
-            });
+            self.egui_ctx.set_zoom_factor(1.5);
 
             let mut new_viewport_size = None;
             let mut raycast_request = None;
 
-            egui::Window::new("Viewport").show(&self.egui_ctx, |ui| {
+            egui::SidePanel::left("hierarchy_panel")
+                .resizable(true)
+                .min_width(200.0)
+                .show(&self.egui_ctx, |ui| {
+                    ui.heading("Hierarchy");
+                    ui.label(format!("FPS: {:.1}", 1.0 / dt));
+                    ui.separator();
+                    if ui.button("Add Entity").clicked() {
+                        let new_entity = self.world.create_entity();
+                        let x = 0.0;
+                        let y = 0.0;
+                        let z = 0.0;
+                        unsafe {
+                            self.world.add_component(new_entity, TransformComponent {
+                                position: crate::math::vec::Vec3::new(x, y, z),
+                                rotation: crate::math::vec::Vec3::new(0.0, 0.0, 0.0),
+                                scale: crate::math::vec::Vec3::new(1.0, 1.0, 1.0),
+                                matrix: crate::math::mat4::Mat4::identity(),
+                            });
+                            self.world.add_component(new_entity, RenderComponent {
+                                mesh_index: 0,
+                                visible: true,
+                                metallic: 0.1,
+                                roughness: 0.8,
+                            });
+                        }
+                    }
+                    ui.separator();
+                    
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let entities = self.world.get_component_array::<TransformComponent>().dense_entities_slice();
+                        for entity in entities {
+                            let label = format!("Entity {}", entity);
+                            let is_selected = self.selected_entity == Some(*entity);
+                            if ui.selectable_label(is_selected, label).clicked() {
+                                self.selected_entity = Some(*entity);
+                            }
+                        }
+                    });
+                });
+
+            egui::SidePanel::right("inspector_panel")
+                .resizable(true)
+                .min_width(250.0)
+                .show(&self.egui_ctx, |ui| {
+                    ui.heading("Inspector");
+                    ui.separator();
+                    if let Some(entity_id) = self.selected_entity {
+                        ui.label(format!("Entity ID: {}", entity_id));
+                        ui.separator();
+
+                        let mut transform_changed = false;
+                        let mut new_position = crate::math::vec::Vec3::new(0.0, 0.0, 0.0);
+                        let mut new_rotation = crate::math::vec::Vec3::new(0.0, 0.0, 0.0);
+
+                        let transforms = self.world.get_component_array_mut::<TransformComponent>();
+                        if transforms.has(entity_id) {
+                            let transform = unsafe { transforms.get_mut(entity_id) };
+
+                            ui.collapsing("Transform", |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Pos X");
+                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.position.x).speed(0.1)).changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Pos Y");
+                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.position.y).speed(0.1)).changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Pos Z");
+                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.position.z).speed(0.1)).changed();
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Rot X");
+                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.rotation.x).speed(0.05)).changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Rot Y");
+                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.rotation.y).speed(0.05)).changed();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Rot Z");
+                                    transform_changed |= ui.add(egui::DragValue::new(&mut transform.rotation.z).speed(0.05)).changed();
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Scale  ");
+                                    ui.add(egui::DragValue::new(&mut transform.scale.x).speed(0.1));
+                                    ui.add(egui::DragValue::new(&mut transform.scale.y).speed(0.1));
+                                    ui.add(egui::DragValue::new(&mut transform.scale.z).speed(0.1));
+                                });
+                            });
+
+                            new_position = transform.position;
+                            new_rotation = transform.rotation;
+                        }
+
+                        if transform_changed {
+                            let rb_components = self.world.get_component_array::<crate::ecs::components::RigidBodyComponent>();
+                            if rb_components.has(entity_id) {
+                                let rb_comp = unsafe { rb_components.get(entity_id) };
+                                if let Some(rb) = self.physics.rigid_body_set.get_mut(rb_comp.handle) {
+                                    rb.set_translation(rapier3d::math::Vector::new(new_position.x, new_position.y, new_position.z), true);
+                                    let quat = rapier3d::math::Rotation::from_euler_angles(new_rotation.x, new_rotation.y, new_rotation.z);
+                                    rb.set_rotation(quat, true);
+                                }
+                            }
+                        }
+
+                        let renders = self.world.get_component_array_mut::<RenderComponent>();
+                        if renders.has(entity_id) {
+                            let render = unsafe { renders.get_mut(entity_id) };
+                            ui.collapsing("Render", |ui| {
+                                ui.checkbox(&mut render.visible, "Visible");
+                                ui.add(egui::Slider::new(&mut render.metallic, 0.0..=1.0).text("Metallic"));
+                                ui.add(egui::Slider::new(&mut render.roughness, 0.0..=1.0).text("Roughness"));
+                            });
+                        }
+                    } else {
+                        ui.label("No Entity Selected.");
+                    }
+                });
+
+            egui::CentralPanel::default().show(&self.egui_ctx, |ui| {
                 let size = ui.available_size();
                 new_viewport_size = Some((size.x.max(1.0) as u32, size.y.max(1.0) as u32));
-                // We use texture size to preserve aspect ratio, but scale to fit available size
                 let image = egui::Image::new(egui::load::SizedTexture::new(
                     self.offscreen_texture_id,
                     size,
                 ))
                 .sense(egui::Sense::click());
+                
                 let response = ui.add(image);
-
+                
                 if response.clicked() {
+                    self.selected_entity = None;
+
                     if let Some(pos) = response.interact_pointer_pos() {
                         let local_pos = pos - response.rect.min;
-                        let ndc_x = (local_pos.x / size.x) * 2.0 - 1.0;
-                        let ndc_y = (local_pos.y / size.y) * 2.0 - 1.0;
+                        let ndc_x = (local_pos.x / response.rect.width()) * 2.0 - 1.0;
+                        let ndc_y = (local_pos.y / response.rect.height()) * 2.0 - 1.0;
                         raycast_request = Some((ndc_x, ndc_y));
                     }
                 }
