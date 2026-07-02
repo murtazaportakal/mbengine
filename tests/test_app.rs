@@ -17,7 +17,10 @@ fn test_application_boot() {
     for _ in 0..10 {
         app.window.poll_events(&mut app.input);
         let dt = app.timer.tick();
-        app.world.update_systems(dt as f32);
+        if let Some(reloader) = &mut app.hot_reloader {
+            reloader.update();
+            reloader.call_game_update(&mut app.world, &mut app.physics, dt as f32);
+        }
         app.memory.frame_arena().reset(false);
     }
 

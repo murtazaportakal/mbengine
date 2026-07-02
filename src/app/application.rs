@@ -49,6 +49,11 @@ pub struct Application {
     >,
     pub editor: crate::app::editor::Editor,
     pub hot_reloader: Option<crate::app::hot_reload::HotReloader>,
+    pub compute_pipeline: Option<crate::renderer::vulkan::compute_cull::ComputeCullPipeline>,
+    pub compute_descriptor_pool: vk::DescriptorPool,
+    pub compute_descriptor_sets: std::collections::HashMap<usize, vk::DescriptorSet>,
+    pub audio_subsystem: Option<crate::audio::AudioSubsystem>,
+    pub audio_system: crate::audio::AudioSystem,
 }
 
 impl Application {
@@ -131,6 +136,25 @@ impl Application {
         };
 
         let pipeline = Pipeline::new(&vulkan, vk::Format::R16G16B16A16_SFLOAT);
+
+        let compute_pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1000),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(2000), // 2 storage buffers per mesh (meshlet + indirect)
+        ];
+        let compute_pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&compute_pool_sizes)
+            .max_sets(1000);
+        let compute_descriptor_pool = unsafe {
+            vulkan.device.create_descriptor_pool(&compute_pool_info, None).unwrap()
+        };
+
+        // We can pass a dummy max_meshlets to new() since it no longer allocates an indirect buffer
+        let compute_pipeline =
+            crate::renderer::vulkan::compute_cull::ComputeCullPipeline::new(&vulkan);
 
         let mut asset_manager = crate::asset_manager::AssetManager::new();
         let mut descriptor_pool = vk::DescriptorPool::null();
@@ -295,6 +319,8 @@ impl Application {
             world.register_component::<HierarchyComponent>(1000);
             world.register_component::<crate::ecs::components::RigidBodyComponent>(1000);
             world.register_component::<crate::ecs::components::ColliderComponent>(1000);
+            world.register_component::<crate::ecs::components::AudioListenerComponent>(10);
+            world.register_component::<crate::ecs::components::AudioEmitterComponent>(100);
         }
 
         let mut physics = crate::physics::PhysicsSystem::new();
@@ -314,6 +340,7 @@ impl Application {
                 100.0,
             );
             world.add_component(camera_entity, cam_comp);
+            world.add_component(camera_entity, crate::ecs::components::AudioListenerComponent::default());
         }
 
         // Spawn a directional light
@@ -352,6 +379,7 @@ impl Application {
                     },
                 );
             }
+            world.add_component(planet, crate::ecs::components::AudioEmitterComponent::default());
         }
 
         // 2. Moon (Child of Planet)
@@ -530,6 +558,51 @@ impl Application {
             );
         }
 
+        // 3. Bugatti Model
+        if let Some(bugatti_indices) = asset_manager.load_model(&vulkan, "bugatti.obj") {
+            let bugatti_root = world.create_entity();
+            unsafe {
+                world.add_component(
+                    bugatti_root,
+                    TransformComponent {
+                        position: Vec3::new(0.0, 0.0, 0.0),
+                        scale: Vec3::new(1.0, 1.0, 1.0),
+                        ..Default::default()
+                    },
+                );
+            }
+
+            for &mesh_index in bugatti_indices {
+                let bugatti_part = world.create_entity();
+                unsafe {
+                    world.add_component(
+                        bugatti_part,
+                        TransformComponent {
+                            position: Vec3::new(0.0, 0.0, 0.0),
+                            scale: Vec3::new(1.0, 1.0, 1.0),
+                            ..Default::default()
+                        },
+                    );
+                    world.add_component(
+                        bugatti_part,
+                        RenderComponent {
+                            visible: true,
+                            mesh_index,
+                            metallic: 0.8,
+                            roughness: 0.2,
+                        },
+                    );
+                    world.add_component(
+                        bugatti_part,
+                        HierarchyComponent {
+                            parent: Some(bugatti_root),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        }
+
         let egui_ctx = egui::Context::default();
         let mut egui_backend =
             crate::renderer::vulkan::EguiBackend::new(&vulkan, swapchain.format.format);
@@ -538,6 +611,9 @@ impl Application {
             sdr_target.color_view,
             sdr_target.sampler,
         );
+
+        let audio_subsystem = crate::audio::AudioSubsystem::new();
+        let audio_system = crate::audio::AudioSystem::new(audio_subsystem.as_ref());
 
         let app = Self {
             world,
@@ -571,6 +647,11 @@ impl Application {
             resource_tracker: std::collections::HashMap::new(),
             editor: crate::app::editor::Editor::new(),
             hot_reloader: crate::app::hot_reload::HotReloader::new("target/debug/game.dll"),
+            compute_pipeline,
+            compute_descriptor_pool,
+            compute_descriptor_sets: std::collections::HashMap::new(),
+            audio_subsystem,
+            audio_system,
         };
         app.update_post_process_descriptors();
         Some(app)
@@ -709,6 +790,9 @@ impl Application {
                 reloader.update();
                 reloader.call_game_update(&mut self.world, &mut self.physics, dt as f32);
             }
+            
+            use crate::ecs::System;
+            self.audio_system.update(dt as f32, &self.world);
 
             let mut new_viewport_size = None;
             let mut raycast_request = None;
@@ -716,12 +800,7 @@ impl Application {
 
             self.editor.draw(&self.egui_ctx, &mut self.world, &mut self.physics, &mut self.selected_entity, &mut self.bloom_threshold, 1.0 / dt as f32);
 
-            egui::CentralPanel::default().show(&self.egui_ctx, |_ui| {});
-
-            egui::Window::new("Viewport")
-                .resizable(true)
-                .default_size(egui::vec2(800.0, 600.0))
-                .show(&self.egui_ctx, |ui| {
+            egui::CentralPanel::default().show(&self.egui_ctx, |ui| {
                 let size = ui.available_size();
                 new_viewport_size = Some((size.x.max(1.0) as u32, size.y.max(1.0) as u32));
                 let image = egui::Image::new(egui::load::SizedTexture::new(
@@ -851,7 +930,7 @@ impl Application {
                     self.sdr_target = crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h, vk::Format::B8G8R8A8_UNORM).unwrap();
                     
                     self.bloom_target.shutdown(&self.vulkan);
-                    self.bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(&self.vulkan, w / 2, h / 2, 6).unwrap();
+                    self.bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(&self.vulkan, (w / 2).max(1), (h / 2).max(1), 6).unwrap();
 
                     self.update_post_process_descriptors();
 
@@ -1004,7 +1083,7 @@ impl Application {
             }
 
             // 1. Update Game State (ECS)
-            self.world.update_systems(dt as f32);
+        // Handled by Hot Reloader's game_update call which invokes the Job System.
 
             // Camera Interactive Update
             {
@@ -1353,6 +1432,122 @@ impl Application {
                 .unwrap();
         }
 
+        // --- Compute Culling Pre-pass Setup ---
+        let mut compute_dispatches = Vec::new();
+        if let Some(compute) = &self.compute_pipeline {
+            let renders = self.world.get_component_array::<crate::ecs::RenderComponent>();
+            let transforms = self.world.get_component_array::<crate::ecs::TransformComponent>();
+            let dense_renders = renders.as_slice();
+            let entities = renders.dense_entities_slice();
+
+            for i in 0..dense_renders.len() {
+                let render = &dense_renders[i];
+                if render.visible {
+                    let entity_index = entities[i];
+                    if transforms.has(entity_index) {
+                        let transform = unsafe { transforms.get(entity_index) };
+                        let world_matrix = *self
+                            .world_matrices
+                            .get(&entity_index)
+                            .unwrap_or(&transform.matrix);
+                        let mesh_index = render.mesh_index;
+
+                        if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
+                            if !self.compute_descriptor_sets.contains_key(&mesh_index) {
+                                let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                                    .descriptor_pool(self.compute_descriptor_pool)
+                                    .set_layouts(std::slice::from_ref(&compute.descriptor_set_layout));
+                                let set = unsafe { self.vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0] };
+                                
+                                compute.update_descriptor_set(
+                                    &self.vulkan, 
+                                    self.ubo_buffer, 
+                                    mesh.meshlet_buffer.handle, 
+                                    mesh.indirect_buffer.handle, 
+                                    set
+                                );
+                                self.compute_descriptor_sets.insert(mesh_index, set);
+                            }
+                            
+                            let set = self.compute_descriptor_sets[&mesh_index];
+                            compute_dispatches.push((mesh_index, mesh.meshlet_count, world_matrix, set));
+                        }
+                    }
+                }
+            }
+
+            // Dispatch compute for each entity's mesh
+            if !compute_dispatches.is_empty() {
+                unsafe {
+                    self.vulkan.device.cmd_bind_pipeline(
+                        command_buffer,
+                        vk::PipelineBindPoint::COMPUTE,
+                        compute.pipeline,
+                    );
+                }
+
+                for (_mesh_index, meshlet_count, world_matrix, set) in compute_dispatches {
+                    unsafe {
+                        self.vulkan.device.cmd_bind_descriptor_sets(
+                            command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            compute.layout,
+                            0,
+                            std::slice::from_ref(&set),
+                            &[],
+                        );
+                        
+                        #[repr(C)]
+                        struct PushConstants {
+                            total_meshlets: u32,
+                            _pad: [u32; 3], // 12 bytes padding for 16-byte alignment of Mat4
+                            world: crate::math::mat4::Mat4,
+                        }
+                        
+                        let pc = PushConstants {
+                            total_meshlets: meshlet_count,
+                            _pad: [0; 3],
+                            world: world_matrix,
+                        };
+                        
+                        let pc_bytes = std::slice::from_raw_parts(
+                            &pc as *const _ as *const u8,
+                            std::mem::size_of::<PushConstants>(),
+                        );
+                        
+                        self.vulkan.device.cmd_push_constants(
+                            command_buffer,
+                            compute.layout,
+                            vk::ShaderStageFlags::COMPUTE,
+                            0,
+                            pc_bytes,
+                        );
+
+                        // 64 threads per group (match local_size_x in cull.comp)
+                        let group_count_x = (meshlet_count + 63) / 64;
+                        self.vulkan.device.cmd_dispatch(command_buffer, group_count_x, 1, 1);
+                    }
+                }
+
+                // Barrier to ensure compute shader writes are visible to indirect draw
+                unsafe {
+                    let barrier = vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
+                        
+                    self.vulkan.device.cmd_pipeline_barrier(
+                        command_buffer,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::DRAW_INDIRECT,
+                        vk::DependencyFlags::empty(),
+                        std::slice::from_ref(&barrier),
+                        &[],
+                        &[],
+                    );
+                }
+            }
+        }
+
         // 1. Scene Render Pass
         let clear_values = [
             vk::ClearValue {
@@ -1529,14 +1724,24 @@ impl Application {
                                     vk::IndexType::UINT32,
                                 );
 
-                                self.vulkan.device.cmd_draw_indexed(
-                                    command_buffer,
-                                    mesh.index_count,
-                                    1,
-                                    0,
-                                    0,
-                                    0,
-                                );
+                                if self.compute_pipeline.is_some() {
+                                    self.vulkan.device.cmd_draw_indexed_indirect(
+                                        command_buffer,
+                                        mesh.indirect_buffer.handle,
+                                        0,
+                                        mesh.meshlet_count,
+                                        std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+                                    );
+                                } else {
+                                    self.vulkan.device.cmd_draw_indexed(
+                                        command_buffer,
+                                        mesh.index_count,
+                                        1,
+                                        0,
+                                        0,
+                                        0,
+                                    );
+                                }
                                 _draw_count += 1;
                             }
                         }
@@ -1768,6 +1973,12 @@ impl Drop for Application {
             }
             if self.descriptor_pool != vk::DescriptorPool::null() {
                 self.vulkan.device.destroy_descriptor_pool(self.descriptor_pool, None);
+            }
+            if self.compute_descriptor_pool != vk::DescriptorPool::null() {
+                self.vulkan.device.destroy_descriptor_pool(self.compute_descriptor_pool, None);
+            }
+            if let Some(mut cp) = self.compute_pipeline.take() {
+                cp.shutdown(&self.vulkan);
             }
             if self.ubo_buffer != vk::Buffer::null() {
                 self.vulkan.device.destroy_buffer(self.ubo_buffer, None);

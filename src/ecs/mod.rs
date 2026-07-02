@@ -6,6 +6,7 @@ pub mod system;
 pub mod types;
 pub mod world;
 pub mod reflection;
+pub mod scheduler;
 
 pub use component_array::*;
 pub use components::*;
@@ -14,3 +15,4 @@ pub use system::*;
 pub use types::*;
 pub use world::*;
 pub use reflection::*;
+pub use scheduler::*;

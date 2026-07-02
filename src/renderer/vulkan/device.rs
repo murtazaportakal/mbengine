@@ -90,8 +90,7 @@ impl VulkanDevice {
         let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
             .message_severity(
                 vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                    | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                    | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+                    | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING,
             )
             .message_type(
                 vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
@@ -137,7 +136,9 @@ impl VulkanDevice {
             vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
 
         // Standard features to enable
-        let features = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
+        let features = vk::PhysicalDeviceFeatures::default()
+            .sampler_anisotropy(true)
+            .multi_draw_indirect(true);
 
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features)

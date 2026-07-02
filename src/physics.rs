@@ -19,7 +19,6 @@ pub struct PhysicsSystem {
     pub multibody_joint_set: MultibodyJointSet,
     pub ccd_solver: CCDSolver,
     pub query_pipeline: QueryPipeline,
-    required_components: ComponentMask,
 }
 
 impl Default for PhysicsSystem {
@@ -43,13 +42,12 @@ impl PhysicsSystem {
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
             query_pipeline: QueryPipeline::new(),
-            required_components: 0,
         }
     }
 }
 
 impl System for PhysicsSystem {
-    fn update(&mut self, dt: f32, world: &mut World) {
+    fn update(&mut self, dt: f32, world: &World) {
         // Step the simulation
         self.integration_parameters.dt = dt.max(0.001); // Prevent 0 dt
 
@@ -79,7 +77,7 @@ impl System for PhysicsSystem {
             }
         }
 
-        let transforms = world.get_component_array_mut::<TransformComponent>();
+        let transforms = unsafe { world.get_component_array_mut_unchecked::<TransformComponent>() };
         for (entity, handle) in updates {
             if transforms.has(entity) {
                 if let Some(rb) = self.rigid_body_set.get(handle) {
@@ -95,11 +93,11 @@ impl System for PhysicsSystem {
         }
     }
 
-    fn required_components(&self) -> ComponentMask {
-        self.required_components
+    fn read_components(&self) -> ComponentMask {
+        crate::ecs::types::build_mask(&[crate::ecs::types::get_component_type_id::<RigidBodyComponent>()])
     }
 
-    fn set_required_components(&mut self, mask: ComponentMask) {
-        self.required_components = mask;
+    fn write_components(&self) -> ComponentMask {
+        crate::ecs::types::build_mask(&[crate::ecs::types::get_component_type_id::<TransformComponent>()])
     }
 }

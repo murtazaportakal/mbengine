@@ -1,0 +1,98 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct MeshletData {
+    vec3 center;
+    float radius;
+    uint indexOffset;
+    uint triangleCount;
+    uint pad0;
+    uint pad1;
+};
+
+struct VkDrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+
+// We must match the GlobalUbo exactly as defined in pipeline.rs
+struct PointLight {
+    vec4 position;
+    vec4 color;
+};
+
+layout(set = 0, binding = 0) uniform GlobalUbo {
+    mat4 viewProj;
+    mat4 lightSpaceMatrix;
+    vec4 cameraPos;
+    vec4 lightDir;
+    vec4 lightColor;
+    PointLight pointLights[4];
+    uint numPointLights;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} ubo;
+
+layout(set = 0, binding = 1) readonly buffer MeshletBuffer {
+    MeshletData meshlets[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer IndirectDrawBuffer {
+    VkDrawIndexedIndirectCommand commands[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint totalMeshlets;
+    mat4 world;
+} pc;
+
+void main() {
+    uint gID = gl_GlobalInvocationID.x;
+    if (gID >= pc.totalMeshlets) return;
+
+    MeshletData m = meshlets[gID];
+
+    // Transform center to world space
+    vec3 worldCenter = (pc.world * vec4(m.center, 1.0)).xyz;
+    // Scale radius by max scale factor of world matrix
+    float scaleX = length(pc.world[0].xyz);
+    float scaleY = length(pc.world[1].xyz);
+    float scaleZ = length(pc.world[2].xyz);
+    float maxScale = max(scaleX, max(scaleY, scaleZ));
+    float worldRadius = m.radius * maxScale;
+
+    // Extract frustum planes from View-Projection matrix
+    mat4 vp = ubo.viewProj;
+    vec4 planes[6];
+    
+    planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]);
+    planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]);
+    planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]);
+    planes[3] = vec4(vp[0][3] - vp[0][1], vp[1][3] - vp[1][1], vp[2][3] - vp[2][1], vp[3][3] - vp[3][1]);
+    planes[4] = vec4(vp[0][3] + vp[0][2], vp[1][3] + vp[1][2], vp[2][3] + vp[2][2], vp[3][3] + vp[3][2]);
+    planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]);
+
+    bool visible = true;
+    for (int i = 0; i < 6; i++) {
+        float len = length(planes[i].xyz);
+        planes[i] /= len; 
+        
+        float dist = dot(planes[i].xyz, worldCenter) + planes[i].w;
+        if (dist < -worldRadius) {
+            visible = false;
+            break;
+        }
+    }
+    
+    // Write directly to our index in the command buffer
+    commands[gID].indexCount = visible ? (m.triangleCount * 3) : 0;
+    commands[gID].instanceCount = 1;
+    commands[gID].firstIndex = m.indexOffset;
+    commands[gID].vertexOffset = 0;
+    commands[gID].firstInstance = gID;
+}

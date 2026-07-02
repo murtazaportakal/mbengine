@@ -10,6 +10,7 @@ pub mod shadow_pipeline;
 pub mod swapchain;
 pub mod texture;
 pub mod bloom;
+pub mod compute_cull;
 
 pub use buffer::Buffer;
 pub use device::VulkanDevice;

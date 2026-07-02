@@ -38,21 +38,19 @@ struct Health {
 // ── test system ─────────────────────────────────────────────────────────────
 
 struct MovementSystem {
-    required_mask: ComponentMask,
     update_count: i32,
 }
 
 impl MovementSystem {
     fn new() -> Self {
         Self {
-            required_mask: 0,
             update_count: 0,
         }
     }
 }
 
 impl System for MovementSystem {
-    fn update(&mut self, dt: f32, world: &mut World) {
+    fn update(&mut self, dt: f32, world: &World) {
         let velocities = world.get_component_array::<Velocity>();
         let count = velocities.len();
         let entities = velocities.dense_entities_slice();
@@ -70,7 +68,7 @@ impl System for MovementSystem {
             unsafe {
                 let vel = *world.get_component_array::<Velocity>().get(entity_idx);
                 let pos = world
-                    .get_component_array_mut::<Position>()
+                    .get_component_array_mut_unchecked::<Position>()
                     .get_mut(entity_idx);
                 pos.x += vel.vx * dt;
                 pos.y += vel.vy * dt;
@@ -81,12 +79,12 @@ impl System for MovementSystem {
         self.update_count += 1;
     }
 
-    fn required_components(&self) -> ComponentMask {
-        self.required_mask
+    fn read_components(&self) -> ComponentMask {
+        build_mask(&[get_component_type_id::<Velocity>()])
     }
 
-    fn set_required_components(&mut self, mask: ComponentMask) {
-        self.required_mask = mask;
+    fn write_components(&self) -> ComponentMask {
+        build_mask(&[get_component_type_id::<Position>()])
     }
 }
 
@@ -285,20 +283,16 @@ fn test_full_ecs_smoke_test() {
         );
     }
 
-    let pos_type_id = get_component_type_id::<Position>();
-    let vel_type_id = get_component_type_id::<Velocity>();
-    let mask = build_mask(&[pos_type_id, vel_type_id]);
-
-    let mut move_sys = MovementSystem::new();
-    move_sys.set_required_components(mask);
-
-    world.register_system(Box::new(move_sys));
+    let move_sys = MovementSystem::new();
+    let mut scheduler = Scheduler::new();
+    scheduler.add_system(Box::new(move_sys));
+    scheduler.build_graph();
 
     // Snapshot e1's position before update.
     let e1_x_before = unsafe { world.get_component::<Position>(e1).x };
 
     // Run one frame at dt = 0.016 (60fps).
-    world.update_systems(0.016);
+    scheduler.execute(&world, 0.016);
 
     let e1_x_after = unsafe { world.get_component::<Position>(e1).x };
     let expected_delta = 10.0_f32 * 0.016;

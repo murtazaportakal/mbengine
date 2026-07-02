@@ -15,7 +15,6 @@
 
 use super::component_array::{ComponentArray, ComponentArrayOps};
 use super::entity_manager::EntityManager;
-use super::system::System;
 use super::types::*;
 use crate::memory::ArenaAllocator;
 use std::ptr;
@@ -33,9 +32,6 @@ pub struct World {
 
     /// Number of component types registered (tracks highest ID + 1).
     registered_component_count: u32,
-
-    /// Boxed system trait objects.
-    systems: Vec<Box<dyn System>>,
 }
 
 /// Stores a type-erased component array pointer with its vtable for trait dispatch.
@@ -45,6 +41,16 @@ struct ComponentArrayEntry {
     /// Fat pointer to the trait object for type-erased calls.
     ops: *mut dyn ComponentArrayOps,
 }
+
+// Safety: ComponentArrayEntry stores pointers allocated in the arena. 
+// As long as the Arena outlives the World, and we don't alias mutably, it's safe.
+unsafe impl Send for ComponentArrayEntry {}
+unsafe impl Sync for ComponentArrayEntry {}
+
+// Safety: World encapsulates the raw pointers and provides safe access, 
+// and the Scheduler enforces exclusive access rules.
+unsafe impl Send for World {}
+unsafe impl Sync for World {}
 
 impl World {
     /// Construct a World, allocating internal storage from the provided arena.
@@ -73,7 +79,6 @@ impl World {
             entity_manager,
             component_arrays: [NONE; MAX_COMPONENT_TYPES as usize],
             registered_component_count: 0,
-            systems: Vec::new(),
         }
     }
 
@@ -119,21 +124,6 @@ impl World {
         if type_id as u32 >= self.registered_component_count {
             self.registered_component_count = type_id as u32 + 1;
         }
-    }
-
-    // ── system registration ─────────────────────────────────────────────
-
-    /// Register a system with the World.
-    ///
-    /// Returns a mutable reference so the caller can configure the system.
-    pub fn register_system(&mut self, system: Box<dyn System>) -> &mut dyn System {
-        debug_assert!(
-            (self.systems.len() as u32) < MAX_SYSTEMS,
-            "World::register_system: too many systems."
-        );
-
-        self.systems.push(system);
-        self.systems.last_mut().unwrap().as_mut()
     }
 
     // ── entity lifecycle ────────────────────────────────────────────────
@@ -249,38 +239,53 @@ impl World {
             (type_id as u32) < MAX_COMPONENT_TYPES,
             "World::get_component_array: type ID out of range."
         );
-        let entry = self.component_arrays[type_id as usize]
-            .as_ref()
-            .expect("World::get_component_array: component type not registered.");
-        unsafe { &*(entry.ptr as *const ComponentArray<T>) }
+        if let Some(entry) = &self.component_arrays[type_id as usize] {
+            unsafe { &*(entry.ptr as *const ComponentArray<T>) }
+        } else {
+            panic!("World::get_component_array: component type {} not registered.", type_id);
+        }
+    }
+
+    /// Get unchecked mutable access to a ComponentArray<T> via a shared reference.
+    ///
+    /// # Safety
+    /// The caller (e.g. Scheduler) must guarantee exclusive access to the component array
+    /// to avoid data races when executing systems concurrently.
+    pub unsafe fn get_component_array_mut_unchecked<T: 'static>(&self) -> &mut ComponentArray<T> {
+        let type_id = get_component_type_id::<T>();
+        debug_assert!(
+            (type_id as u32) < MAX_COMPONENT_TYPES,
+            "World::get_component_array_mut_unchecked: type ID out of range."
+        );
+        if let Some(entry) = &self.component_arrays[type_id as usize] {
+            unsafe { &mut *(entry.ptr as *mut ComponentArray<T>) }
+        } else {
+            panic!("World::get_component_array_mut_unchecked: component type {} not registered.", type_id);
+        }
+    }
+
+    /// Get unchecked mutable access to a specific entity's component via a shared reference.
+    ///
+    /// # Safety
+    /// The caller must guarantee exclusive access to the entity's component to avoid data races.
+    pub unsafe fn get_component_mut_unchecked<T: 'static>(&self, id: EntityId) -> &mut T {
+        debug_assert!(
+            self.is_alive(id),
+            "World::get_component_mut_unchecked: entity is not alive."
+        );
+        self.get_component_array_mut_unchecked::<T>()
+            .get_mut(get_entity_index(id))
     }
 
     /// Get mutable access to a ComponentArray<T>.
     pub fn get_component_array_mut<T: 'static>(&mut self) -> &mut ComponentArray<T> {
         let type_id = get_component_type_id::<T>();
         debug_assert!((type_id as u32) < MAX_COMPONENT_TYPES);
-        let entry = self.component_arrays[type_id as usize]
-            .as_mut()
-            .expect("World::get_component_array_mut: component type not registered.");
-        unsafe { &mut *(entry.ptr as *mut ComponentArray<T>) }
-    }
-
-    // ── system execution ────────────────────────────────────────────────
-
-    /// Run all registered systems in registration order.
-    ///
-    /// # Safety
-    /// Systems receive a raw pointer to the World to work around Rust's
-    /// borrowing rules (system needs &mut self AND &mut world). This is
-    /// safe because systems don't modify the systems array.
-    pub fn update_systems(&mut self, dt: f32) {
-        // We need to temporarily take ownership of systems to avoid
-        // borrowing self mutably twice.
-        let mut systems = std::mem::take(&mut self.systems);
-        for system in systems.iter_mut() {
-            system.update(dt, self);
+        if let Some(entry) = &self.component_arrays[type_id as usize] {
+            unsafe { &mut *(entry.ptr as *mut ComponentArray<T>) }
+        } else {
+            panic!("World::get_component_array: component type {} not registered.", type_id);
         }
-        self.systems = systems;
     }
 
     // ── queries ─────────────────────────────────────────────────────────

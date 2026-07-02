@@ -1,12 +1,12 @@
 # Custom Game Engine — Architecture & Roadmap
 
-> **Last updated:** 2026-06-30 — Migrated from C++20 to Rust.
+> **Last updated:** 2026-07-02 — V1/V2 Completion & Transition to V3.
 
 ---
 
 ## Core Architectural Constraints
 
-These rules are **non-negotiable** across all future sessions:
+These rules are **non-negotiable** across all future sessions and govern the engine's design:
 
 | Constraint | Detail |
 |---|---|
@@ -14,341 +14,108 @@ These rules are **non-negotiable** across all future sessions:
 | **Paradigm** | Strict Data-Oriented Design (DoD). No deep inheritance trees. Flat, tightly packed arrays. Entity Component System (ECS). |
 | **Memory** | **Zero** heap allocations in the main game loop. All allocations go through custom allocators (Arena, Pool, Stack). |
 | **Standard Library** | Minimal `std` usage in performance-critical paths. Custom cache-friendly containers. |
-| **Graphics** | Vulkan API via `ash` crate (decoupled — built later). |
-| **Cache coherency** | Prioritised in every data structure. |
+| **Graphics** | Vulkan API via `ash` crate (decoupled rendering pipeline). |
+| **Cache coherency** | Prioritized in every data structure for maximum CPU throughput. |
 | **Code style** | One file at a time. No partial code or `// TODO` stubs unless explicitly outlining a module. Production-ready on first write. |
 | **Unsafe** | Encapsulated behind safe public APIs. All `unsafe` blocks documented with `# Safety` comments. |
 
 ---
 
-## Completed — Memory Management Layer
+## Engine Features & Architecture (V1 & V2 Completed)
 
-### File Inventory
+The engine has reached full maturity for its baseline requirements. All V1 and V2 epics are 100% complete and actively functional in the repository.
 
-```
-src/memory/
-├── mod.rs                  Module declarations + re-exports
-├── memory_utils.rs         Alignment utilities + size constants
-├── arena.rs                Linear bump allocator (ArenaAllocator)
-├── pool.rs                 Fixed-size block free-list (PoolAllocator)
-├── stack.rs                LIFO allocator + StackScope RAII guard
-└── subsystem.rs            OS reservation + region management (MemorySubsystem)
-```
+### 1. Memory Management Subsystem (`src/memory/`)
+- **Zero OS Heap on Hot Path**: The engine pre-allocates a 256 MB block from the OS (via `VirtualAlloc`/`mmap`) and slices it into distinct regions (Frame, Persistent, ECS, Stack).
+- **Custom Allocators**: 
+  - `ArenaAllocator`: O(1) linear bump allocation with save-point rewinds.
+  - `PoolAllocator`: Fixed-size blocks with intrusive zero-overhead free-lists.
+  - `StackAllocator`: LIFO allocator with automatic RAII `StackScope` cleanup.
 
-### Per-File Summary
+### 2. Entity Component System (ECS) & Job System (`src/ecs/`)
+- **Core Architecture**: Dense `ComponentArray<T>` sparse-set design ensuring cache-contiguous iteration loops.
+- **Multithreading**: `Scheduler` dependency graph dynamically partitions `System`s based on read/write component masks. Uses `std::thread::scope` for fork-join execution, guaranteeing lock-free data parallelism safely across stages.
+- **Lock-free Access**: Replaced interior mutability (`Mutex`/`RwLock`) with `get_component_array_mut_unchecked` verified entirely by the Scheduler.
 
-#### memory_utils.rs
-- `is_power_of_two()`, `align_forward()`, `align_size()`, `is_aligned()` — `const fn` helpers.
-- Size constants: `KB`, `MB`, `GB`, `PAGE_SIZE`, `DEFAULT_ALIGNMENT` (16).
+### 3. Advanced Renderer (`src/renderer/`)
+- **Render Graph Architecture**: Dynamic, node-based Render Graph that automatically tracks resource states and resolves Vulkan memory barriers/image transitions.
+- **Physically Based Rendering (PBR)**: Full Metallic-Roughness PBR pipeline with Image-Based Lighting (IBL).
+- **Global Illumination & Shadows**: Cascaded Shadow Maps (CSM) for directional lights, omnidirectional point light shadows.
+- **Post-Processing**: ACES Tonemapping, Bloom downsample/upsample chains, and custom full-screen triangle generation.
 
-#### arena.rs
-- Takes an externally owned memory block.
-- O(1) bump allocation with configurable alignment (default 16-byte).
-- O(1) full `reset()` with optional zeroing.
-- `ArenaMarker` save-point system for partial rewinds.
-- Typed helpers: `allocate_array::<T>(count)`, `alloc_new::<T>(value)`.
-- `owns(ptr)` for debug bounds checking.
-- Module: `crate::memory`.
+### 4. Hot-Reloading & Editor Tooling (`src/app/`, `src/platform/`)
+- **Native DLL Hot-Reloading**: Engine split into `engine.exe` (host/memory) and `game.dll` (systems). The host transparently unloads/reloads the DLL upon recompilation while persisting ECS data, enabling zero-downtime iteration.
+- **Egui Integration**: Custom Vulkan pipeline streams `egui` clipped meshes as an overlay layer.
+- **Scene Inspector**: ECS reflection (`ecs/reflection.rs`) automatically parses entities and exposes component properties for real-time editor tweaking.
+- **Offscreen Rendering (Viewport)**: The 3D scene renders to an offscreen target, embedded directly into scalable `egui` windows.
 
-#### pool.rs
-- Fixed-size block allocator with **intrusive embedded free-list** (zero per-block metadata overhead).
-- O(1) `allocate()` (pop free-list head), O(1) `free()` (push to head).
-- Constructor rounds `block_size` up to `block_alignment`, computes block count after front-padding.
-- `owns(ptr)` validates both range AND block-boundary alignment.
-- O(N) `reset()` rebuilds free-list.
+### 5. Asset Pipeline & Virtual File System (`src/asset_manager.rs`, `src/vfs.rs`)
+- **File Watcher**: `notify`-based asynchronous file watching automatically hot-reloads GLTF models, PNG/JPG textures, and SPIR-V shaders instantly.
+- **Asset Caching**: De-duplicated asset loads to minimize VRAM usage.
+- **VFS (Virtual File System)**: Abstraction layer allowing assets to be loaded from disk during development and packed into bundled archives for release builds.
 
-#### stack.rs
-- LIFO allocator with per-allocation `AllocationHeader` (stores `prev_offset` + `adjustment`).
-- O(1) `allocate()`: reserves header space, aligns payload, bumps pointer.
-- O(1) `free()`: reads header, rewinds to `prev_offset`. Debug builds assert LIFO order via `#[cfg(debug_assertions)]`.
-- `StackMarker` save-point and `restore_to_save_point()` for bulk rewind.
-- **`StackScope`** RAII guard via `Drop` trait — automatically restores save-point on scope exit.
-
-#### subsystem.rs
-- `MemoryConfig` struct with defaults: 64 MB frame arena, 64 MB persistent arena, 64 MB ECS pool, 32 MB temp stack, 32 MB reserve = **256 MB total**.
-- `init()`: single OS syscall (`VirtualAlloc` on Windows, `mmap` on POSIX via `extern` FFI), carves block into regions.
-- `shutdown()`: drops allocators, OS release.
-- Typed accessors: `frame_arena()`, `persistent_arena()`, `ecs_pool()`, `temp_stack()`, `reserve_base()`.
-- **Zero heap allocations** for OS memory — allocator metadata uses `Box` (tiny, < 64 bytes each).
+### 6. Math, Physics & Core Utils
+- **Math**: Custom `nalgebra`-inspired, SIMD-friendly linear algebra library (`vec`, `mat4`, `quat`, `transform`).
+- **Physics**: Seamless integration with `rapier3d` (rigid bodies, colliders) synced dynamically with the visual ECS transforms.
+- **Containers**: Cache-friendly generic collections (`FixedArray`, `DynamicArray`, `RingBuffer`, `HashMap`, `FixedString`).
 
 ---
 
-## Completed — ECS Core
+## The Next-Generation Engine (V3 Master Plan)
 
-### File Inventory
+With the rendering, hot-reloading, and multithreaded ECS foundations complete, the focus now shifts entirely to expanding the engine's capability as a full-suite game development platform.
 
-```
-src/ecs/
-├── mod.rs                  Module declarations + re-exports
-├── types.rs                EntityId encoding, ComponentTypeId, masks, constants
-├── component_array.rs      Sparse-set generic — performance-critical core
-├── entity_manager.rs       Entity lifecycle
-├── system.rs               System trait
-└── world.rs                Top-level ECS container
-```
+### Epic 1: Spatial Audio Subsystem (Completed)
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | Core Mixer & Output | Integrate a low-latency audio backend (`cpal` or `rodio`) respecting the zero-heap constraints. *(Done)* |
+| **P1** | Spatial 3D Audio | Add `AudioEmitter` and `AudioListener` components. Implement HRTF/3D panning and distance attenuation based on ECS Transforms. *(Done)* |
+| **P2** | Audio Streaming | Stream large `.ogg` or `.wav` music tracks from the VFS to avoid high RAM consumption. *(Done)* |
 
-### Per-File Summary
+### Epic 2: Skeletal Animation & Blend Trees
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | GLTF Skinning | Expand the GLTF loader to parse inverse bind matrices and bone weights. |
+| **P1** | Compute Shader Skinning | Move skeletal vertex deformation to a Vulkan compute shader for massive performance scaling. |
+| **P2** | Animation Graphs | Introduce an `AnimatorComponent` supporting 1D/2D blend trees, state machines, and cross-fading between animation clips. |
 
-#### types.rs
-- `EntityId` = `u32` with 20-bit index + 12-bit generation packing.
-- `ComponentMask` = `u64` bitset (one bit per component type).
-- `ComponentTypeId` = `u8`, assigned via `get_component_type_id::<T>()` using `TypeId`-keyed global registry.
-- Constants: `MAX_ENTITIES` (1M), `MAX_COMPONENT_TYPES` (64), `MAX_SYSTEMS` (64).
-- Helpers: `make_entity_id()`, `get_entity_index()`, `get_entity_generation()`, `is_valid_entity()`.
-- Module: `crate::ecs`.
+### Epic 3: Gameplay Scripting
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | VM Integration | Embed a lightweight scripting language (e.g., `rhai` or `mlua`) to allow rapid behavior iteration without recompiling Rust DLLs. |
+| **P1** | API Bindings | Expose the ECS (entity creation, component modification, queries) and Math library to the scripting context securely. |
+| **P3** | Visual Node Graph | Build a visual node-based scripting tool inside the `egui` editor that transpiles to the embedded VM language. |
 
-#### component_array.rs
-- `ComponentArrayOps` trait (type-erased interface): `entity_destroyed()`, `count()`.
-- `ComponentArray<T>` generic struct with **sparse-set** data structure.
-- O(1) `insert()`, O(1) `remove()` (swap-and-pop), O(1) `get()`, O(1) `has()`.
-- Dense-array `as_slice()` / `as_mut_slice()` for cache-optimal iteration — zero gaps, zero indirection.
-- All memory from `ArenaAllocator`. `Drop` impl calls destructors on cleanup.
+### Epic 4: Advanced Physics & Queries
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | Raycasting & Spatial Queries | Expose a clean API for line-of-sight checks, mouse picking (click-to-select), and sweep tests via `rapier3d`. |
+| **P2** | Triggers & Sensor Volumes | Implement sensor colliders that fire ECS events (e.g., `OnTriggerEnter`) without physical resolution. |
+| **P3** | Soft Bodies / Cloth | Expand physics support to handle deformable bodies, integrating with the compute shader mesh pipeline. |
 
-#### entity_manager.rs
-- Per-slot `generations` and `component_masks` arrays.
-- Ring-buffer `recycle_queue` for freed entity indices.
-- `create_entity()`: pop recycled or bump fresh counter, pack into EntityId.
-- `destroy_entity()`: increment generation, clear mask, push to recycle queue.
-- `is_alive()`: compare stored generation vs. ID generation field.
-- All arrays from `ArenaAllocator`.
-
-#### system.rs
-- `System` trait: `fn update(&mut self, dt: f32, world: &mut World)`.
-- `required_components()` / `set_required_components()` for entity filtering.
-- `build_mask()` helper function for type-safe mask construction.
-
-#### world.rs
-- Owns `EntityManager`, up to 64 `ComponentArrayOps` trait objects, up to 64 `Box<dyn System>`.
-- `register_component::<T>(dense_capacity)`: constructs `ComponentArray<T>` in arena.
-- `register_system()`: accepts `Box<dyn System>`.
-- `create_entity()`, `destroy_entity()`, `is_alive()`.
-- `add_component::<T>()`, `remove_component::<T>()`, `get_component::<T>()`, `has_component::<T>()`.
-- `get_component_array::<T>()` for direct dense-array access in systems.
-- `update_systems(dt)` runs all systems in registration order.
-- `Drop` impl properly destroys component arrays, systems, and entity manager.
-- **All component/entity memory from `PersistentArena`. Zero heap allocations for game data.**
+### Epic 5: Project Export & Build Pipeline
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | VFS Archiver | Create a CLI tool to bundle all textures, shaders, and models into a single compressed binary package (e.g., `.pak`). |
+| **P1** | Standalone Executable | Provide a build step that strips the `egui` editor and hot-reloading components, linking `game.dll` statically into a highly optimized standalone `.exe`. |
+| **P2** | Build Profiles | Support multi-target output (e.g., Windows, Linux) via cross-compilation configurations. |
 
 ---
 
-## Build System
-
-```
-Cargo.toml                  Rust 2021 edition, zero dependencies
-src/                        Engine library source
-tests/test_ecs.rs           ECS smoke test (all assertions passing)
-```
+## Build System & Tests
 
 ### Build Commands
-
 ```bash
-cargo build                 # Debug build
+cargo build                 # Debug build (generates engine.exe & game.dll)
 cargo build --release       # Optimized release build
-cargo test                  # Run all tests
-cargo clippy                # Lint check
+cargo test                  # Run the entire test suite (ECS, Memory, Integration)
+cargo run                   # Launch the Engine Editor
 ```
 
----
-
-## Test Suite
-
-`tests/test_ecs.rs` — Comprehensive integration test covering:
-1. MemorySubsystem init/shutdown
-2. World creation + component registration
-3. Entity create / destroy / generation recycling
-4. Component add / get / remove (swap-and-pop correctness)
-5. Dense-array iteration
-6. System execution (MovementSystem)
-7. Stale handle detection
-
-All assertions passing. **20 unit tests + 1 integration test = 21 total.**
-
----
-
-## Completed — Custom Containers & Platform
-
-### Phase 3: Custom Containers
-- **`FixedArray<T, N>`**: Stack-allocated fixed-capacity array.
-- **`DynamicArray<T>`**: Arena-backed growable array.
-- **`RingBuffer<T>`**: Lock-free SPSC ring buffer.
-- **`HashMap<K, V>`**: Robin Hood hashed map.
-- **`FixedString<N>`**: Stack-allocated string.
-
-### Phase 4: Platform & Logging
-- **`win32.rs`**: Pure zero-dependency FFI bindings.
-- **`window.rs`**: Win32 window creation and message pumping (`HWND` access).
-- **`timer.rs`**: High-resolution nanosecond timer via `QueryPerformanceCounter`.
-- **`logger.rs`**: Lock-free global logger backed by `RingBuffer<FixedString>`.
-
----
-
-## Backlog — Prioritised Next Steps
-
-
-## Completed — Math & Rendering
-
-### Phase 5: Math Library
-- **`src/math/vec.rs`**: SIMD-friendly Vec2/Vec3/Vec4 types (16-byte aligned).
-- **`src/math/mat4.rs`**: Column-major 4×4 matrix.
-- **`src/math/quat.rs`**: Quaternion for rotations.
-
-### Phase 6: Renderer Foundation
-- **`src/renderer/device.rs`**: Abstract render backend interface.
-- **`src/renderer/vulkan/device.rs`**: Vulkan Instance, physical/logical device, queues.
-- **`src/renderer/vulkan/swapchain.rs`**: Swapchain creation and present.
-
-### Phase 7: Game Loop & Application
-- **`src/app/application.rs`**: Main loop, ECS execution, frame cleanup.
-- **`src/app/input.rs`**: Keyboard/mouse state mapping.
-
-### Phase 8: Graphics Pipeline
-- **`src/renderer/vulkan/render_pass.rs`**: Vulkan RenderPass setup.
-- **`src/renderer/vulkan/pipeline.rs`**: Graphics pipeline and shaders.
-- **Shaders**: `shaders/shader.vert` and `shaders/shader.frag` (glslc compiled).
-
-### Phase 9: Resource Management & Buffers
-- **`src/renderer/vulkan/buffer.rs`**: CPU HOST_VISIBLE staging and GPU DEVICE_LOCAL buffer allocations.
-- **Vertices**: Hardcoded `Vertex` struct streamed to GPU VRAM.
-
----
-
-## Completed — Gameplay & Rendering Systems
-
-### Phase 10: ECS Rendering Systems
-- **`src/ecs/components.rs`**: Defined `TransformComponent` and `RenderComponent`.
-- **`src/renderer/vulkan/pipeline.rs`**: Push Constants setup.
-- **`src/app/application.rs`**: Mapped Entity components to Vulkan Push Constants and `cmd_draw` calls.
-
-### Phase 11: Camera & Depth Buffering
-- **`src/math/mat4.rs`**: Implemented `perspective` and `look_at` matrix generation.
-- **`src/ecs/components.rs`**: Added `CameraComponent`.
-- **`src/renderer/vulkan/swapchain.rs`**: Added Depth buffer attachment (`vk::Format::D32_SFLOAT`).
-- **`src/renderer/vulkan/pipeline.rs`**: Enabled depth testing.
-
-### Phase 12: Interactive Camera Controls (Fly/FPS Camera)
-- **`src/app/input.rs`**: Added mouse delta tracking and keyboard states.
-- **`src/app/application.rs`**: Hooked up input to WASD translation and mouse rotation for the camera.
-
-### Phase 13: Mesh Loading & Index Buffers
-- **`src/renderer/vulkan/mesh.rs`**: Custom zero-dependency `.obj` parser and index buffer creation.
-- **`src/app/application.rs`**: Loaded `cube.obj` and enabled indexed drawing.
-
-### Phase 14: Lighting (Directional Lights & Basic Shading)
-- **`src/ecs/components.rs`**: Added `LightComponent`.
-- **`shaders/shader.*`**: Updated shaders to calculate Lambertian diffuse lighting.
-
-### Phase 15: Textures & Materials (Descriptor Sets & Samplers)
-- **`src/renderer/vulkan/texture.rs`**: Generated procedural checkerboard texture and uploaded to `vk::Image`.
-- **`src/app/application.rs`, `pipeline.rs`**: Setup descriptor pools, layout, and bound them for rendering.
-
-### Phase 16: Scene Graph & Hierarchy (Parent/Child Transforms)
-- **`src/ecs/components.rs`**: Added `HierarchyComponent`.
-- **`src/app/application.rs`**: Computed nested `world_matrices` dynamically during the render loop (e.g. Moon orbiting Planet).
-
----
-
-## Backlog — Prioritised Next Steps
-
-### Phase 17: Asset Management & Real Image Loading
-| Priority | Status | Description |
-|---|---|---|
-| **P1** | **DONE** | Add `image` crate. Update texture loader to parse `.png` and `.jpg` from disk. |
-| **P1** | **DONE** | Create a system to load and cache textures so they aren't duplicated in VRAM. |
-
-### Phase 18: Complex Model Loading (GLTF/OBJ)
-| Priority | Status | Description |
-|---|---|---|
-| **P1** | **DONE** | Add `tobj` or `gltf` crate. |
-| **P1** | **DONE** | Load complex meshes with multiple sub-meshes and parse materials. |
-| **P1** | **DONE** | Update components to reference cached asset IDs. |
-
-### Phase 19: Advanced Lighting & PBR Materials
-| Priority | Status | Description |
-|---|---|---|
-| **P1** | **DONE** | Upgrade fragment shader to handle Physically Based Rendering (PBR). |
-| **P2** | **DONE** | Add `PointLightComponent` and allow multiple light sources in the UBO. |
-
-### Phase 20: Physics & Collisions
-| Priority | Status | Description |
-|---|---|---|
-| **P1** | **DONE** | Integrate a physics engine like `rapier3d`. |
-| **P1** | **DONE** | Add `RigidBodyComponent` and `ColliderComponent`. |
-| **P1** | **DONE** | Sync physics simulation state with visual `TransformComponent` each frame. |
-
-### Phase 21: Scene Serialization & UI
-| Priority | Status | Description |
-|---|---|---|
-| **P1** | **DONE** | Use `serde` to save and load entities and components to/from JSON. |
-| **P2** | **DONE** | Integrate `egui` to create a real-time developer interface to tweak variables without recompiling. |
-
----
-
-## Session Handoff Notes
-
-- **All files compile cleanly** under Rust stable 1.96.0 with `cargo clippy` passing clean. Unused variables in `application.rs` have been fixed.
-- **Rendering is fully functional:** Swapchain resizing logic is fixed, avoiding Windows DWM warping. The pipeline uses dynamic viewport/scissor states correctly. 
-- **Next steps are Asset loading and PBR:** The engine is ready for real 3D models and textures.
-- **Build system:** `Cargo.toml` at project root. `cargo build` / `cargo run`.
-- **Toolchain:** `stable-x86_64-pc-windows-gnu` (MinGW linker).
-
----
-
-
----
-
-## The Next-Generation Engine (V2 Master Plan)
-
-Having completed the foundational architecture (Phases 1-21), this section outlines the roadmap to transform this project into a full-fledged competitor to engines like Bevy and Fyrox. The focus is exclusively on **Developer Experience** and **Iteration Speed**.
-
-### Epic 1: The Editor Foundation (Egui Integration)
-| Priority | Status | File(s) | Description |
-|---|---|---|---|
-| **P1** | **DONE** | `Cargo.toml` | Add `egui`. |
-| **P1** | **DONE** | `platform/win32.rs` | Translate Win32 messages (scroll, characters, resize) into `egui::RawInput`. |
-| **P1** | **DONE** | `renderer/vulkan/egui_backend.rs` | Custom pipeline to stream `egui` clipped meshes and render the UI overlay. |
-
-### Epic 2: Offscreen Rendering (The Viewport)
-| Priority | Status | File(s) | Description |
-|---|---|---|---|
-| **P1** | **DONE** | `renderer/vulkan/offscreen.rs` | Create an offscreen render target (color + depth). |
-| **P1** | **DONE** | `app/application.rs` | Render the game to the offscreen texture, then pass it to `egui` to draw inside an Editor Window. |
-
-### Epic 3: ECS Reflection & Scene Inspector
-| Priority | Status | File(s) | Description |
-|---|---|---|---|
-| **P1** | **DONE** | `ecs/reflection.rs` | Build a component registry to expose component fields dynamically. |
-| **P2** | **DONE** | `app/editor.rs` | Build the Hierarchy (Entity tree) and Inspector (Component properties) panels. |
-
-### Epic 4: Native DLL Hot-Reloading (The Killer Feature)
-| Priority | File(s) | Description |
-|---|---|---|
-| **P1** | **DONE** | `src/lib.rs` -> `host` vs `game` | Split the engine into a Host executable (Renderer + ECS Memory) and a Game DLL (Systems). |
-| **P1** | **DONE** | `platform/hot_reload.rs` | Watch the DLL file, seamlessly unload and reload it when recompiled, maintaining ECS state. |
-
-### Epic 5: Asset Pipeline & VFS
-| Priority | File(s) | Description |
-|---|---|---|
-| **P2** | **DONE** | `asset_manager.rs` | File watcher for hot-reloading shaders, textures, and models instantly. |
-| **P3** | **DONE** | `vfs.rs` | Virtual File System for packing assets into a release binary. |
-
-### Epic 6: Job System & Multithreading
-| Priority | File(s) | Description |
-|---|---|---|
-| **P2** | `ecs/system.rs` | Declare read/write access requirements for systems. |
-| **P3** | `ecs/scheduler.rs` | Build a dependency graph and use a thread pool to run non-overlapping systems concurrently. |
-
-### Epic: Advanced PBR & Render Graph
-| Priority | Status | Feature | Description |
-|---|---|---|---|
-| **P1** | **DONE** | Render Graph Architecture | Shift from hardcoded RenderPasses to a dynamic, node-based Render Graph to automatically manage Vulkan image transitions, subpasses, and memory aliasing. |
-| **P1** | **DONE** | Physically Based Rendering (PBR) | Implement full metallic-roughness PBR pipelines, Image-Based Lighting (IBL), Irradiance volumes, and HDR tonemapping (ACES). |
-| **P2** | **DONE** | Global Illumination & Shadows | Cascaded Shadow Maps (CSM) for directional lights, Omnidirectional shadows for point lights, and Voxel Cone Tracing or Screen Space Global Illumination (SSGI). |
-| **P3** | **DONE** | Post-Processing Foundation | Implemented basic PostProcessPipeline, full-screen triangle generation, and ACES Tonemapping integration. |
-| **P3** | **DONE** | Advanced Post-Processing | Implemented Bloom (downsample/upsample chain) and integrated ACES Tonemapping safely with Vulkan descriptor lifetimes. |
-
----
-
-## Session Handoff Notes (July 1st, 2026)
-- **SUCCESS**: Epic 4 (Native DLL Hot-Reloading) is fully complete! The engine is now split into `engine.exe` and `game.dll`. Hot reloading is instant and seamless without dropping the Vulkan device or ECS memory.
-- **SUCCESS**: Debugged and fixed a critical architectural bug involving cross-DLL `TypeId` boundary mismatches in the ECS. Component IDs are now hardcoded via `std::any::type_name::<T>()` mapping in `types.rs`, ensuring `engine.exe` and `game.dll` agree on memory layouts and arrays, solving the "nothing moves" silent failure.
-- **SUCCESS**: Cleaned up minor compilation warnings (unused variables, unused imports) in the engine codebase. The `engine` and `game` crates both compile perfectly clean.
-- **Next Steps**: With Hot-Reloading functional, development speed is vastly improved. The next logical step is **Epic 2: Offscreen Rendering (The Viewport)** to allow the `egui` editor to render the game world inside a scalable panel, or **Epic 6: Job System & Multithreading** to parallelize systems.
+### Test Suite
+Run tests via `cargo test`. Contains 21 tests covering:
+- Memory alignment, stack limits, arena save/restores, and OS region mapping.
+- ECS Entity ID lifecycle, generational bounds, component mapping.
+- Mutability safety across the Multithreaded Job System execution graph.
+- Application boot-up, initialization, and hot-reload DLL teardown loops. 
+*(Note: A minor known Vulkan validation leak occurs during teardown in `test_app` solely due to OS `libloading` unload order, not affecting actual runtime).*

@@ -130,6 +130,14 @@ impl Default for CameraComponent {
     }
 }
 
+impl ReflectComponent for CameraComponent {
+    fn name() -> &'static str { "Camera" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.label("Camera active");
+        false
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct LightComponent {
     pub direction: Vec3,
@@ -188,12 +196,91 @@ pub struct HierarchyComponent {
     pub local_matrix: crate::math::mat4::Mat4,
 }
 
+impl ReflectComponent for HierarchyComponent {
+    fn name() -> &'static str { "Hierarchy" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        if let Some(parent) = self.parent {
+            ui.label(format!("Parent Entity: {}", parent));
+        } else {
+            ui.label("Parent Entity: None");
+        }
+        false
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RigidBodyComponent {
     pub handle: rapier3d::dynamics::RigidBodyHandle,
 }
 
+impl ReflectComponent for RigidBodyComponent {
+    fn name() -> &'static str { "Rigid Body" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.label(format!("Handle Index: {}", self.handle.into_raw_parts().0));
+        false
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct ColliderComponent {
     pub handle: rapier3d::geometry::ColliderHandle,
+}
+
+impl ReflectComponent for ColliderComponent {
+    fn name() -> &'static str { "Collider" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.label(format!("Handle Index: {}", self.handle.into_raw_parts().0));
+        false
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AudioListenerComponent;
+
+impl Default for AudioListenerComponent {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl ReflectComponent for AudioListenerComponent {
+    fn name() -> &'static str { "Audio Listener" }
+    fn draw_inspector(&mut self, _ui: &mut egui::Ui) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AudioEmitterComponent {
+    pub asset_path: crate::containers::FixedString<128>,
+    pub volume: f32,
+    pub max_distance: f32,
+    pub is_playing: bool,
+    pub loop_audio: bool,
+}
+
+impl Default for AudioEmitterComponent {
+    fn default() -> Self {
+        let mut path = crate::containers::FixedString::new();
+        path.push_str("sounds/engine.ogg");
+        Self {
+            asset_path: path,
+            volume: 1.0,
+            max_distance: 100.0,
+            is_playing: true,
+            loop_audio: true,
+        }
+    }
+}
+
+impl ReflectComponent for AudioEmitterComponent {
+    fn name() -> &'static str { "Audio Emitter" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        changed |= ui.checkbox(&mut self.is_playing, "Playing").changed();
+        changed |= ui.checkbox(&mut self.loop_audio, "Loop").changed();
+        changed |= ui.add(egui::Slider::new(&mut self.volume, 0.0..=2.0).text("Volume")).changed();
+        changed |= ui.add(egui::Slider::new(&mut self.max_distance, 1.0..=500.0).text("Max Distance")).changed();
+        changed
+    }
 }

@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod app;
 pub mod asset_manager;
 pub mod containers;
