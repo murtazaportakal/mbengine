@@ -53,15 +53,11 @@ impl Swapchain {
         };
 
         let format = formats
-            .into_iter()
-            .find(|f| {
-                f.format == vk::Format::B8G8R8A8_SRGB
-                    && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-            })
-            .unwrap_or(vk::SurfaceFormatKHR {
-                format: vk::Format::B8G8R8A8_SRGB,
-                color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-            });
+            .iter()
+            .find(|f| f.format == vk::Format::B8G8R8A8_UNORM)
+            .or_else(|| formats.iter().find(|f| f.format == vk::Format::R8G8B8A8_UNORM))
+            .cloned()
+            .unwrap_or(formats[0]);
 
         let caps = unsafe {
             surface_loader

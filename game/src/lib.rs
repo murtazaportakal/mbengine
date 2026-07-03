@@ -3,6 +3,7 @@ use engine::ecs::types::{build_mask, get_component_type_id};
 use engine::ecs::scheduler::Scheduler;
 use engine::physics::PhysicsSystem;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 struct SpinSystem;
 
@@ -48,7 +49,8 @@ impl System for SpinSystem {
 }
 
 // Ensure the Scheduler is reused to avoid rebuilding the graph every frame.
-static mut SCHEDULER: Option<Scheduler> = None;
+// Uses OnceLock for safe, lazy one-time initialization without `static mut`.
+static SCHEDULER: OnceLock<std::sync::Mutex<Scheduler>> = OnceLock::new();
 
 #[no_mangle]
 pub extern "C" fn game_update(world: &mut World, physics: &mut PhysicsSystem, dt: f32) {
@@ -56,15 +58,13 @@ pub extern "C" fn game_update(world: &mut World, physics: &mut PhysicsSystem, dt
     physics.update(dt, world);
 
     // 2. Custom Game Logic using Job System
-    let scheduler = unsafe {
-        if SCHEDULER.is_none() {
-            let mut s = Scheduler::new();
-            s.add_system(Box::new(SpinSystem));
-            s.build_graph();
-            SCHEDULER = Some(s);
-        }
-        SCHEDULER.as_mut().unwrap()
-    };
+    let scheduler_mutex = SCHEDULER.get_or_init(|| {
+        let mut s = Scheduler::new();
+        s.add_system(Box::new(SpinSystem));
+        s.build_graph();
+        std::sync::Mutex::new(s)
+    });
 
+    let scheduler = &mut *scheduler_mutex.lock().unwrap();
     scheduler.execute(world, dt);
 }

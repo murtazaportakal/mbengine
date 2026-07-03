@@ -22,6 +22,7 @@ pub struct Mesh {
     pub meshlet_buffer: Buffer,
     pub meshlet_count: u32,
     pub indirect_buffer: Buffer,
+    pub vertex_count: u32,
 }
 
 impl Mesh {
@@ -69,7 +70,7 @@ impl Mesh {
                     [0.0, 0.0]
                 };
 
-                vertices.push(Vertex { pos, normal, uv });
+                vertices.push(Vertex { pos, normal, uv, joint_ids: [0; 4], joint_weights: [0.0; 4] });
             }
 
             let indices = mesh.indices.clone();
@@ -169,18 +170,64 @@ impl Mesh {
             loaded_meshes.push(Self {
                 vertex_buffer,
                 index_buffer,
-                index_count: global_indices.len() as u32,
+                index_count: mesh.indices.len() as u32,
                 meshlet_buffer,
                 meshlet_count: meshlet_data_vec.len() as u32,
                 indirect_buffer,
+                vertex_count: vertices.len() as u32,
             });
         }
 
-        if loaded_meshes.is_empty() {
-            None
-        } else {
-            Some(loaded_meshes)
+        Some(loaded_meshes)
+    }
+
+    /// Create a Mesh directly from pre-parsed vertex and index data (e.g., from GLTF).
+    /// Skips meshlet generation for simplicity — uses a single draw call.
+    pub fn from_gltf_data(
+        vulkan: &VulkanDevice,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) -> Option<Self> {
+        if vertices.is_empty() || indices.is_empty() {
+            return None;
         }
+
+        let vertex_buffer =
+            Buffer::new_device_local(vulkan, vertices, vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER)?;
+
+        let index_buffer =
+            Buffer::new_device_local(vulkan, indices, vk::BufferUsageFlags::INDEX_BUFFER)?;
+
+        // Single meshlet covering the entire mesh
+        let meshlet_data = vec![MeshletData {
+            center: [0.0; 3],
+            radius: f32::MAX,
+            index_offset: 0,
+            triangle_count: indices.len() as u32 / 3,
+            padding: [0; 2],
+        }];
+
+        let meshlet_buffer = Buffer::new_device_local(
+            vulkan,
+            &meshlet_data,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        )?;
+
+        let indirect_buffer = Buffer::new_device_local(
+            vulkan,
+            &vec![0u8; 20], // Single indirect command (5 u32s)
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+        )?;
+
+        Some(Self {
+            vertex_buffer,
+            index_buffer,
+            index_count: indices.len() as u32,
+            meshlet_buffer,
+            meshlet_count: 1,
+            indirect_buffer,
+            vertex_count: vertices.len() as u32,
+        })
     }
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {

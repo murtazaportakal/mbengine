@@ -10,6 +10,7 @@ fn main() {
     println!("cargo:rerun-if-changed=shaders/post_process.frag");
     println!("cargo:rerun-if-changed=shaders/bloom_downsample.frag");
     println!("cargo:rerun-if-changed=shaders/bloom_upsample.frag");
+    println!("cargo:rerun-if-changed=shaders/skinning.comp");
 
     // First try local glslangValidator
     let local_compiler = PathBuf::from("glslang")
@@ -135,5 +136,17 @@ fn main() {
 
     if !bloom_up_status.success() {
         panic!("Failed to compile bloom_upsample.frag");
+    }
+
+    // Compile Skinning Compute Shader
+    let mut skin_args = args.clone();
+    skin_args.extend(vec!["shaders/skinning.comp", "-o", "shaders/skinning.spv"]);
+    let skin_status = Command::new(&compiler)
+        .args(&skin_args)
+        .status()
+        .expect("Failed to execute shader compiler for skinning.comp");
+
+    if !skin_status.success() {
+        panic!("Failed to compile skinning.comp");
     }
 }

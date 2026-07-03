@@ -1,4 +1,5 @@
 use crate::renderer::vulkan::{Mesh, Texture, VulkanDevice};
+use crate::renderer::vulkan::skeleton::{Skeleton, AnimationClip};
 use crate::vfs::Vfs;
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,6 +20,12 @@ pub struct AssetManager {
     texture_paths: HashMap<String, String>, 
     model_paths: HashMap<String, String>,
 
+    /// Skeletons loaded from GLTF files, keyed by asset name.
+    skeletons: HashMap<String, Skeleton>,
+    /// Animation clips loaded from GLTF files, keyed by asset name.
+    /// Each GLTF can contain multiple clips.
+    animation_clips: HashMap<String, Vec<AnimationClip>>,
+
     pub vfs: Vfs,
     watcher: Option<notify::RecommendedWatcher>,
     rx: Option<std::sync::mpsc::Receiver<notify::Result<notify::Event>>>,
@@ -38,6 +45,8 @@ impl AssetManager {
             model_map: HashMap::new(),
             texture_paths: HashMap::new(),
             model_paths: HashMap::new(),
+            skeletons: HashMap::new(),
+            animation_clips: HashMap::new(),
             vfs: Vfs::default(),
             watcher: None,
             rx: None,
@@ -124,6 +133,54 @@ impl AssetManager {
             }
         }
         self.model_map.get(path).map(|v| v.as_slice())
+    }
+
+    /// Load a GLTF/GLB file containing meshes, skeleton, and animation clips.
+    ///
+    /// Returns the mesh indices for the loaded primitives, or None on failure.
+    pub fn load_gltf(&mut self, vulkan: &VulkanDevice, name: &str, path: &str) -> Option<&[usize]> {
+        if self.model_map.contains_key(name) {
+            return self.model_map.get(name).map(|v| v.as_slice());
+        }
+
+        let gltf_data = crate::renderer::vulkan::gltf_loader::load_gltf(path)?;
+
+        // Store meshes
+        let mut indices = Vec::with_capacity(gltf_data.primitives.len());
+        for (vertices, idx_data) in &gltf_data.primitives {
+            let mesh = Mesh::from_gltf_data(vulkan, vertices, idx_data)?;
+            indices.push(self.meshes.len());
+            self.meshes.push(mesh);
+        }
+        self.model_map.insert(name.to_string(), indices);
+        self.model_paths.insert(path.to_string(), name.to_string());
+
+        // Store skeleton
+        if let Some(skeleton) = gltf_data.skeleton {
+            self.skeletons.insert(name.to_string(), skeleton);
+        }
+
+        // Store animation clips
+        if !gltf_data.clips.is_empty() {
+            self.animation_clips.insert(name.to_string(), gltf_data.clips);
+        }
+
+        self.model_map.get(name).map(|v| v.as_slice())
+    }
+
+    /// Get a skeleton by name.
+    pub fn get_skeleton(&self, name: &str) -> Option<&Skeleton> {
+        self.skeletons.get(name)
+    }
+
+    /// Get animation clips for a named asset.
+    pub fn get_animation_clips(&self, name: &str) -> Option<&[AnimationClip]> {
+        self.animation_clips.get(name).map(|v| v.as_slice())
+    }
+
+    /// Find an animation clip by asset name and clip name.
+    pub fn get_animation_clip(&self, asset_name: &str, clip_name: &str) -> Option<&AnimationClip> {
+        self.animation_clips.get(asset_name)?.iter().find(|c| c.name == clip_name)
     }
 
     pub fn poll_changes(&mut self, vulkan: &VulkanDevice) -> Vec<AssetEvent> {

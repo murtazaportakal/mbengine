@@ -544,6 +544,13 @@ impl Texture {
             barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
             source_stage = vk::PipelineStageFlags::TRANSFER;
             destination_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+        } else if old_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+            && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        {
+            barrier.src_access_mask = vk::AccessFlags::SHADER_READ;
+            barrier.dst_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+            source_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+            destination_stage = vk::PipelineStageFlags::TRANSFER;
         } else {
             panic!("Unsupported layout transition!");
         }
@@ -559,6 +566,78 @@ impl Texture {
                 std::slice::from_ref(&barrier),
             );
         }
+    }
+
+    pub fn update_region(
+        &self,
+        vulkan: &VulkanDevice,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Option<()> {
+        let buffer_size = pixels.len() as u64;
+        let mut staging_buffer = Buffer::new(
+            vulkan,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        staging_buffer.upload(vulkan, pixels);
+
+        let cmd = vulkan.begin_single_time_commands()?;
+
+        Self::transition_image_layout(
+            vulkan,
+            cmd,
+            self.image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+
+        let region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .image_offset(vk::Offset3D { x: x as i32, y: y as i32, z: 0 })
+            .image_extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            });
+
+        unsafe {
+            vulkan.device.cmd_copy_buffer_to_image(
+                cmd,
+                staging_buffer.handle,
+                self.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                std::slice::from_ref(&region),
+            );
+        }
+
+        Self::transition_image_layout(
+            vulkan,
+            cmd,
+            self.image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        vulkan.end_single_time_commands(cmd);
+        staging_buffer.shutdown(vulkan);
+
+        Some(())
     }
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {

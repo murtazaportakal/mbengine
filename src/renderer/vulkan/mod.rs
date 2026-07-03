@@ -11,6 +11,9 @@ pub mod swapchain;
 pub mod texture;
 pub mod bloom;
 pub mod compute_cull;
+pub mod skeleton;
+pub mod gltf_loader;
+pub mod compute_skinning;
 
 pub use buffer::Buffer;
 pub use device::VulkanDevice;

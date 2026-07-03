@@ -1,5 +1,6 @@
 [workspace]
 members = ["game"]
+default-members = [".", "game"]
 
 [package]
 name = "engine"
@@ -36,3 +37,5 @@ notify = "6.1.1"
 libloading = "0.8"
 meshopt = "0.3"
 rodio = "0.17.3"
+gltf = "1.4"
+rfd = "0.17.2"

@@ -1,6 +1,6 @@
 # Custom Game Engine — Architecture & Roadmap
 
-> **Last updated:** 2026-07-02 — V1/V2 Completion & Transition to V3.
+> **Last updated:** 2026-07-03 — V1/V2 Final Stability Polish & Editor UI Improvements
 
 ---
 
@@ -24,6 +24,12 @@ These rules are **non-negotiable** across all future sessions and govern the eng
 ## Engine Features & Architecture (V1 & V2 Completed)
 
 The engine has reached full maturity for its baseline requirements. All V1 and V2 epics are 100% complete and actively functional in the repository.
+
+### Recent Polish (July 3, 2026)
+- **ECS Parallelization**: Upgraded component iteration to use `rayon`'s `par_iter_chunks` for massively improved data-oriented traversal.
+- **Editor UX**: Revamped Egui theme (light gray, sharp corners, distinct dropdown shadows).
+- **Vulkan Fixes**: Corrected Swapchain format selection to strictly prioritize `B8G8R8A8_UNORM` to prevent red/blue channel swaps, and fixed font texture descriptor tracking.
+- **Asynchronous IO**: Offloaded blocking native file dialogs (`rfd`) to background threads to prevent OS 'ghosting' overlays and thread deadlocks.
 
 ### 1. Memory Management Subsystem (`src/memory/`)
 - **Zero OS Heap on Hot Path**: The engine pre-allocates a 256 MB block from the OS (via `VirtualAlloc`/`mmap`) and slices it into distinct regions (Frame, Persistent, ECS, Stack).

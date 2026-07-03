@@ -101,7 +101,7 @@ fn registry() -> &'static Mutex<ComponentTypeRegistry> {
     REGISTRY.get_or_init(|| {
         Mutex::new(ComponentTypeRegistry {
             map: HashMap::new(),
-            next_id: 8,
+            next_id: 10,
         })
     })
 }
@@ -121,6 +121,8 @@ pub fn get_component_type_id<T: 'static>() -> ComponentTypeId {
     if name.contains("HierarchyComponent") { return 5; }
     if name.contains("RigidBodyComponent") { return 6; }
     if name.contains("ColliderComponent") { return 7; }
+    if name.contains("SkeletonComponent") { return 8; }
+    if name.contains("AnimatorComponent") { return 9; }
     
     // Fallback for any other types
     let type_id = TypeId::of::<T>();
@@ -154,7 +156,7 @@ pub fn build_mask(type_ids: &[ComponentTypeId]) -> ComponentMask {
 pub fn reset_component_registry() {
     let mut reg = registry().lock().unwrap();
     reg.map.clear();
-    reg.next_id = 8;
+    reg.next_id = 10;
 }
 
 #[cfg(test)]

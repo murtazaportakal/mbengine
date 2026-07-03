@@ -52,8 +52,12 @@ pub struct Application {
     pub compute_pipeline: Option<crate::renderer::vulkan::compute_cull::ComputeCullPipeline>,
     pub compute_descriptor_pool: vk::DescriptorPool,
     pub compute_descriptor_sets: std::collections::HashMap<usize, vk::DescriptorSet>,
+    pub skinning_pipeline: Option<crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline>,
+    pub skinning_descriptor_pool: vk::DescriptorPool,
+    pub skinning_instances: Vec<crate::renderer::vulkan::compute_skinning::SkinningInstance>,
     pub audio_subsystem: Option<crate::audio::AudioSubsystem>,
     pub audio_system: crate::audio::AudioSystem,
+    pub is_playing: bool,
 }
 
 impl Application {
@@ -82,10 +86,10 @@ impl Application {
         let offscreen_target =
             crate::renderer::vulkan::OffscreenTarget::new(&vulkan, target_width, target_height, vk::Format::R16G16B16A16_SFLOAT)?;
         let sdr_target =
-            crate::renderer::vulkan::OffscreenTarget::new(&vulkan, target_width, target_height, vk::Format::B8G8R8A8_UNORM)?;
+            crate::renderer::vulkan::OffscreenTarget::new(&vulkan, target_width, target_height, vk::Format::R8G8B8A8_UNORM)?;
         let mip_levels = 6;
         let bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(&vulkan, target_width / 2, target_height / 2, mip_levels)?;
-        let post_process = crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::B8G8R8A8_UNORM)?;
+        let post_process = crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::R8G8B8A8_UNORM)?;
 
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -155,6 +159,20 @@ impl Application {
         // We can pass a dummy max_meshlets to new() since it no longer allocates an indirect buffer
         let compute_pipeline =
             crate::renderer::vulkan::compute_cull::ComputeCullPipeline::new(&vulkan);
+
+        let skinning_pipeline = crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline::new(&vulkan);
+        
+        let skinning_pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1000), // Max skinning instances * 3 SSBOs
+        ];
+        let skinning_pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&skinning_pool_sizes)
+            .max_sets(500);
+        let skinning_descriptor_pool = unsafe {
+            vulkan.device.create_descriptor_pool(&skinning_pool_info, None).unwrap()
+        };
 
         let mut asset_manager = crate::asset_manager::AssetManager::new();
         let mut descriptor_pool = vk::DescriptorPool::null();
@@ -321,6 +339,8 @@ impl Application {
             world.register_component::<crate::ecs::components::ColliderComponent>(1000);
             world.register_component::<crate::ecs::components::AudioListenerComponent>(10);
             world.register_component::<crate::ecs::components::AudioEmitterComponent>(100);
+            world.register_component::<crate::ecs::components::SkeletonComponent>(100);
+            world.register_component::<crate::ecs::components::AnimatorComponent>(100);
         }
 
         let mut physics = crate::physics::PhysicsSystem::new();
@@ -604,6 +624,7 @@ impl Application {
         }
 
         let egui_ctx = egui::Context::default();
+        crate::app::editor::configure_theme(&egui_ctx);
         let mut egui_backend =
             crate::renderer::vulkan::EguiBackend::new(&vulkan, swapchain.format.format);
         let offscreen_texture_id = egui_backend.register_user_texture(
@@ -650,8 +671,12 @@ impl Application {
             compute_pipeline,
             compute_descriptor_pool,
             compute_descriptor_sets: std::collections::HashMap::new(),
+            skinning_pipeline,
+            skinning_descriptor_pool,
+            skinning_instances: Vec::new(),
             audio_subsystem,
             audio_system,
+            is_playing: false,
         };
         app.update_post_process_descriptors();
         Some(app)
@@ -737,7 +762,7 @@ impl Application {
             &self.vulkan,
             target_width,
             target_height,
-            vk::Format::B8G8R8A8_UNORM,
+            vk::Format::R8G8B8A8_UNORM,
         )
         .unwrap();
 
@@ -786,19 +811,74 @@ impl Application {
             self.egui_ctx.begin_frame(raw_input);
             self.egui_ctx.set_zoom_factor(ppp);
 
-            if let Some(reloader) = &mut self.hot_reloader {
-                reloader.update();
-                reloader.call_game_update(&mut self.world, &mut self.physics, dt as f32);
+            if self.is_playing {
+                if let Some(reloader) = &mut self.hot_reloader {
+                    reloader.update();
+                    reloader.call_game_update(&mut self.world, &mut self.physics, dt as f32);
+                }
+                
+                use crate::ecs::System;
+                self.audio_system.update(dt as f32, &self.world);
+                crate::ecs::animation_system::process_animations(&self.world, &self.asset_manager, dt as f32);
             }
-            
-            use crate::ecs::System;
-            self.audio_system.update(dt as f32, &self.world);
 
             let mut new_viewport_size = None;
             let mut raycast_request = None;
             let mut viewport_hovered = false;
 
-            self.editor.draw(&self.egui_ctx, &mut self.world, &mut self.physics, &mut self.selected_entity, &mut self.bloom_threshold, 1.0 / dt as f32);
+            let actions = self.editor.draw(&self.egui_ctx, &mut self.world, &mut self.physics, &mut self.selected_entity, &mut self.bloom_threshold, 1.0 / dt as f32, self.is_playing);
+
+            for action in actions {
+                match action {
+                    crate::app::editor::EditorAction::Play => {
+                        self.is_playing = true;
+                    }
+                    crate::app::editor::EditorAction::Pause => {
+                        self.is_playing = false;
+                    }
+                    crate::app::editor::EditorAction::SpawnModel(path) => {
+                        let new_entity = self.world.create_entity();
+                        
+                        // Load model using AssetManager
+                        let lower = path.to_lowercase();
+                        let mesh_idx = if lower.ends_with(".obj") {
+                            self.asset_manager.load_model(&self.vulkan, &path).map(|m| m[0])
+                        } else if lower.ends_with(".gltf") || lower.ends_with(".glb") {
+                            self.asset_manager.load_gltf(&self.vulkan, &path, &path).map(|m| m[0])
+                        } else {
+                            None
+                        };
+
+                        unsafe {
+                            self.world.add_component(
+                                new_entity,
+                                crate::ecs::TransformComponent {
+                                    position: crate::math::vec::Vec3::new(0.0, 0.0, 0.0),
+                                    rotation: crate::math::vec::Vec3::new(0.0, 0.0, 0.0),
+                                    scale: crate::math::vec::Vec3::new(1.0, 1.0, 1.0),
+                                    matrix: crate::math::mat4::Mat4::identity(),
+                                },
+                            );
+                            self.world.add_component(
+                                new_entity,
+                                crate::ecs::RenderComponent {
+                                    visible: true,
+                                    mesh_index: mesh_idx.unwrap_or(0),
+                                    metallic: 0.0,
+                                    roughness: 0.8,
+                                },
+                            );
+                            self.world.add_component(
+                                new_entity,
+                                crate::ecs::components::HierarchyComponent {
+                                    parent: None,
+                                    local_matrix: crate::math::mat4::Mat4::identity(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
 
             egui::CentralPanel::default().show(&self.egui_ctx, |ui| {
                 let size = ui.available_size();
@@ -927,7 +1007,7 @@ impl Application {
                         crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h, vk::Format::R16G16B16A16_SFLOAT).unwrap(),
                     );
                     self.sdr_target.shutdown(&self.vulkan);
-                    self.sdr_target = crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h, vk::Format::B8G8R8A8_UNORM).unwrap();
+                    self.sdr_target = crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h, vk::Format::R8G8B8A8_UNORM).unwrap();
                     
                     self.bloom_target.shutdown(&self.vulkan);
                     self.bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(&self.vulkan, (w / 2).max(1), (h / 2).max(1), 6).unwrap();
@@ -1201,9 +1281,12 @@ impl Application {
             self.world_matrices = world_matrices;
 
             let full_output = self.egui_ctx.end_frame();
-            for (_id, delta) in full_output.textures_delta.set {
+            for (id, delta) in full_output.textures_delta.set {
                 self.egui_backend
-                    .update_texture(&self.vulkan, egui::TextureId::Managed(0), &delta);
+                    .update_texture(&self.vulkan, id, &delta);
+            }
+            for id in full_output.textures_delta.free {
+                self.egui_backend.free_texture(&self.vulkan, id);
             }
             let clipped_primitives = self
                 .egui_ctx
@@ -1432,6 +1515,57 @@ impl Application {
                 .unwrap();
         }
 
+        // --- Compute Skinning Pre-pass Setup ---
+        let mut skinning_dispatches = Vec::new();
+        if let Some(skinning_pipeline) = &self.skinning_pipeline {
+            let skeletons = self.world.get_component_array::<crate::ecs::components::SkeletonComponent>();
+            let renders = self.world.get_component_array::<crate::ecs::RenderComponent>();
+            let entities = skeletons.dense_entities_slice();
+
+            for (i, skeleton_comp) in skeletons.as_slice().iter().enumerate() {
+                let entity = entities[i];
+                if !renders.has(entity) {
+                    continue;
+                }
+                let render = unsafe { renders.get(entity) };
+                if !render.visible { continue; }
+                
+                let mesh_index = render.mesh_index;
+                if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
+                    let mut instance_idx = skeleton_comp.skinning_instance_index;
+                    
+                    if instance_idx.is_none() {
+                        if let Some(new_instance) = crate::renderer::vulkan::compute_skinning::SkinningInstance::new(
+                            &self.vulkan,
+                            skinning_pipeline,
+                            self.skinning_descriptor_pool,
+                            mesh.vertex_buffer.handle,
+                            mesh.vertex_count,
+                        ) {
+                            let idx = self.skinning_instances.len();
+                            self.skinning_instances.push(new_instance);
+                            instance_idx = Some(idx);
+                            
+                            let skeletons_mut = unsafe { self.world.get_component_array_mut_unchecked::<crate::ecs::components::SkeletonComponent>() };
+                            let sk_mut = unsafe { skeletons_mut.get_mut(entity) };
+                            sk_mut.skinning_instance_index = Some(idx);
+                        }
+                    }
+
+                    if let Some(idx) = instance_idx {
+                        if idx < self.skinning_instances.len() {
+                            let instance = &mut self.skinning_instances[idx];
+                            if !skeleton_comp.computed_matrices.is_empty() {
+                                instance.upload_bone_matrices(&self.vulkan, &skeleton_comp.computed_matrices);
+                            }
+                            
+                            skinning_dispatches.push((idx, mesh.vertex_count));
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Compute Culling Pre-pass Setup ---
         let mut compute_dispatches = Vec::new();
         if let Some(compute) = &self.compute_pipeline {
@@ -1472,6 +1606,72 @@ impl Application {
                             let set = self.compute_descriptor_sets[&mesh_index];
                             compute_dispatches.push((mesh_index, mesh.meshlet_count, world_matrix, set));
                         }
+                    }
+                }
+            }
+
+            // Dispatch skinning compute for each animated entity
+            if !skinning_dispatches.is_empty() {
+                if let Some(skinning_pipeline) = &self.skinning_pipeline {
+                    unsafe {
+                        self.vulkan.device.cmd_bind_pipeline(
+                            command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            skinning_pipeline.pipeline,
+                        );
+                    }
+
+                    for (idx, vertex_count) in skinning_dispatches {
+                        let instance = &self.skinning_instances[idx];
+                        
+                        unsafe {
+                            self.vulkan.device.cmd_bind_descriptor_sets(
+                                command_buffer,
+                                vk::PipelineBindPoint::COMPUTE,
+                                skinning_pipeline.layout,
+                                0,
+                                std::slice::from_ref(&instance.descriptor_set),
+                                &[],
+                            );
+
+                            #[repr(C)]
+                            struct SkinningPushConstants {
+                                vertex_count: u32,
+                            }
+                            let pc = SkinningPushConstants { vertex_count };
+                            let pc_bytes = std::slice::from_raw_parts(
+                                &pc as *const _ as *const u8,
+                                std::mem::size_of::<SkinningPushConstants>(),
+                            );
+                            self.vulkan.device.cmd_push_constants(
+                                command_buffer,
+                                skinning_pipeline.layout,
+                                vk::ShaderStageFlags::COMPUTE,
+                                0,
+                                pc_bytes,
+                            );
+
+                            // 256 threads per group (match local_size_x in skinning.comp)
+                            let group_count_x = (vertex_count + 255) / 256;
+                            self.vulkan.device.cmd_dispatch(command_buffer, group_count_x, 1, 1);
+                        }
+                    }
+
+                    // Barrier: ensure skinning compute writes to SSBO are visible as vertex buffer reads in the graphics pass
+                    let memory_barrier = vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::VERTEX_ATTRIBUTE_READ);
+                    
+                    unsafe {
+                        self.vulkan.device.cmd_pipeline_barrier(
+                            command_buffer,
+                            vk::PipelineStageFlags::COMPUTE_SHADER,
+                            vk::PipelineStageFlags::VERTEX_INPUT,
+                            vk::DependencyFlags::empty(),
+                            std::slice::from_ref(&memory_barrier),
+                            &[],
+                            &[],
+                        );
                     }
                 }
             }
@@ -1711,10 +1911,22 @@ impl Application {
                                 );
 
                                 let mesh = self.asset_manager.get_mesh(render.mesh_index).unwrap();
+                                
+                                let mut vertex_buffer = mesh.vertex_buffer.handle;
+                                let skeletons = self.world.get_component_array::<crate::ecs::components::SkeletonComponent>();
+                                if skeletons.has(entity_index) {
+                                    let sk_comp = skeletons.get(entity_index);
+                                    if let Some(idx) = sk_comp.skinning_instance_index {
+                                        if idx < self.skinning_instances.len() {
+                                            vertex_buffer = self.skinning_instances[idx].skinned_vertex_buffer.handle;
+                                        }
+                                    }
+                                }
+
                                 self.vulkan.device.cmd_bind_vertex_buffers(
                                     command_buffer,
                                     0,
-                                    &[mesh.vertex_buffer.handle],
+                                    &[vertex_buffer],
                                     &[0],
                                 );
                                 self.vulkan.device.cmd_bind_index_buffer(
@@ -1977,8 +2189,17 @@ impl Drop for Application {
             if self.compute_descriptor_pool != vk::DescriptorPool::null() {
                 self.vulkan.device.destroy_descriptor_pool(self.compute_descriptor_pool, None);
             }
+            if self.skinning_descriptor_pool != vk::DescriptorPool::null() {
+                self.vulkan.device.destroy_descriptor_pool(self.skinning_descriptor_pool, None);
+            }
+            for mut instance in self.skinning_instances.drain(..) {
+                instance.shutdown(&self.vulkan);
+            }
             if let Some(mut cp) = self.compute_pipeline.take() {
                 cp.shutdown(&self.vulkan);
+            }
+            if let Some(mut sp) = self.skinning_pipeline.take() {
+                sp.shutdown(&self.vulkan);
             }
             if self.ubo_buffer != vk::Buffer::null() {
                 self.vulkan.device.destroy_buffer(self.ubo_buffer, None);

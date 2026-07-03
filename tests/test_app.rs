@@ -24,10 +24,5 @@ fn test_application_boot() {
         app.memory.frame_arena().reset(false);
     }
 
-    // Explicitly call the shutdown sequence usually handled in run()
-    app.vulkan.wait_idle();
-    app.swapchain.shutdown(&app.vulkan);
-    app.vulkan.shutdown();
-
     // Drop will happen implicitly at scope exit, destroying World before MemorySubsystem.
 }

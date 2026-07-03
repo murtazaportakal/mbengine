@@ -1,3 +1,4 @@
+pub mod animation_system;
 pub mod component_array;
 pub mod components;
 pub mod entity_manager;

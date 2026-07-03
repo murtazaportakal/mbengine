@@ -3,6 +3,8 @@
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
+layout(location = 3) in uvec4 inJointIds;     // Bone indices (unused in vertex shader — skinning done in compute)
+layout(location = 4) in vec4 inJointWeights;  // Bone weights (unused in vertex shader — skinning done in compute)
 
 layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec2 fragUV;

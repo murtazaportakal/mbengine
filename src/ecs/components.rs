@@ -46,39 +46,39 @@ impl ReflectComponent for TransformComponent {
     fn name() -> &'static str { "Transform" }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        ui.horizontal(|ui| {
-            ui.label("Pos X");
-            changed |= ui.add(egui::DragValue::new(&mut self.position.x).speed(0.1)).changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Pos Y");
-            changed |= ui.add(egui::DragValue::new(&mut self.position.y).speed(0.1)).changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Pos Z");
-            changed |= ui.add(egui::DragValue::new(&mut self.position.z).speed(0.1)).changed();
-        });
+        egui::Grid::new("transform_grid")
+            .num_columns(2)
+            .spacing([40.0, 4.0])
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label("Position");
+                ui.horizontal(|ui| {
+                    changed |= ui.add(egui::DragValue::new(&mut self.position.x).speed(0.1).prefix("X: ")).changed();
+                    changed |= ui.add(egui::DragValue::new(&mut self.position.y).speed(0.1).prefix("Y: ")).changed();
+                    changed |= ui.add(egui::DragValue::new(&mut self.position.z).speed(0.1).prefix("Z: ")).changed();
+                });
+                ui.end_row();
 
-        ui.horizontal(|ui| {
-            ui.label("Rot X");
-            changed |= ui.add(egui::DragValue::new(&mut self.rotation.x).speed(0.05)).changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Rot Y");
-            changed |= ui.add(egui::DragValue::new(&mut self.rotation.y).speed(0.05)).changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Rot Z");
-            changed |= ui.add(egui::DragValue::new(&mut self.rotation.z).speed(0.05)).changed();
-        });
+                ui.label("Rotation");
+                ui.horizontal(|ui| {
+                    changed |= ui.add(egui::DragValue::new(&mut self.rotation.x).speed(0.05).prefix("X: ")).changed();
+                    changed |= ui.add(egui::DragValue::new(&mut self.rotation.y).speed(0.05).prefix("Y: ")).changed();
+                    changed |= ui.add(egui::DragValue::new(&mut self.rotation.z).speed(0.05).prefix("Z: ")).changed();
+                });
+                ui.end_row();
 
-        ui.horizontal(|ui| {
-            ui.label("Scale  ");
-            changed |= ui.add(egui::DragValue::new(&mut self.scale.x).speed(0.1)).changed();
-            changed |= ui.add(egui::DragValue::new(&mut self.scale.y).speed(0.1)).changed();
-            changed |= ui.add(egui::DragValue::new(&mut self.scale.z).speed(0.1)).changed();
-        });
+                ui.label("Scale");
+                ui.horizontal(|ui| {
+                    changed |= ui.add(egui::DragValue::new(&mut self.scale.x).speed(0.1).prefix("X: ")).changed();
+                    changed |= ui.add(egui::DragValue::new(&mut self.scale.y).speed(0.1).prefix("Y: ")).changed();
+                    changed |= ui.add(egui::DragValue::new(&mut self.scale.z).speed(0.1).prefix("Z: ")).changed();
+                });
+                ui.end_row();
+            });
         
+        if changed {
+            self.update_matrix();
+        }
         changed
     }
 }
@@ -108,15 +108,32 @@ impl ReflectComponent for RenderComponent {
     fn name() -> &'static str { "Render" }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        changed |= ui.checkbox(&mut self.visible, "Visible").changed();
-        changed |= ui.add(egui::Slider::new(&mut self.metallic, 0.0..=1.0).text("Metallic")).changed();
-        changed |= ui.add(egui::Slider::new(&mut self.roughness, 0.0..=1.0).text("Roughness")).changed();
+        egui::Grid::new("render_grid")
+            .num_columns(2)
+            .spacing([40.0, 4.0])
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label("Visible");
+                changed |= ui.checkbox(&mut self.visible, "").changed();
+                ui.end_row();
+
+                ui.label("Metallic");
+                changed |= ui.add(egui::Slider::new(&mut self.metallic, 0.0..=1.0)).changed();
+                ui.end_row();
+
+                ui.label("Roughness");
+                changed |= ui.add(egui::Slider::new(&mut self.roughness, 0.0..=1.0)).changed();
+                ui.end_row();
+            });
         changed
     }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct CameraComponent {
+    pub fov: f32,
+    pub near: f32,
+    pub far: f32,
     pub view: Mat4,
     pub proj: Mat4,
 }
@@ -124,6 +141,9 @@ pub struct CameraComponent {
 impl Default for CameraComponent {
     fn default() -> Self {
         Self {
+            fov: 45.0,
+            near: 0.1,
+            far: 100.0,
             view: Mat4::identity(),
             proj: Mat4::perspective(std::f32::consts::FRAC_PI_4, 800.0 / 600.0, 0.1, 100.0),
         }
@@ -133,8 +153,25 @@ impl Default for CameraComponent {
 impl ReflectComponent for CameraComponent {
     fn name() -> &'static str { "Camera" }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
-        ui.label("Camera active");
-        false
+        let mut changed = false;
+        egui::Grid::new("camera_grid")
+            .num_columns(2)
+            .spacing([40.0, 4.0])
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label("FOV");
+                changed |= ui.add(egui::Slider::new(&mut self.fov, 10.0..=120.0)).changed();
+                ui.end_row();
+
+                ui.label("Near Plane");
+                changed |= ui.add(egui::DragValue::new(&mut self.near).speed(0.1)).changed();
+                ui.end_row();
+
+                ui.label("Far Plane");
+                changed |= ui.add(egui::DragValue::new(&mut self.far).speed(1.0)).changed();
+                ui.end_row();
+            });
+        changed
     }
 }
 
@@ -172,20 +209,25 @@ impl ReflectComponent for PointLightComponent {
     fn name() -> &'static str { "Point Light" }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        changed |= ui.add(egui::Slider::new(&mut self.intensity, 0.0..=100.0).text("Intensity")).changed();
-        
-        // Color picker
-        let mut rgb = [self.color.x, self.color.y, self.color.z];
-        ui.horizontal(|ui| {
-            ui.label("Color");
-            if ui.color_edit_button_rgb(&mut rgb).changed() {
-                self.color.x = rgb[0];
-                self.color.y = rgb[1];
-                self.color.z = rgb[2];
-                changed = true;
-            }
-        });
-        
+        egui::Grid::new("pointlight_grid")
+            .num_columns(2)
+            .spacing([40.0, 4.0])
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label("Color");
+                let mut color_arr = [self.color.x, self.color.y, self.color.z];
+                if ui.color_edit_button_rgb(&mut color_arr).changed() {
+                    self.color.x = color_arr[0];
+                    self.color.y = color_arr[1];
+                    self.color.z = color_arr[2];
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label("Intensity");
+                changed |= ui.add(egui::Slider::new(&mut self.intensity, 0.0..=100.0)).changed();
+                ui.end_row();
+            });
         changed
     }
 }
@@ -281,6 +323,84 @@ impl ReflectComponent for AudioEmitterComponent {
         changed |= ui.checkbox(&mut self.loop_audio, "Loop").changed();
         changed |= ui.add(egui::Slider::new(&mut self.volume, 0.0..=2.0).text("Volume")).changed();
         changed |= ui.add(egui::Slider::new(&mut self.max_distance, 1.0..=500.0).text("Max Distance")).changed();
+        changed
+    }
+}
+
+/// Links an entity to a named skeleton for GPU skinning.
+///
+/// The `skeleton_name` references a skeleton loaded by the AssetManager.
+/// The `skinning_instance_index` is the index into the application's skinning
+/// instance storage, set during scene setup.
+#[derive(Clone, Debug)]
+pub struct SkeletonComponent {
+    pub skeleton_name: crate::containers::FixedString<64>,
+    /// Index into the application's `skinning_instances` array.
+    /// Set during GLTF loading. `None` if not yet initialized.
+    pub skinning_instance_index: Option<usize>,
+    /// The final bone matrices computed by the AnimationSystem.
+    pub computed_matrices: Vec<crate::math::mat4::Mat4>,
+}
+
+impl Default for SkeletonComponent {
+    fn default() -> Self {
+        Self {
+            skeleton_name: crate::containers::FixedString::new(),
+            skinning_instance_index: None,
+            computed_matrices: Vec::new(),
+        }
+    }
+}
+
+impl ReflectComponent for SkeletonComponent {
+    fn name() -> &'static str { "Skeleton" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.label(format!("Skeleton: {}", self.skeleton_name.as_str()));
+        if let Some(idx) = self.skinning_instance_index {
+            ui.label(format!("Skinning Instance: {}", idx));
+        } else {
+            ui.label("Skinning Instance: Not bound");
+        }
+        false
+    }
+}
+
+/// Drives skeletal animation playback for entities with a SkeletonComponent.
+#[derive(Clone, Debug)]
+pub struct AnimatorComponent {
+    /// Name of the animation clip to play (references AssetManager).
+    pub clip_name: crate::containers::FixedString<64>,
+    /// Current playback time in seconds.
+    pub current_time: f32,
+    /// Playback speed multiplier (1.0 = normal).
+    pub speed: f32,
+    /// Whether the animation is currently playing.
+    pub is_playing: bool,
+    /// Whether the animation loops.
+    pub is_looping: bool,
+}
+
+impl Default for AnimatorComponent {
+    fn default() -> Self {
+        Self {
+            clip_name: crate::containers::FixedString::new(),
+            current_time: 0.0,
+            speed: 1.0,
+            is_playing: true,
+            is_looping: true,
+        }
+    }
+}
+
+impl ReflectComponent for AnimatorComponent {
+    fn name() -> &'static str { "Animator" }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        ui.label(format!("Clip: {}", self.clip_name.as_str()));
+        changed |= ui.checkbox(&mut self.is_playing, "Playing").changed();
+        changed |= ui.checkbox(&mut self.is_looping, "Looping").changed();
+        changed |= ui.add(egui::Slider::new(&mut self.speed, 0.0..=5.0).text("Speed")).changed();
+        ui.label(format!("Time: {:.2}s", self.current_time));
         changed
     }
 }

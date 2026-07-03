@@ -7,6 +7,8 @@ pub struct Vertex {
     pub pos: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    pub joint_ids: [u32; 4],     // Bone indices (up to 4 influences)
+    pub joint_weights: [f32; 4], // Per-bone blend weights
 }
 
 #[repr(C)]
@@ -88,6 +90,16 @@ impl Pipeline {
                 .location(2)
                 .format(vk::Format::R32G32_SFLOAT)
                 .offset(memoffset::offset_of!(Vertex, uv) as u32),
+            vk::VertexInputAttributeDescription::default()
+                .binding(0)
+                .location(3)
+                .format(vk::Format::R32G32B32A32_UINT)
+                .offset(memoffset::offset_of!(Vertex, joint_ids) as u32),
+            vk::VertexInputAttributeDescription::default()
+                .binding(0)
+                .location(4)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(memoffset::offset_of!(Vertex, joint_weights) as u32),
         ];
 
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()

@@ -41,6 +41,13 @@ impl HotReloader {
     pub fn reload(&mut self) {
         // Drop the old library so the file handle is released.
         self.library = None;
+
+        // If the DLL doesn't exist yet (first build), skip gracefully.
+        // The file watcher will detect it when it appears and trigger a reload.
+        if !std::path::Path::new(&self.dll_path).exists() {
+            println!("[HotReload] DLL not found yet at '{}', waiting for build...", self.dll_path);
+            return;
+        }
         
         // On Windows, rustc locks the DLL if it's loaded. 
         // We copy it to a temporary file and load the copy.

@@ -231,7 +231,18 @@ impl EguiBackend {
             }
         };
 
-        // TODO: Handle partial updates if image_delta.pos is Some
+        if let Some(pos) = image_delta.pos {
+            if id == egui::TextureId::Managed(0) {
+                if let Some(tex) = &self.font_texture {
+                    tex.update_region(vulkan, pos[0] as u32, pos[1] as u32, width, height, &pixels);
+                    return;
+                }
+            } else {
+                crate::log_info!("Warning: Partial update for untracked texture {:?}", id);
+                return;
+            }
+        }
+
         let texture = Texture::from_rgba8(vulkan, width, height, &pixels).unwrap();
 
         unsafe {
