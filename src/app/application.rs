@@ -18,7 +18,10 @@ pub struct Application {
     pub world: World,
     pub pipeline: Option<Pipeline>,
     pub asset_manager: crate::asset_manager::AssetManager,
-    pub world_matrices: std::collections::HashMap<u32, crate::math::mat4::Mat4>,
+    /// Pre-allocated flat map of entity-index → world matrix.
+    /// Cleared and rebuilt every frame. Capacity reserved at startup to avoid
+    /// heap allocations on the hot path.
+    pub world_matrices: Vec<(u32, crate::math::mat4::Mat4)>,
     pub ubo_buffer: vk::Buffer,
     pub ubo_memory: vk::DeviceMemory,
     pub descriptor_pool: vk::DescriptorPool,
@@ -43,20 +46,24 @@ pub struct Application {
     pub selected_entity: Option<crate::ecs::EntityId>,
     pub current_frame: usize,
     pub bloom_threshold: f32,
-    pub resource_tracker: std::collections::HashMap<
-        crate::renderer::vulkan::render_graph::ResourceHandle,
-        crate::renderer::vulkan::render_graph::ResourceState,
-    >,
+    /// Zero-allocation flat map tracking Vulkan image states across render
+    /// graph passes. Cleared and rebuilt each frame with no heap traffic.
+    pub resource_tracker: crate::renderer::vulkan::render_graph::ResourceTracker,
     pub editor: crate::app::editor::Editor,
     pub hot_reloader: Option<crate::app::hot_reload::HotReloader>,
     pub compute_pipeline: Option<crate::renderer::vulkan::compute_cull::ComputeCullPipeline>,
     pub compute_descriptor_pool: vk::DescriptorPool,
-    pub compute_descriptor_sets: std::collections::HashMap<usize, vk::DescriptorSet>,
-    pub skinning_pipeline: Option<crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline>,
+    /// Pre-allocated flat array of per-mesh compute descriptor sets.
+    /// Indexed by mesh index. Grown once when new meshes are loaded,
+    /// never during the frame loop.
+    pub compute_descriptor_sets: Vec<Option<vk::DescriptorSet>>,
+    pub skinning_pipeline:
+        Option<crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline>,
     pub skinning_descriptor_pool: vk::DescriptorPool,
     pub skinning_instances: Vec<crate::renderer::vulkan::compute_skinning::SkinningInstance>,
     pub audio_subsystem: Option<crate::audio::AudioSubsystem>,
     pub audio_system: crate::audio::AudioSystem,
+    pub script_engine: crate::scripting::engine::ScriptEngine,
     pub is_playing: bool,
 }
 
@@ -83,13 +90,27 @@ impl Application {
         let target_width = swapchain.extent.width;
         let target_height = swapchain.extent.height;
 
-        let offscreen_target =
-            crate::renderer::vulkan::OffscreenTarget::new(&vulkan, target_width, target_height, vk::Format::R16G16B16A16_SFLOAT)?;
-        let sdr_target =
-            crate::renderer::vulkan::OffscreenTarget::new(&vulkan, target_width, target_height, vk::Format::R8G8B8A8_UNORM)?;
+        let offscreen_target = crate::renderer::vulkan::OffscreenTarget::new(
+            &vulkan,
+            target_width,
+            target_height,
+            vk::Format::R16G16B16A16_SFLOAT,
+        )?;
+        let sdr_target = crate::renderer::vulkan::OffscreenTarget::new(
+            &vulkan,
+            target_width,
+            target_height,
+            vk::Format::R8G8B8A8_UNORM,
+        )?;
         let mip_levels = 6;
-        let bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(&vulkan, target_width / 2, target_height / 2, mip_levels)?;
-        let post_process = crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::R8G8B8A8_UNORM)?;
+        let bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(
+            &vulkan,
+            target_width / 2,
+            target_height / 2,
+            mip_levels,
+        )?;
+        let post_process =
+            crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::R8G8B8A8_UNORM)?;
 
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -99,7 +120,7 @@ impl Application {
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(20);
-        let post_process_descriptor_pool = unsafe { 
+        let post_process_descriptor_pool = unsafe {
             match vulkan.device.create_descriptor_pool(&pool_info, None) {
                 Ok(pool) => pool,
                 Err(e) => {
@@ -111,8 +132,10 @@ impl Application {
 
         let tonemap_alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(post_process_descriptor_pool)
-            .set_layouts(std::slice::from_ref(&post_process.tonemap_descriptor_set_layout));
-        let tonemap_descriptor_set = unsafe { 
+            .set_layouts(std::slice::from_ref(
+                &post_process.tonemap_descriptor_set_layout,
+            ));
+        let tonemap_descriptor_set = unsafe {
             match vulkan.device.allocate_descriptor_sets(&tonemap_alloc_info) {
                 Ok(sets) => sets[0],
                 Err(e) => {
@@ -129,7 +152,7 @@ impl Application {
         let bloom_alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(post_process_descriptor_pool)
             .set_layouts(&bloom_layouts);
-        let bloom_descriptor_sets = unsafe { 
+        let bloom_descriptor_sets = unsafe {
             match vulkan.device.allocate_descriptor_sets(&bloom_alloc_info) {
                 Ok(sets) => sets,
                 Err(e) => {
@@ -153,15 +176,19 @@ impl Application {
             .pool_sizes(&compute_pool_sizes)
             .max_sets(1000);
         let compute_descriptor_pool = unsafe {
-            vulkan.device.create_descriptor_pool(&compute_pool_info, None).unwrap()
+            vulkan
+                .device
+                .create_descriptor_pool(&compute_pool_info, None)
+                .unwrap()
         };
 
         // We can pass a dummy max_meshlets to new() since it no longer allocates an indirect buffer
         let compute_pipeline =
             crate::renderer::vulkan::compute_cull::ComputeCullPipeline::new(&vulkan);
 
-        let skinning_pipeline = crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline::new(&vulkan);
-        
+        let skinning_pipeline =
+            crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline::new(&vulkan);
+
         let skinning_pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
@@ -171,7 +198,10 @@ impl Application {
             .pool_sizes(&skinning_pool_sizes)
             .max_sets(500);
         let skinning_descriptor_pool = unsafe {
-            vulkan.device.create_descriptor_pool(&skinning_pool_info, None).unwrap()
+            vulkan
+                .device
+                .create_descriptor_pool(&skinning_pool_info, None)
+                .unwrap()
         };
 
         let mut asset_manager = crate::asset_manager::AssetManager::new();
@@ -341,6 +371,7 @@ impl Application {
             world.register_component::<crate::ecs::components::AudioEmitterComponent>(100);
             world.register_component::<crate::ecs::components::SkeletonComponent>(100);
             world.register_component::<crate::ecs::components::AnimatorComponent>(100);
+            world.register_component::<crate::ecs::components::ScriptBehaviorComponent>(100);
         }
 
         let mut physics = crate::physics::PhysicsSystem::new();
@@ -360,7 +391,10 @@ impl Application {
                 100.0,
             );
             world.add_component(camera_entity, cam_comp);
-            world.add_component(camera_entity, crate::ecs::components::AudioListenerComponent::default());
+            world.add_component(
+                camera_entity,
+                crate::ecs::components::AudioListenerComponent,
+            );
         }
 
         // Spawn a directional light
@@ -399,7 +433,10 @@ impl Application {
                     },
                 );
             }
-            world.add_component(planet, crate::ecs::components::AudioEmitterComponent::default());
+            world.add_component(
+                planet,
+                crate::ecs::components::AudioEmitterComponent::default(),
+            );
         }
 
         // 2. Moon (Child of Planet)
@@ -624,23 +661,21 @@ impl Application {
         }
 
         let egui_ctx = egui::Context::default();
-        crate::app::editor::configure_theme(&egui_ctx);
+        crate::app::slate_theme::apply_slate_theme(&egui_ctx);
         let mut egui_backend =
             crate::renderer::vulkan::EguiBackend::new(&vulkan, swapchain.format.format);
-        let offscreen_texture_id = egui_backend.register_user_texture(
-            &vulkan,
-            sdr_target.color_view,
-            sdr_target.sampler,
-        );
+        let offscreen_texture_id =
+            egui_backend.register_user_texture(&vulkan, sdr_target.color_view, sdr_target.sampler);
 
         let audio_subsystem = crate::audio::AudioSubsystem::new();
         let audio_system = crate::audio::AudioSystem::new(audio_subsystem.as_ref());
+        let script_engine = crate::scripting::engine::ScriptEngine::new();
 
         let app = Self {
             world,
             pipeline,
             asset_manager,
-            world_matrices: std::collections::HashMap::new(),
+            world_matrices: Vec::with_capacity(256),
             ubo_buffer,
             ubo_memory,
             descriptor_pool,
@@ -665,17 +700,18 @@ impl Application {
             selected_entity: None,
             current_frame: 0,
             bloom_threshold: 1.0,
-            resource_tracker: std::collections::HashMap::new(),
+            resource_tracker: crate::renderer::vulkan::render_graph::ResourceTracker::new(),
             editor: crate::app::editor::Editor::new(),
             hot_reloader: crate::app::hot_reload::HotReloader::new("target/debug/game.dll"),
             compute_pipeline,
             compute_descriptor_pool,
-            compute_descriptor_sets: std::collections::HashMap::new(),
+            compute_descriptor_sets: Vec::new(),
             skinning_pipeline,
             skinning_descriptor_pool,
             skinning_instances: Vec::new(),
             audio_subsystem,
             audio_system,
+            script_engine,
             is_playing: false,
         };
         app.update_post_process_descriptors();
@@ -684,7 +720,7 @@ impl Application {
 
     pub fn update_post_process_descriptors(&self) {
         let mut writes = Vec::new();
-        
+
         let tonemap_color_info = [vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(self.offscreen_target.color_view)
@@ -693,17 +729,21 @@ impl Application {
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(self.bloom_target.full_view)
             .sampler(self.bloom_target.sampler)];
-            
-        writes.push(vk::WriteDescriptorSet::default()
-            .dst_set(self.tonemap_descriptor_set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&tonemap_color_info));
-        writes.push(vk::WriteDescriptorSet::default()
-            .dst_set(self.tonemap_descriptor_set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&tonemap_bloom_info));
+
+        writes.push(
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.tonemap_descriptor_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&tonemap_color_info),
+        );
+        writes.push(
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.tonemap_descriptor_set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&tonemap_bloom_info),
+        );
 
         let mut bloom_infos = Vec::new();
         for i in 0..=self.bloom_target.mip_levels as usize {
@@ -717,16 +757,20 @@ impl Application {
                 .image_view(view)
                 .sampler(self.bloom_target.sampler)]);
         }
-        
+
         for (i, info) in bloom_infos.iter().enumerate() {
-            writes.push(vk::WriteDescriptorSet::default()
-                .dst_set(self.bloom_descriptor_sets[i])
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(info));
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.bloom_descriptor_sets[i])
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(info),
+            );
         }
 
-        unsafe { self.vulkan.device.update_descriptor_sets(&writes, &[]); }
+        unsafe {
+            self.vulkan.device.update_descriptor_sets(&writes, &[]);
+        }
     }
 
     pub fn recreate_swapchain(&mut self) {
@@ -747,7 +791,7 @@ impl Application {
 
         let target_width = self.swapchain.extent.width;
         let target_height = self.swapchain.extent.height;
-        
+
         self.offscreen_target.shutdown(&self.vulkan);
         self.offscreen_target = crate::renderer::vulkan::OffscreenTarget::new(
             &self.vulkan,
@@ -798,7 +842,7 @@ impl Application {
             // Auto-scale the UI based on window height (assume 720p is baseline 1.0)
             let ppp = (self.window.height as f32 / 720.0).max(0.5);
             self.input.ui_scale = ppp;
-            
+
             self.input.egui_input.screen_rect = Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::Vec2::new(
@@ -816,17 +860,32 @@ impl Application {
                     reloader.update();
                     reloader.call_game_update(&mut self.world, &mut self.physics, dt as f32);
                 }
-                
+
                 use crate::ecs::System;
                 self.audio_system.update(dt as f32, &self.world);
-                crate::ecs::animation_system::process_animations(&self.world, &self.asset_manager, dt as f32);
+                crate::ecs::animation_system::process_animations(
+                    &self.world,
+                    &self.asset_manager,
+                    dt as f32,
+                );
+                crate::ecs::scripting_system::process_scripts(
+                    &self.world,
+                    &self.asset_manager,
+                    &self.script_engine,
+                    dt as f32,
+                );
             }
 
-            let mut new_viewport_size = None;
-            let mut raycast_request = None;
-            let mut viewport_hovered = false;
-
-            let actions = self.editor.draw(&self.egui_ctx, &mut self.world, &mut self.physics, &mut self.selected_entity, &mut self.bloom_threshold, 1.0 / dt as f32, self.is_playing);
+            let (actions, new_viewport_size, raycast_request, viewport_hovered) = self.editor.draw(
+                &self.egui_ctx,
+                &mut self.world,
+                &mut self.physics,
+                &mut self.selected_entity,
+                &mut self.bloom_threshold,
+                1.0 / dt as f32,
+                self.is_playing,
+                self.offscreen_texture_id,
+            );
 
             for action in actions {
                 match action {
@@ -838,13 +897,17 @@ impl Application {
                     }
                     crate::app::editor::EditorAction::SpawnModel(path) => {
                         let new_entity = self.world.create_entity();
-                        
+
                         // Load model using AssetManager
                         let lower = path.to_lowercase();
                         let mesh_idx = if lower.ends_with(".obj") {
-                            self.asset_manager.load_model(&self.vulkan, &path).map(|m| m[0])
+                            self.asset_manager
+                                .load_model(&self.vulkan, &path)
+                                .map(|m| m[0])
                         } else if lower.ends_with(".gltf") || lower.ends_with(".glb") {
-                            self.asset_manager.load_gltf(&self.vulkan, &path, &path).map(|m| m[0])
+                            self.asset_manager
+                                .load_gltf(&self.vulkan, &path, &path)
+                                .map(|m| m[0])
                         } else {
                             None
                         };
@@ -879,30 +942,6 @@ impl Application {
                     }
                 }
             }
-
-            egui::CentralPanel::default().show(&self.egui_ctx, |ui| {
-                let size = ui.available_size();
-                new_viewport_size = Some((size.x.max(1.0) as u32, size.y.max(1.0) as u32));
-                let image = egui::Image::new(egui::load::SizedTexture::new(
-                    self.offscreen_texture_id,
-                    size,
-                ))
-                .sense(egui::Sense::click() | egui::Sense::drag());
-                
-                let response = ui.add(image);
-                viewport_hovered = response.hovered() || response.dragged();
-                
-                if response.clicked() {
-                    self.selected_entity = None;
-
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let local_pos = pos - response.rect.min;
-                        let ndc_x = (local_pos.x / response.rect.width()) * 2.0 - 1.0;
-                        let ndc_y = (local_pos.y / response.rect.height()) * 2.0 - 1.0;
-                        raycast_request = Some((ndc_x, ndc_y));
-                    }
-                }
-            });
 
             let asset_events = self.asset_manager.poll_changes(&self.vulkan);
             let mut shader_changed = false;
@@ -1004,13 +1043,31 @@ impl Application {
                     self.offscreen_target.shutdown(&self.vulkan);
                     let _ = std::mem::replace(
                         &mut self.offscreen_target,
-                        crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h, vk::Format::R16G16B16A16_SFLOAT).unwrap(),
+                        crate::renderer::vulkan::OffscreenTarget::new(
+                            &self.vulkan,
+                            w,
+                            h,
+                            vk::Format::R16G16B16A16_SFLOAT,
+                        )
+                        .unwrap(),
                     );
                     self.sdr_target.shutdown(&self.vulkan);
-                    self.sdr_target = crate::renderer::vulkan::OffscreenTarget::new(&self.vulkan, w, h, vk::Format::R8G8B8A8_UNORM).unwrap();
-                    
+                    self.sdr_target = crate::renderer::vulkan::OffscreenTarget::new(
+                        &self.vulkan,
+                        w,
+                        h,
+                        vk::Format::R8G8B8A8_UNORM,
+                    )
+                    .unwrap();
+
                     self.bloom_target.shutdown(&self.vulkan);
-                    self.bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(&self.vulkan, (w / 2).max(1), (h / 2).max(1), 6).unwrap();
+                    self.bloom_target = crate::renderer::vulkan::bloom::BloomTarget::new(
+                        &self.vulkan,
+                        (w / 2).max(1),
+                        (h / 2).max(1),
+                        6,
+                    )
+                    .unwrap();
 
                     self.update_post_process_descriptors();
 
@@ -1108,24 +1165,48 @@ impl Application {
                                 }
                             } else {
                                 // Fallback raycast for non-physics visual entities
-                                let mut best_dist = std::f32::MAX;
+                                let mut best_dist = f32::MAX;
                                 let mut best_entity = None;
 
                                 let renders = self.world.get_component_array::<RenderComponent>();
                                 for entity in renders.dense_entities_slice().iter().copied() {
-                                    if let Some(matrix) = self.world_matrices.get(&entity) {
-                                        let center = crate::math::vec::Vec3::new(matrix.cols[3].x, matrix.cols[3].y, matrix.cols[3].z);
-                                        
-                                        let scale_x = crate::math::vec::Vec3::new(matrix.cols[0].x, matrix.cols[0].y, matrix.cols[0].z).length();
-                                        let scale_y = crate::math::vec::Vec3::new(matrix.cols[1].x, matrix.cols[1].y, matrix.cols[1].z).length();
-                                        let scale_z = crate::math::vec::Vec3::new(matrix.cols[2].x, matrix.cols[2].y, matrix.cols[2].z).length();
-                                        
+                                    if let Some(matrix) = self
+                                        .world_matrices
+                                        .iter()
+                                        .find(|(e, _)| *e == entity)
+                                        .map(|(_, m)| m)
+                                    {
+                                        let center = crate::math::vec::Vec3::new(
+                                            matrix.cols[3].x,
+                                            matrix.cols[3].y,
+                                            matrix.cols[3].z,
+                                        );
+
+                                        let scale_x = crate::math::vec::Vec3::new(
+                                            matrix.cols[0].x,
+                                            matrix.cols[0].y,
+                                            matrix.cols[0].z,
+                                        )
+                                        .length();
+                                        let scale_y = crate::math::vec::Vec3::new(
+                                            matrix.cols[1].x,
+                                            matrix.cols[1].y,
+                                            matrix.cols[1].z,
+                                        )
+                                        .length();
+                                        let scale_z = crate::math::vec::Vec3::new(
+                                            matrix.cols[2].x,
+                                            matrix.cols[2].y,
+                                            matrix.cols[2].z,
+                                        )
+                                        .length();
+
                                         // Assume base mesh fits roughly inside a unit sphere
-                                        let radius = scale_x.max(scale_y).max(scale_z) * 1.5; 
-                                        
+                                        let radius = scale_x.max(scale_y).max(scale_z) * 1.5;
+
                                         let l = center - transform.position;
                                         let tca = l.dot(world_dir);
-                                        
+
                                         if tca >= 0.0 {
                                             let d2 = l.length_sq() - tca * tca;
                                             let r2 = radius * radius;
@@ -1163,7 +1244,7 @@ impl Application {
             }
 
             // 1. Update Game State (ECS)
-        // Handled by Hot Reloader's game_update call which invokes the Job System.
+            // Handled by Hot Reloader's game_update call which invokes the Job System.
 
             // Camera Interactive Update
             {
@@ -1210,16 +1291,16 @@ impl Application {
 
                         if viewport_hovered {
                             if self.input.is_key_down(win32::VK_W) {
-                                transform.position = transform.position + forward * speed;
+                                transform.position += forward * speed;
                             }
                             if self.input.is_key_down(win32::VK_S) {
-                                transform.position = transform.position - forward * speed;
+                                transform.position -= forward * speed;
                             }
                             if self.input.is_key_down(win32::VK_A) {
-                                transform.position = transform.position - right * speed;
+                                transform.position -= right * speed;
                             }
                             if self.input.is_key_down(win32::VK_D) {
-                                transform.position = transform.position + right * speed;
+                                transform.position += right * speed;
                             }
                             if self.input.is_key_down(win32::VK_TAB) {
                                 transform.position.y += speed;
@@ -1233,13 +1314,13 @@ impl Application {
             }
 
             // Compute World Matrices
-            let mut world_matrices = std::collections::HashMap::new();
+            self.world_matrices.clear(); // len → 0, capacity retained
 
             let transforms = self.world.get_component_array_mut::<TransformComponent>();
-            let entities = transforms.dense_entities_slice().to_vec();
+            let entities = transforms.dense_entities();
 
             for (i, transform) in transforms.as_mut_slice().iter_mut().enumerate() {
-                let entity = entities[i];
+                let entity = unsafe { *entities.add(i) };
 
                 // Build local matrix: Translation * RotationY * Scale
                 let mut rot_y = crate::math::mat4::Mat4::identity();
@@ -1262,7 +1343,7 @@ impl Application {
 
                 transform.matrix = t * rot_y * sc;
 
-                world_matrices.insert(entity, transform.matrix);
+                self.world_matrices.push((entity, transform.matrix));
             }
 
             // Resolve hierarchy: multiply child local by parent world
@@ -1270,20 +1351,25 @@ impl Application {
             for (i, hier) in hierarchies.as_slice().iter().enumerate() {
                 let entity = hierarchies.dense_entities_slice()[i];
                 if let Some(parent) = hier.parent {
-                    if let Some(&parent_world) = world_matrices.get(&parent) {
-                        if let Some(child_local) = world_matrices.get(&entity).copied() {
-                            world_matrices.insert(entity, parent_world * child_local);
+                    if let Some(parent_world) = self
+                        .world_matrices
+                        .iter()
+                        .find(|(e, _)| *e == parent)
+                        .map(|(_, m)| *m)
+                    {
+                        if let Some(child_idx) =
+                            self.world_matrices.iter().position(|(e, _)| *e == entity)
+                        {
+                            let child_local = self.world_matrices[child_idx].1;
+                            self.world_matrices[child_idx].1 = parent_world * child_local;
                         }
                     }
                 }
             }
 
-            self.world_matrices = world_matrices;
-
             let full_output = self.egui_ctx.end_frame();
             for (id, delta) in full_output.textures_delta.set {
-                self.egui_backend
-                    .update_texture(&self.vulkan, id, &delta);
+                self.egui_backend.update_texture(&self.vulkan, id, &delta);
             }
             for id in full_output.textures_delta.free {
                 self.egui_backend.free_texture(&self.vulkan, id);
@@ -1447,8 +1533,7 @@ impl Application {
 
         // Wait for previous frame to finish
         unsafe {
-            let _ = self
-                .vulkan
+            self.vulkan
                 .device
                 .wait_for_fences(
                     &[self.vulkan.in_flight_fences[self.current_frame]],
@@ -1484,31 +1569,23 @@ impl Application {
         };
 
         unsafe {
-            let _ = self
-                .vulkan
+            self.vulkan
                 .device
                 .reset_fences(&[self.vulkan.in_flight_fences[self.current_frame]])
                 .unwrap();
         }
 
-        // Allocate a command buffer for this frame
-        let alloc_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(self.vulkan.command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-
-        let command_buffer = unsafe {
-            self.vulkan
-                .device
-                .allocate_command_buffers(&alloc_info)
-                .unwrap()[0]
-        };
+        let command_buffer = self.vulkan.frame_command_buffers[self.current_frame];
 
         // Begin recording
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
         unsafe {
+            self.vulkan
+                .device
+                .reset_command_buffer(command_buffer, vk::CommandBufferResetFlags::empty())
+                .unwrap();
             self.vulkan
                 .device
                 .begin_command_buffer(command_buffer, &begin_info)
@@ -1518,8 +1595,12 @@ impl Application {
         // --- Compute Skinning Pre-pass Setup ---
         let mut skinning_dispatches = Vec::new();
         if let Some(skinning_pipeline) = &self.skinning_pipeline {
-            let skeletons = self.world.get_component_array::<crate::ecs::components::SkeletonComponent>();
-            let renders = self.world.get_component_array::<crate::ecs::RenderComponent>();
+            let skeletons = self
+                .world
+                .get_component_array::<crate::ecs::components::SkeletonComponent>();
+            let renders = self
+                .world
+                .get_component_array::<crate::ecs::RenderComponent>();
             let entities = skeletons.dense_entities_slice();
 
             for (i, skeleton_comp) in skeletons.as_slice().iter().enumerate() {
@@ -1528,25 +1609,31 @@ impl Application {
                     continue;
                 }
                 let render = unsafe { renders.get(entity) };
-                if !render.visible { continue; }
-                
+                if !render.visible {
+                    continue;
+                }
+
                 let mesh_index = render.mesh_index;
                 if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
                     let mut instance_idx = skeleton_comp.skinning_instance_index;
-                    
+
                     if instance_idx.is_none() {
-                        if let Some(new_instance) = crate::renderer::vulkan::compute_skinning::SkinningInstance::new(
-                            &self.vulkan,
-                            skinning_pipeline,
-                            self.skinning_descriptor_pool,
-                            mesh.vertex_buffer.handle,
-                            mesh.vertex_count,
-                        ) {
+                        if let Some(new_instance) =
+                            crate::renderer::vulkan::compute_skinning::SkinningInstance::new(
+                                &self.vulkan,
+                                skinning_pipeline,
+                                self.skinning_descriptor_pool,
+                                mesh.vertex_buffer.handle,
+                                mesh.vertex_count,
+                            )
+                        {
                             let idx = self.skinning_instances.len();
                             self.skinning_instances.push(new_instance);
                             instance_idx = Some(idx);
-                            
-                            let skeletons_mut = unsafe { self.world.get_component_array_mut_unchecked::<crate::ecs::components::SkeletonComponent>() };
+
+                            let skeletons_mut = unsafe {
+                                &mut *self.world.get_component_array_mut_ptr::<crate::ecs::components::SkeletonComponent>()
+                            };
                             let sk_mut = unsafe { skeletons_mut.get_mut(entity) };
                             sk_mut.skinning_instance_index = Some(idx);
                         }
@@ -1556,9 +1643,12 @@ impl Application {
                         if idx < self.skinning_instances.len() {
                             let instance = &mut self.skinning_instances[idx];
                             if !skeleton_comp.computed_matrices.is_empty() {
-                                instance.upload_bone_matrices(&self.vulkan, &skeleton_comp.computed_matrices);
+                                instance.upload_bone_matrices(
+                                    &self.vulkan,
+                                    &skeleton_comp.computed_matrices,
+                                );
                             }
-                            
+
                             skinning_dispatches.push((idx, mesh.vertex_count));
                         }
                     }
@@ -1569,8 +1659,12 @@ impl Application {
         // --- Compute Culling Pre-pass Setup ---
         let mut compute_dispatches = Vec::new();
         if let Some(compute) = &self.compute_pipeline {
-            let renders = self.world.get_component_array::<crate::ecs::RenderComponent>();
-            let transforms = self.world.get_component_array::<crate::ecs::TransformComponent>();
+            let renders = self
+                .world
+                .get_component_array::<crate::ecs::RenderComponent>();
+            let transforms = self
+                .world
+                .get_component_array::<crate::ecs::TransformComponent>();
             let dense_renders = renders.as_slice();
             let entities = renders.dense_entities_slice();
 
@@ -1580,31 +1674,49 @@ impl Application {
                     let entity_index = entities[i];
                     if transforms.has(entity_index) {
                         let transform = unsafe { transforms.get(entity_index) };
-                        let world_matrix = *self
+                        let world_matrix = self
                             .world_matrices
-                            .get(&entity_index)
-                            .unwrap_or(&transform.matrix);
+                            .iter()
+                            .find(|(e, _)| *e == entity_index)
+                            .map(|(_, m)| *m)
+                            .unwrap_or(transform.matrix);
                         let mesh_index = render.mesh_index;
 
                         if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
-                            if !self.compute_descriptor_sets.contains_key(&mesh_index) {
+                            // Grow the descriptor set cache if needed (one-time cost per mesh)
+                            if mesh_index >= self.compute_descriptor_sets.len() {
+                                self.compute_descriptor_sets.resize(mesh_index + 1, None);
+                            }
+                            if self.compute_descriptor_sets[mesh_index].is_none() {
                                 let alloc_info = vk::DescriptorSetAllocateInfo::default()
                                     .descriptor_pool(self.compute_descriptor_pool)
-                                    .set_layouts(std::slice::from_ref(&compute.descriptor_set_layout));
-                                let set = unsafe { self.vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0] };
-                                
+                                    .set_layouts(std::slice::from_ref(
+                                        &compute.descriptor_set_layout,
+                                    ));
+                                let set = unsafe {
+                                    self.vulkan
+                                        .device
+                                        .allocate_descriptor_sets(&alloc_info)
+                                        .unwrap()[0]
+                                };
+
                                 compute.update_descriptor_set(
-                                    &self.vulkan, 
-                                    self.ubo_buffer, 
-                                    mesh.meshlet_buffer.handle, 
-                                    mesh.indirect_buffer.handle, 
-                                    set
+                                    &self.vulkan,
+                                    self.ubo_buffer,
+                                    mesh.meshlet_buffer.handle,
+                                    mesh.indirect_buffer.handle,
+                                    set,
                                 );
-                                self.compute_descriptor_sets.insert(mesh_index, set);
+                                self.compute_descriptor_sets[mesh_index] = Some(set);
                             }
-                            
-                            let set = self.compute_descriptor_sets[&mesh_index];
-                            compute_dispatches.push((mesh_index, mesh.meshlet_count, world_matrix, set));
+
+                            let set = self.compute_descriptor_sets[mesh_index].unwrap();
+                            compute_dispatches.push((
+                                mesh_index,
+                                mesh.meshlet_count,
+                                world_matrix,
+                                set,
+                            ));
                         }
                     }
                 }
@@ -1623,7 +1735,7 @@ impl Application {
 
                     for (idx, vertex_count) in skinning_dispatches {
                         let instance = &self.skinning_instances[idx];
-                        
+
                         unsafe {
                             self.vulkan.device.cmd_bind_descriptor_sets(
                                 command_buffer,
@@ -1652,8 +1764,10 @@ impl Application {
                             );
 
                             // 256 threads per group (match local_size_x in skinning.comp)
-                            let group_count_x = (vertex_count + 255) / 256;
-                            self.vulkan.device.cmd_dispatch(command_buffer, group_count_x, 1, 1);
+                            let group_count_x = vertex_count.div_ceil(256);
+                            self.vulkan
+                                .device
+                                .cmd_dispatch(command_buffer, group_count_x, 1, 1);
                         }
                     }
 
@@ -1661,7 +1775,7 @@ impl Application {
                     let memory_barrier = vk::MemoryBarrier::default()
                         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                         .dst_access_mask(vk::AccessFlags::VERTEX_ATTRIBUTE_READ);
-                    
+
                     unsafe {
                         self.vulkan.device.cmd_pipeline_barrier(
                             command_buffer,
@@ -1696,25 +1810,25 @@ impl Application {
                             std::slice::from_ref(&set),
                             &[],
                         );
-                        
+
                         #[repr(C)]
                         struct PushConstants {
                             total_meshlets: u32,
                             _pad: [u32; 3], // 12 bytes padding for 16-byte alignment of Mat4
                             world: crate::math::mat4::Mat4,
                         }
-                        
+
                         let pc = PushConstants {
                             total_meshlets: meshlet_count,
                             _pad: [0; 3],
                             world: world_matrix,
                         };
-                        
+
                         let pc_bytes = std::slice::from_raw_parts(
                             &pc as *const _ as *const u8,
                             std::mem::size_of::<PushConstants>(),
                         );
-                        
+
                         self.vulkan.device.cmd_push_constants(
                             command_buffer,
                             compute.layout,
@@ -1724,8 +1838,10 @@ impl Application {
                         );
 
                         // 64 threads per group (match local_size_x in cull.comp)
-                        let group_count_x = (meshlet_count + 63) / 64;
-                        self.vulkan.device.cmd_dispatch(command_buffer, group_count_x, 1, 1);
+                        let group_count_x = meshlet_count.div_ceil(64);
+                        self.vulkan
+                            .device
+                            .cmd_dispatch(command_buffer, group_count_x, 1, 1);
                     }
                 }
 
@@ -1734,7 +1850,7 @@ impl Application {
                     let barrier = vk::MemoryBarrier::default()
                         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                         .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
-                        
+
                     self.vulkan.device.cmd_pipeline_barrier(
                         command_buffer,
                         vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -1883,10 +1999,12 @@ impl Application {
                             let entity_index = entities[i];
                             if transforms.has(entity_index) {
                                 let transform = transforms.get(entity_index);
-                                let world_matrix = *self
+                                let world_matrix = self
                                     .world_matrices
-                                    .get(&entity_index)
-                                    .unwrap_or(&transform.matrix);
+                                    .iter()
+                                    .find(|(e, _)| *e == entity_index)
+                                    .map(|(_, m)| *m)
+                                    .unwrap_or(transform.matrix);
                                 let push_constants =
                                     crate::renderer::vulkan::pipeline::PushConstants {
                                         world: world_matrix,
@@ -1911,7 +2029,7 @@ impl Application {
                                 );
 
                                 let mesh = self.asset_manager.get_mesh(render.mesh_index).unwrap();
-                                
+
                                 let mut vertex_buffer = mesh.vertex_buffer.handle;
                                 let skeletons = self.world.get_component_array::<crate::ecs::components::SkeletonComponent>();
                                 if skeletons.has(entity_index) {
@@ -2043,8 +2161,8 @@ impl Application {
             },
         );
 
-        let mut tracker = std::mem::take(&mut self.resource_tracker);
-        render_graph.execute(&self.vulkan, command_buffer, &mut tracker);
+        self.resource_tracker.clear();
+        render_graph.execute(&self.vulkan, command_buffer, &mut self.resource_tracker);
 
         // 3. Transition swapchain for present
         let present_barrier = vk::ImageMemoryBarrier::default()
@@ -2071,7 +2189,7 @@ impl Application {
                 std::slice::from_ref(&present_barrier),
             );
 
-            tracker.insert(
+            self.resource_tracker.insert(
                 crate::renderer::vulkan::render_graph::ResourceHandle(swapchain_image),
                 crate::renderer::vulkan::render_graph::ResourceState {
                     layout: vk::ImageLayout::PRESENT_SRC_KHR,
@@ -2086,7 +2204,7 @@ impl Application {
                 .end_command_buffer(command_buffer)
                 .unwrap();
         }
-        self.resource_tracker = tracker;
+        // resource_tracker was updated in-place — no reassignment needed.
 
         // Submit
         let wait_semaphores = [self.vulkan.image_available_semaphores[self.current_frame]];
@@ -2138,24 +2256,8 @@ impl Application {
             Err(e) => panic!("Failed to present image: {:?}", e),
         }
 
-        // Clean up command buffer (in a real engine we'd reuse them per-frame in an array)
-        unsafe {
-            self.vulkan
-                .device
-                .wait_for_fences(
-                    &[self.vulkan.in_flight_fences[self.current_frame]],
-                    true,
-                    u64::MAX,
-                )
-                .unwrap();
-            self.vulkan
-                .device
-                .reset_command_pool(self.vulkan.command_pool, vk::CommandPoolResetFlags::empty())
-                .unwrap();
-            self.vulkan
-                .device
-                .free_command_buffers(self.vulkan.command_pool, &command_buffers);
-        }
+        // Keep the frame command buffer allocated; it is reset at the start of
+        // the next frame after its fence has signaled.
     }
 }
 
@@ -2163,34 +2265,42 @@ impl Drop for Application {
     fn drop(&mut self) {
         unsafe {
             let _ = self.vulkan.device.device_wait_idle();
-            
+
             // 1. Game Resources
             self.asset_manager.shutdown(&self.vulkan);
-            
+
             // 2. Render Targets
             self.sdr_target.shutdown(&self.vulkan);
             self.bloom_target.shutdown(&self.vulkan);
             self.offscreen_target.shutdown(&self.vulkan);
-            
+
             // 3. Pipelines & UI
             self.post_process.destroy(&self.vulkan);
             if let Some(mut p) = self.pipeline.take() {
                 p.shutdown(&self.vulkan);
             }
             self.egui_backend.shutdown(&self.vulkan);
-            
+
             // 4. Descriptor Pools & Buffers
             if self.post_process_descriptor_pool != vk::DescriptorPool::null() {
-                self.vulkan.device.destroy_descriptor_pool(self.post_process_descriptor_pool, None);
+                self.vulkan
+                    .device
+                    .destroy_descriptor_pool(self.post_process_descriptor_pool, None);
             }
             if self.descriptor_pool != vk::DescriptorPool::null() {
-                self.vulkan.device.destroy_descriptor_pool(self.descriptor_pool, None);
+                self.vulkan
+                    .device
+                    .destroy_descriptor_pool(self.descriptor_pool, None);
             }
             if self.compute_descriptor_pool != vk::DescriptorPool::null() {
-                self.vulkan.device.destroy_descriptor_pool(self.compute_descriptor_pool, None);
+                self.vulkan
+                    .device
+                    .destroy_descriptor_pool(self.compute_descriptor_pool, None);
             }
             if self.skinning_descriptor_pool != vk::DescriptorPool::null() {
-                self.vulkan.device.destroy_descriptor_pool(self.skinning_descriptor_pool, None);
+                self.vulkan
+                    .device
+                    .destroy_descriptor_pool(self.skinning_descriptor_pool, None);
             }
             for mut instance in self.skinning_instances.drain(..) {
                 instance.shutdown(&self.vulkan);

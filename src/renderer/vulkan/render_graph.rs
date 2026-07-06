@@ -1,5 +1,4 @@
 use ash::vk;
-use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResourceHandle(pub vk::Image);
@@ -10,6 +9,77 @@ pub struct ResourceState {
     pub stage_mask: vk::PipelineStageFlags,
     pub access_mask: vk::AccessFlags,
     pub aspect_mask: vk::ImageAspectFlags,
+}
+
+/// Zero-allocation flat map for tracking image resource states during
+/// render graph execution. Uses a fixed inline array with linear scan —
+/// optimal for the small number of render targets the engine tracks (≤5).
+pub struct ResourceTracker {
+    entries: [(ResourceHandle, ResourceState); Self::MAX_ENTRIES],
+    len: usize,
+}
+
+impl ResourceTracker {
+    /// Maximum number of distinct render targets tracked per frame.
+    /// The engine currently uses ~5 (offscreen HDR, SDR, bloom, depth, swapchain).
+    pub const MAX_ENTRIES: usize = 16;
+
+    /// Create a new empty tracker with zeroed inline storage.
+    pub fn new() -> Self {
+        // Initialize with dummy handles — only entries 0..len are valid.
+        let dummy = (
+            ResourceHandle(vk::Image::null()),
+            ResourceState {
+                layout: vk::ImageLayout::UNDEFINED,
+                stage_mask: vk::PipelineStageFlags::TOP_OF_PIPE,
+                access_mask: vk::AccessFlags::NONE,
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+            },
+        );
+        Self {
+            entries: [dummy; Self::MAX_ENTRIES],
+            len: 0,
+        }
+    }
+
+    /// Look up the current state for a resource handle.
+    pub fn get(&self, handle: &ResourceHandle) -> Option<ResourceState> {
+        for i in 0..self.len {
+            if self.entries[i].0 == *handle {
+                return Some(self.entries[i].1);
+            }
+        }
+        None
+    }
+
+    /// Insert or update a resource state. Panics if full and inserting a new key
+    /// (should never happen — the engine tracks far fewer than MAX_ENTRIES targets).
+    pub fn insert(&mut self, handle: ResourceHandle, state: ResourceState) {
+        for i in 0..self.len {
+            if self.entries[i].0 == handle {
+                self.entries[i].1 = state;
+                return;
+            }
+        }
+        assert!(
+            self.len < Self::MAX_ENTRIES,
+            "ResourceTracker overflow: more than {} distinct resources tracked",
+            Self::MAX_ENTRIES
+        );
+        self.entries[self.len] = (handle, state);
+        self.len += 1;
+    }
+
+    /// Reset the tracker for a new frame without any allocation.
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+}
+
+impl Default for ResourceTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct PassResource {
@@ -25,6 +95,12 @@ pub struct PassData<'a> {
 
 pub struct RenderGraph<'a> {
     passes: Vec<PassData<'a>>,
+}
+
+impl<'a> Default for RenderGraph<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<'a> RenderGraph<'a> {
@@ -47,14 +123,13 @@ impl<'a> RenderGraph<'a> {
         self,
         vulkan: &crate::renderer::vulkan::VulkanDevice,
         command_buffer: vk::CommandBuffer,
-        resource_tracker: &mut HashMap<ResourceHandle, ResourceState>,
+        resource_tracker: &mut ResourceTracker,
     ) {
         for pass in self.passes {
             for required in &pass.resources {
                 let current_state =
                     resource_tracker
                         .get(&required.handle)
-                        .cloned()
                         .unwrap_or(ResourceState {
                             layout: vk::ImageLayout::UNDEFINED,
                             stage_mask: vk::PipelineStageFlags::TOP_OF_PIPE,

@@ -153,3 +153,13 @@ impl<const N: usize> PartialEq for FixedString<N> {
 }
 
 impl<const N: usize> Eq for FixedString<N> {}
+
+impl<const N: usize> fmt::Write for FixedString<N> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if self.len + s.len() > N {
+            return Err(fmt::Error);
+        }
+        self.push_str(s);
+        Ok(())
+    }
+}

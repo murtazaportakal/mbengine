@@ -13,6 +13,12 @@ pub struct ComponentRegistry {
     draw_fns: std::collections::HashMap<ComponentTypeId, EditorDrawFn>,
 }
 
+impl Default for ComponentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ComponentRegistry {
     pub fn new() -> Self {
         Self {
@@ -39,7 +45,9 @@ impl ComponentRegistry {
                             changed = comp.draw_inspector(ui);
                         });
 
-                        if changed && TypeId::of::<T>() == TypeId::of::<crate::ecs::TransformComponent>() {
+                        if changed
+                            && TypeId::of::<T>() == TypeId::of::<crate::ecs::TransformComponent>()
+                        {
                             let ptr = comp as *const T as *const crate::ecs::TransformComponent;
                             unsafe {
                                 new_pos = (*ptr).position;

@@ -1,0 +1,181 @@
+--- src/app/application.rs
++++ src/app/application.rs
+@@ -1111,7 +1111,7 @@
+                                 }
+                             } else {
+                                 // Fallback raycast for non-physics visual entities
+-                                let mut best_dist = std::f32::MAX;
++                                let mut best_dist = f32::MAX;
+                                 let mut best_entity = None;
+ 
+                                 let renders = self.world.get_component_array::<RenderComponent>();
+@@ -1213,16 +1213,16 @@
+ 
+                         if viewport_hovered {
+                             if self.input.is_key_down(win32::VK_W) {
+-                                transform.position = transform.position + forward * speed;
++                                transform.position += forward * speed;
+                             }
+                             if self.input.is_key_down(win32::VK_S) {
+-                                transform.position = transform.position - forward * speed;
++                                transform.position -= forward * speed;
+                             }
+                             if self.input.is_key_down(win32::VK_A) {
+-                                transform.position = transform.position - right * speed;
++                                transform.position -= right * speed;
+                             }
+                             if self.input.is_key_down(win32::VK_D) {
+-                                transform.position = transform.position + right * speed;
++                                transform.position += right * speed;
+                             }
+                             if self.input.is_key_down(win32::VK_TAB) {
+                                 transform.position.y += speed;
+@@ -1236,13 +1236,13 @@
+             }
+ 
+             // Compute World Matrices
+-            let mut world_matrices = std::collections::HashMap::new();
++            self.world_matrices.clear();
+ 
+             let transforms = self.world.get_component_array_mut::<TransformComponent>();
+-            let entities = transforms.dense_entities_slice().to_vec();
++            let entities = transforms.dense_entities();
+ 
+             for (i, transform) in transforms.as_mut_slice().iter_mut().enumerate() {
+-                let entity = entities[i];
++                let entity = unsafe { *entities.add(i) };
+ 
+                 // Build local matrix: Translation * RotationY * Scale
+                 let mut rot_y = crate::math::mat4::Mat4::identity();
+@@ -1265,7 +1265,7 @@
+ 
+                 transform.matrix = t * rot_y * sc;
+ 
+-                world_matrices.insert(entity, transform.matrix);
++                self.world_matrices.insert(entity, transform.matrix);
+             }
+ 
+             // Resolve hierarchy: multiply child local by parent world
+@@ -1273,16 +1273,14 @@
+             for (i, hier) in hierarchies.as_slice().iter().enumerate() {
+                 let entity = hierarchies.dense_entities_slice()[i];
+                 if let Some(parent) = hier.parent {
+-                    if let Some(&parent_world) = world_matrices.get(&parent) {
+-                        if let Some(child_local) = world_matrices.get(&entity).copied() {
+-                            world_matrices.insert(entity, parent_world * child_local);
++                    if let Some(&parent_world) = self.world_matrices.get(&parent) {
++                        if let Some(child_local) = self.world_matrices.get(&entity).copied() {
++                            self.world_matrices.insert(entity, parent_world * child_local);
+                         }
+                     }
+                 }
+             }
+ 
+-            self.world_matrices = world_matrices;
+-
+             let full_output = self.egui_ctx.end_frame();
+             for (id, delta) in full_output.textures_delta.set {
+                 self.egui_backend
+@@ -1450,8 +1448,7 @@
+ 
+         // Wait for previous frame to finish
+         unsafe {
+-            let _ = self
+-                .vulkan
++            self.vulkan
+                 .device
+                 .wait_for_fences(
+                     &[self.vulkan.in_flight_fences[self.current_frame]],
+@@ -1487,31 +1484,23 @@
+         };
+ 
+         unsafe {
+-            let _ = self
+-                .vulkan
++            self.vulkan
+                 .device
+                 .reset_fences(&[self.vulkan.in_flight_fences[self.current_frame]])
+                 .unwrap();
+         }
+ 
+-        // Allocate a command buffer for this frame
+-        let alloc_info = vk::CommandBufferAllocateInfo::default()
+-            .command_pool(self.vulkan.command_pool)
+-            .level(vk::CommandBufferLevel::PRIMARY)
+-            .command_buffer_count(1);
+-
+-        let command_buffer = unsafe {
+-            self.vulkan
+-                .device
+-                .allocate_command_buffers(&alloc_info)
+-                .unwrap()[0]
+-        };
++        let command_buffer = self.vulkan.frame_command_buffers[self.current_frame];
+ 
+         // Begin recording
+         let begin_info = vk::CommandBufferBeginInfo::default()
+             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+ 
+         unsafe {
++            self.vulkan
++                .device
++                .reset_command_buffer(command_buffer, vk::CommandBufferResetFlags::empty())
++                .unwrap();
+             self.vulkan
+                 .device
+                 .begin_command_buffer(command_buffer, &begin_info)
+@@ -1549,7 +1538,9 @@
+                             self.skinning_instances.push(new_instance);
+                             instance_idx = Some(idx);
+                             
+-                            let skeletons_mut = unsafe { self.world.get_component_array_mut_unchecked::<crate::ecs::components::SkeletonComponent>() };
++                            let skeletons_mut = unsafe {
++                                &mut *self.world.get_component_array_mut_ptr::<crate::ecs::components::SkeletonComponent>()
++                            };
+                             let sk_mut = unsafe { skeletons_mut.get_mut(entity) };
+                             sk_mut.skinning_instance_index = Some(idx);
+                         }
+@@ -1655,7 +1646,7 @@
+                             );
+ 
+                             // 256 threads per group (match local_size_x in skinning.comp)
+-                            let group_count_x = (vertex_count + 255) / 256;
++                            let group_count_x = vertex_count.div_ceil(256);
+                             self.vulkan.device.cmd_dispatch(command_buffer, group_count_x, 1, 1);
+                         }
+                     }
+@@ -1727,7 +1718,7 @@
+                         );
+ 
+                         // 64 threads per group (match local_size_x in cull.comp)
+-                        let group_count_x = (meshlet_count + 63) / 64;
++                        let group_count_x = meshlet_count.div_ceil(64);
+                         self.vulkan.device.cmd_dispatch(command_buffer, group_count_x, 1, 1);
+                     }
+                 }
+@@ -2140,20 +2131,8 @@
+             Err(e) => panic!("Failed to present image: {:?}", e),
+         }
+ 
+-        // Clean up command buffer (in a real engine we'd reuse them per-frame in an array)
+-        unsafe {
+-            self.vulkan
+-                .device
+-                .wait_for_fences(
+-                    &[self.vulkan.in_flight_fences[self.current_frame]],
+-                    true,
+-                    u64::MAX,
+-                )
+-                .unwrap();
+-            self.vulkan
+-                .device
+-                .reset_command_pool(self.vulkan.command_pool, vk::CommandPoolResetFlags::empty())
+-                .unwrap();
+-            self.vulkan
+-                .device
+-                .free_command_buffers(self.vulkan.command_pool, &command_buffers);
+-        }
++        // Keep the frame command buffer allocated; it is reset at the start of
++        // the next frame after its fence has signaled.
+     }
+ }

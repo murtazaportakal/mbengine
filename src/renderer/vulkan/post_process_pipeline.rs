@@ -19,10 +19,14 @@ impl PostProcessPipeline {
         let downsample_frag_code = std::fs::read("shaders/bloom_downsample_frag.spv").ok()?;
         let upsample_frag_code = std::fs::read("shaders/bloom_upsample_frag.spv").ok()?;
 
-        let vert_module = crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &vert_code)?;
-        let tonemap_frag_module = crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &tonemap_frag_code)?;
-        let downsample_frag_module = crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &downsample_frag_code)?;
-        let upsample_frag_module = crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &upsample_frag_code)?;
+        let vert_module =
+            crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &vert_code)?;
+        let tonemap_frag_module =
+            crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &tonemap_frag_code)?;
+        let downsample_frag_module =
+            crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &downsample_frag_code)?;
+        let upsample_frag_module =
+            crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &upsample_frag_code)?;
 
         let entry_name = c"main";
 
@@ -36,7 +40,9 @@ impl PostProcessPipeline {
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
-        let viewport_state = vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
@@ -47,20 +53,21 @@ impl PostProcessPipeline {
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
             .sample_shading_enable(false)
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-        
+
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(false);
         let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
             .logic_op_enable(false)
             .attachments(std::slice::from_ref(&color_blend_attachment));
-        
+
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(false)
             .depth_write_enable(false);
 
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
         // --- Tonemap Pipeline ---
         let tonemap_bindings = [
@@ -75,12 +82,23 @@ impl PostProcessPipeline {
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
-        let tonemap_dsl_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&tonemap_bindings);
-        let tonemap_descriptor_set_layout = unsafe { vulkan.device.create_descriptor_set_layout(&tonemap_dsl_info, None).ok()? };
+        let tonemap_dsl_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&tonemap_bindings);
+        let tonemap_descriptor_set_layout = unsafe {
+            vulkan
+                .device
+                .create_descriptor_set_layout(&tonemap_dsl_info, None)
+                .ok()?
+        };
 
         let tonemap_pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(std::slice::from_ref(&tonemap_descriptor_set_layout));
-        let tonemap_layout = unsafe { vulkan.device.create_pipeline_layout(&tonemap_pipeline_layout_info, None).ok()? };
+        let tonemap_layout = unsafe {
+            vulkan
+                .device
+                .create_pipeline_layout(&tonemap_pipeline_layout_info, None)
+                .ok()?
+        };
 
         let mut tonemap_rendering_info = vk::PipelineRenderingCreateInfoKHR::default()
             .color_attachment_formats(std::slice::from_ref(&surface_format));
@@ -105,19 +123,30 @@ impl PostProcessPipeline {
             .push_next(&mut tonemap_rendering_info);
 
         let tonemap_pipeline = unsafe {
-            vulkan.device.create_graphics_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&tonemap_pipeline_info), None).map_err(|e| e.1).ok()?[0]
+            vulkan
+                .device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&tonemap_pipeline_info),
+                    None,
+                )
+                .map_err(|e| e.1)
+                .ok()?[0]
         };
 
         // --- Bloom Pipelines ---
-        let bloom_bindings = [
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        ];
+        let bloom_bindings = [vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
         let bloom_dsl_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bloom_bindings);
-        let bloom_descriptor_set_layout = unsafe { vulkan.device.create_descriptor_set_layout(&bloom_dsl_info, None).ok()? };
+        let bloom_descriptor_set_layout = unsafe {
+            vulkan
+                .device
+                .create_descriptor_set_layout(&bloom_dsl_info, None)
+                .ok()?
+        };
 
         let push_constant_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
@@ -127,7 +156,12 @@ impl PostProcessPipeline {
         let bloom_pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(std::slice::from_ref(&bloom_descriptor_set_layout))
             .push_constant_ranges(std::slice::from_ref(&push_constant_range));
-        let bloom_layout = unsafe { vulkan.device.create_pipeline_layout(&bloom_pipeline_layout_info, None).ok()? };
+        let bloom_layout = unsafe {
+            vulkan
+                .device
+                .create_pipeline_layout(&bloom_pipeline_layout_info, None)
+                .ok()?
+        };
 
         let mut bloom_rendering_info = vk::PipelineRenderingCreateInfoKHR::default()
             .color_attachment_formats(std::slice::from_ref(&vk::Format::R16G16B16A16_SFLOAT)); // Bloom targets are HDR
@@ -153,7 +187,15 @@ impl PostProcessPipeline {
             .push_next(&mut bloom_rendering_info);
 
         let bloom_downsample_pipeline = unsafe {
-            vulkan.device.create_graphics_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&downsample_pipeline_info), None).map_err(|e| e.1).ok()?[0]
+            vulkan
+                .device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&downsample_pipeline_info),
+                    None,
+                )
+                .map_err(|e| e.1)
+                .ok()?[0]
         };
 
         // Upsample
@@ -164,7 +206,7 @@ impl PostProcessPipeline {
         let upsample_stages = [vert_stage, upsample_frag_stage];
 
         // Upsample uses additive blending!
-        let mut upsample_color_blend_attachment = color_blend_attachment.clone();
+        let mut upsample_color_blend_attachment = color_blend_attachment;
         upsample_color_blend_attachment.blend_enable = 1;
         upsample_color_blend_attachment.src_color_blend_factor = vk::BlendFactor::ONE;
         upsample_color_blend_attachment.dst_color_blend_factor = vk::BlendFactor::ONE;
@@ -191,14 +233,28 @@ impl PostProcessPipeline {
             .push_next(&mut bloom_rendering_info);
 
         let bloom_upsample_pipeline = unsafe {
-            vulkan.device.create_graphics_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&upsample_pipeline_info), None).map_err(|e| e.1).ok()?[0]
+            vulkan
+                .device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&upsample_pipeline_info),
+                    None,
+                )
+                .map_err(|e| e.1)
+                .ok()?[0]
         };
 
         unsafe {
             vulkan.device.destroy_shader_module(vert_module, None);
-            vulkan.device.destroy_shader_module(tonemap_frag_module, None);
-            vulkan.device.destroy_shader_module(downsample_frag_module, None);
-            vulkan.device.destroy_shader_module(upsample_frag_module, None);
+            vulkan
+                .device
+                .destroy_shader_module(tonemap_frag_module, None);
+            vulkan
+                .device
+                .destroy_shader_module(downsample_frag_module, None);
+            vulkan
+                .device
+                .destroy_shader_module(upsample_frag_module, None);
         }
 
         Some(Self {
@@ -212,6 +268,7 @@ impl PostProcessPipeline {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_passes<'a>(
         &'a self,
         graph: &mut crate::renderer::vulkan::render_graph::RenderGraph<'a>,
@@ -234,7 +291,9 @@ impl PostProcessPipeline {
             "PostProcess",
             vec![
                 crate::renderer::vulkan::render_graph::PassResource {
-                    handle: crate::renderer::vulkan::render_graph::ResourceHandle(offscreen_target.color_image),
+                    handle: crate::renderer::vulkan::render_graph::ResourceHandle(
+                        offscreen_target.color_image,
+                    ),
                     state: crate::renderer::vulkan::render_graph::ResourceState {
                         layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                         stage_mask: vk::PipelineStageFlags::FRAGMENT_SHADER,
@@ -243,7 +302,9 @@ impl PostProcessPipeline {
                     },
                 },
                 crate::renderer::vulkan::render_graph::PassResource {
-                    handle: crate::renderer::vulkan::render_graph::ResourceHandle(sdr_target.color_image),
+                    handle: crate::renderer::vulkan::render_graph::ResourceHandle(
+                        sdr_target.color_image,
+                    ),
                     state: crate::renderer::vulkan::render_graph::ResourceState {
                         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                         stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
@@ -279,7 +340,11 @@ impl PostProcessPipeline {
                         std::slice::from_ref(&initial_barrier),
                     );
 
-                    vulkan.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.bloom_downsample_pipeline);
+                    vulkan.device.cmd_bind_pipeline(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.bloom_downsample_pipeline,
+                    );
 
                     // Downsample
                     for i in 0..bloom_target.mip_levels as usize {
@@ -300,39 +365,100 @@ impl PostProcessPipeline {
                                 base_array_layer: 0,
                                 layer_count: 1,
                             });
-                        vulkan.device.cmd_pipeline_barrier(command_buffer, vk::PipelineStageFlags::FRAGMENT_SHADER, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&barrier));
+                        vulkan.device.cmd_pipeline_barrier(
+                            command_buffer,
+                            vk::PipelineStageFlags::FRAGMENT_SHADER,
+                            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            std::slice::from_ref(&barrier),
+                        );
 
                         let color_attachment = vk::RenderingAttachmentInfoKHR::default()
                             .image_view(bloom_target.mip_views[i])
                             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                             .load_op(vk::AttachmentLoadOp::DONT_CARE)
                             .store_op(vk::AttachmentStoreOp::STORE);
-                        
+
                         let rendering_info = vk::RenderingInfoKHR::default()
-                            .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: mip_width, height: mip_height } })
+                            .render_area(vk::Rect2D {
+                                offset: vk::Offset2D { x: 0, y: 0 },
+                                extent: vk::Extent2D {
+                                    width: mip_width,
+                                    height: mip_height,
+                                },
+                            })
                             .layer_count(1)
                             .color_attachments(std::slice::from_ref(&color_attachment));
-                        
-                        vulkan.device.cmd_begin_rendering(command_buffer, &rendering_info);
 
-                        let viewport = vk::Viewport { x: 0.0, y: 0.0, width: mip_width as f32, height: mip_height as f32, min_depth: 0.0, max_depth: 1.0 };
-                        vulkan.device.cmd_set_viewport(command_buffer, 0, std::slice::from_ref(&viewport));
-                        let scissor = vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: mip_width, height: mip_height } };
-                        vulkan.device.cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor));
+                        vulkan
+                            .device
+                            .cmd_begin_rendering(command_buffer, &rendering_info);
 
-                        vulkan.device.cmd_bind_descriptor_sets(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.bloom_layout, 0, std::slice::from_ref(&bloom_descriptor_sets[i]), &[]);
+                        let viewport = vk::Viewport {
+                            x: 0.0,
+                            y: 0.0,
+                            width: mip_width as f32,
+                            height: mip_height as f32,
+                            min_depth: 0.0,
+                            max_depth: 1.0,
+                        };
+                        vulkan.device.cmd_set_viewport(
+                            command_buffer,
+                            0,
+                            std::slice::from_ref(&viewport),
+                        );
+                        let scissor = vk::Rect2D {
+                            offset: vk::Offset2D { x: 0, y: 0 },
+                            extent: vk::Extent2D {
+                                width: mip_width,
+                                height: mip_height,
+                            },
+                        };
+                        vulkan.device.cmd_set_scissor(
+                            command_buffer,
+                            0,
+                            std::slice::from_ref(&scissor),
+                        );
 
-                        let src_width = if i == 0 { offscreen_target.width } else { (bloom_target.width >> (i - 1)).max(1) };
-                        let src_height = if i == 0 { offscreen_target.height } else { (bloom_target.height >> (i - 1)).max(1) };
-                        
+                        vulkan.device.cmd_bind_descriptor_sets(
+                            command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.bloom_layout,
+                            0,
+                            std::slice::from_ref(&bloom_descriptor_sets[i]),
+                            &[],
+                        );
+
+                        let src_width = if i == 0 {
+                            offscreen_target.width
+                        } else {
+                            (bloom_target.width >> (i - 1)).max(1)
+                        };
+                        let src_height = if i == 0 {
+                            offscreen_target.height
+                        } else {
+                            (bloom_target.height >> (i - 1)).max(1)
+                        };
+
                         let pc = BloomPushConstants {
                             inv_resolution: [1.0 / src_width as f32, 1.0 / src_height as f32],
                             threshold: bloom_threshold,
                             is_first_pass: if i == 0 { 1.0 } else { 0.0 },
                         };
-                        
-                        let pc_bytes = std::slice::from_raw_parts(&pc as *const _ as *const u8, std::mem::size_of::<BloomPushConstants>());
-                        vulkan.device.cmd_push_constants(command_buffer, self.bloom_layout, vk::ShaderStageFlags::FRAGMENT, 0, pc_bytes);
+
+                        let pc_bytes = std::slice::from_raw_parts(
+                            &pc as *const _ as *const u8,
+                            std::mem::size_of::<BloomPushConstants>(),
+                        );
+                        vulkan.device.cmd_push_constants(
+                            command_buffer,
+                            self.bloom_layout,
+                            vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            pc_bytes,
+                        );
 
                         vulkan.device.cmd_draw(command_buffer, 3, 1, 0, 0);
                         vulkan.device.cmd_end_rendering(command_buffer);
@@ -351,11 +477,23 @@ impl PostProcessPipeline {
                                 base_array_layer: 0,
                                 layer_count: 1,
                             });
-                        vulkan.device.cmd_pipeline_barrier(command_buffer, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, vk::PipelineStageFlags::FRAGMENT_SHADER, vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&barrier));
+                        vulkan.device.cmd_pipeline_barrier(
+                            command_buffer,
+                            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                            vk::PipelineStageFlags::FRAGMENT_SHADER,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            std::slice::from_ref(&barrier),
+                        );
                     }
 
                     // Upsample
-                    vulkan.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.bloom_upsample_pipeline);
+                    vulkan.device.cmd_bind_pipeline(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.bloom_upsample_pipeline,
+                    );
                     for i in (0..bloom_target.mip_levels as usize - 1).rev() {
                         let mip_width = (bloom_target.width >> i).max(1);
                         let mip_height = (bloom_target.height >> i).max(1);
@@ -373,36 +511,89 @@ impl PostProcessPipeline {
                                 base_array_layer: 0,
                                 layer_count: 1,
                             });
-                        vulkan.device.cmd_pipeline_barrier(command_buffer, vk::PipelineStageFlags::FRAGMENT_SHADER, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&barrier));
+                        vulkan.device.cmd_pipeline_barrier(
+                            command_buffer,
+                            vk::PipelineStageFlags::FRAGMENT_SHADER,
+                            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            std::slice::from_ref(&barrier),
+                        );
 
                         let color_attachment = vk::RenderingAttachmentInfoKHR::default()
                             .image_view(bloom_target.mip_views[i])
                             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                             .load_op(vk::AttachmentLoadOp::LOAD)
                             .store_op(vk::AttachmentStoreOp::STORE);
-                        
+
                         let rendering_info = vk::RenderingInfoKHR::default()
-                            .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: mip_width, height: mip_height } })
+                            .render_area(vk::Rect2D {
+                                offset: vk::Offset2D { x: 0, y: 0 },
+                                extent: vk::Extent2D {
+                                    width: mip_width,
+                                    height: mip_height,
+                                },
+                            })
                             .layer_count(1)
                             .color_attachments(std::slice::from_ref(&color_attachment));
-                        
-                        vulkan.device.cmd_begin_rendering(command_buffer, &rendering_info);
 
-                        let viewport = vk::Viewport { x: 0.0, y: 0.0, width: mip_width as f32, height: mip_height as f32, min_depth: 0.0, max_depth: 1.0 };
-                        vulkan.device.cmd_set_viewport(command_buffer, 0, std::slice::from_ref(&viewport));
-                        let scissor = vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: mip_width, height: mip_height } };
-                        vulkan.device.cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor));
+                        vulkan
+                            .device
+                            .cmd_begin_rendering(command_buffer, &rendering_info);
 
-                        vulkan.device.cmd_bind_descriptor_sets(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.bloom_layout, 0, std::slice::from_ref(&bloom_descriptor_sets[i + 2]), &[]);
+                        let viewport = vk::Viewport {
+                            x: 0.0,
+                            y: 0.0,
+                            width: mip_width as f32,
+                            height: mip_height as f32,
+                            min_depth: 0.0,
+                            max_depth: 1.0,
+                        };
+                        vulkan.device.cmd_set_viewport(
+                            command_buffer,
+                            0,
+                            std::slice::from_ref(&viewport),
+                        );
+                        let scissor = vk::Rect2D {
+                            offset: vk::Offset2D { x: 0, y: 0 },
+                            extent: vk::Extent2D {
+                                width: mip_width,
+                                height: mip_height,
+                            },
+                        };
+                        vulkan.device.cmd_set_scissor(
+                            command_buffer,
+                            0,
+                            std::slice::from_ref(&scissor),
+                        );
+
+                        vulkan.device.cmd_bind_descriptor_sets(
+                            command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.bloom_layout,
+                            0,
+                            std::slice::from_ref(&bloom_descriptor_sets[i + 2]),
+                            &[],
+                        );
 
                         let pc = BloomPushConstants {
                             inv_resolution: [1.0 / mip_width as f32, 1.0 / mip_height as f32],
                             threshold: 0.0,
                             is_first_pass: 0.0,
                         };
-                        
-                        let pc_bytes = std::slice::from_raw_parts(&pc as *const _ as *const u8, std::mem::size_of::<BloomPushConstants>());
-                        vulkan.device.cmd_push_constants(command_buffer, self.bloom_layout, vk::ShaderStageFlags::FRAGMENT, 0, pc_bytes);
+
+                        let pc_bytes = std::slice::from_raw_parts(
+                            &pc as *const _ as *const u8,
+                            std::mem::size_of::<BloomPushConstants>(),
+                        );
+                        vulkan.device.cmd_push_constants(
+                            command_buffer,
+                            self.bloom_layout,
+                            vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            pc_bytes,
+                        );
 
                         vulkan.device.cmd_draw(command_buffer, 3, 1, 0, 0);
                         vulkan.device.cmd_end_rendering(command_buffer);
@@ -420,49 +611,109 @@ impl PostProcessPipeline {
                                 base_array_layer: 0,
                                 layer_count: 1,
                             });
-                        vulkan.device.cmd_pipeline_barrier(command_buffer, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, vk::PipelineStageFlags::FRAGMENT_SHADER, vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&barrier));
+                        vulkan.device.cmd_pipeline_barrier(
+                            command_buffer,
+                            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                            vk::PipelineStageFlags::FRAGMENT_SHADER,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            std::slice::from_ref(&barrier),
+                        );
                     }
 
                     // --- Tonemap Pass ---
-                    vulkan.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.tonemap_pipeline);
-                    
+                    vulkan.device.cmd_bind_pipeline(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.tonemap_pipeline,
+                    );
+
                     let color_attachment = vk::RenderingAttachmentInfoKHR::default()
                         .image_view(sdr_target.color_view)
                         .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                         .load_op(vk::AttachmentLoadOp::DONT_CARE)
                         .store_op(vk::AttachmentStoreOp::STORE);
-                    
+
                     let rendering_info = vk::RenderingInfoKHR::default()
-                        .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: sdr_target.width, height: sdr_target.height } })
+                        .render_area(vk::Rect2D {
+                            offset: vk::Offset2D { x: 0, y: 0 },
+                            extent: vk::Extent2D {
+                                width: sdr_target.width,
+                                height: sdr_target.height,
+                            },
+                        })
                         .layer_count(1)
                         .color_attachments(std::slice::from_ref(&color_attachment));
-                    
-                    vulkan.device.cmd_begin_rendering(command_buffer, &rendering_info);
 
-                    let viewport = vk::Viewport { x: 0.0, y: 0.0, width: sdr_target.width as f32, height: sdr_target.height as f32, min_depth: 0.0, max_depth: 1.0 };
-                    vulkan.device.cmd_set_viewport(command_buffer, 0, std::slice::from_ref(&viewport));
-                    let scissor = vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: sdr_target.width, height: sdr_target.height } };
-                    vulkan.device.cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor));
+                    vulkan
+                        .device
+                        .cmd_begin_rendering(command_buffer, &rendering_info);
 
-                    vulkan.device.cmd_bind_descriptor_sets(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.tonemap_layout, 0, std::slice::from_ref(&tonemap_descriptor_set), &[]);
+                    let viewport = vk::Viewport {
+                        x: 0.0,
+                        y: 0.0,
+                        width: sdr_target.width as f32,
+                        height: sdr_target.height as f32,
+                        min_depth: 0.0,
+                        max_depth: 1.0,
+                    };
+                    vulkan.device.cmd_set_viewport(
+                        command_buffer,
+                        0,
+                        std::slice::from_ref(&viewport),
+                    );
+                    let scissor = vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: vk::Extent2D {
+                            width: sdr_target.width,
+                            height: sdr_target.height,
+                        },
+                    };
+                    vulkan.device.cmd_set_scissor(
+                        command_buffer,
+                        0,
+                        std::slice::from_ref(&scissor),
+                    );
+
+                    vulkan.device.cmd_bind_descriptor_sets(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.tonemap_layout,
+                        0,
+                        std::slice::from_ref(&tonemap_descriptor_set),
+                        &[],
+                    );
 
                     vulkan.device.cmd_draw(command_buffer, 3, 1, 0, 0);
                     vulkan.device.cmd_end_rendering(command_buffer);
                 }
-            }
+            },
         );
     }
 
     pub fn destroy(&mut self, vulkan: &VulkanDevice) {
         unsafe {
-            vulkan.device.destroy_descriptor_set_layout(self.tonemap_descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.tonemap_descriptor_set_layout, None);
             vulkan.device.destroy_pipeline(self.tonemap_pipeline, None);
-            vulkan.device.destroy_pipeline_layout(self.tonemap_layout, None);
+            vulkan
+                .device
+                .destroy_pipeline_layout(self.tonemap_layout, None);
 
-            vulkan.device.destroy_descriptor_set_layout(self.bloom_descriptor_set_layout, None);
-            vulkan.device.destroy_pipeline(self.bloom_downsample_pipeline, None);
-            vulkan.device.destroy_pipeline(self.bloom_upsample_pipeline, None);
-            vulkan.device.destroy_pipeline_layout(self.bloom_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.bloom_descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_pipeline(self.bloom_downsample_pipeline, None);
+            vulkan
+                .device
+                .destroy_pipeline(self.bloom_upsample_pipeline, None);
+            vulkan
+                .device
+                .destroy_pipeline_layout(self.bloom_layout, None);
         }
     }
 }

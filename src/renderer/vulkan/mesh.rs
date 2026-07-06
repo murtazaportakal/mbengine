@@ -62,15 +62,18 @@ impl Mesh {
                 };
 
                 let uv = if !mesh.texcoords.is_empty() {
-                    [
-                        mesh.texcoords[i * 2],
-                        mesh.texcoords[i * 2 + 1],
-                    ]
+                    [mesh.texcoords[i * 2], mesh.texcoords[i * 2 + 1]]
                 } else {
                     [0.0, 0.0]
                 };
 
-                vertices.push(Vertex { pos, normal, uv, joint_ids: [0; 4], joint_weights: [0.0; 4] });
+                vertices.push(Vertex {
+                    pos,
+                    normal,
+                    uv,
+                    joint_ids: [0; 4],
+                    joint_weights: [0.0; 4],
+                });
             }
 
             let indices = mesh.indices.clone();
@@ -81,37 +84,40 @@ impl Mesh {
 
             // --- Meshlet Generation via meshopt ---
             // Max 64 vertices and 124 triangles (divisible by 4) per meshlet.
-            let vertices_u8: &[u8] = unsafe { 
+            let vertices_u8: &[u8] = unsafe {
                 std::slice::from_raw_parts(
-                    vertices.as_ptr() as *const u8, 
-                    vertices.len() * std::mem::size_of::<Vertex>()
-                ) 
+                    vertices.as_ptr() as *const u8,
+                    vertices.len() * std::mem::size_of::<Vertex>(),
+                )
             };
-            
+
             let vertex_data = meshopt::VertexDataAdapter::new(
                 vertices_u8,
                 std::mem::size_of::<Vertex>(),
                 0, // pos offset
-            ).unwrap();
+            )
+            .unwrap();
 
             let meshlets_raw = meshopt::build_meshlets(&indices, &vertex_data, 64, 124, 0.5);
-            
+
             let mut global_indices = Vec::new();
             let mut meshlet_data_vec = Vec::new();
 
             for i in 0..meshlets_raw.meshlets.len() {
                 let raw_m = &meshlets_raw.meshlets[i];
                 let index_offset = global_indices.len() as u32;
-                
+
                 // Reconstruct global indices for this meshlet
                 for tri_idx in 0..(raw_m.triangle_count * 3) {
-                    let local_index = meshlets_raw.triangles[(raw_m.triangle_offset + tri_idx) as usize];
-                    let global_vertex_index = meshlets_raw.vertices[(raw_m.vertex_offset + local_index as u32) as usize];
+                    let local_index =
+                        meshlets_raw.triangles[(raw_m.triangle_offset + tri_idx) as usize];
+                    let global_vertex_index =
+                        meshlets_raw.vertices[(raw_m.vertex_offset + local_index as u32) as usize];
                     global_indices.push(global_vertex_index);
                 }
 
                 // Compute bounding sphere
-                // meshopt returns it as an iterator of Meshlet<'_>, but let's do a simple AABB/Sphere manually 
+                // meshopt returns it as an iterator of Meshlet<'_>, but let's do a simple AABB/Sphere manually
                 // to avoid the meshopt struct bounds mismatch, or just parse the bounds.
                 // We'll compute a simple bounding sphere for the meshlet.
                 let mut min = [f32::MAX; 3];
@@ -119,8 +125,12 @@ impl Mesh {
                 for idx in index_offset as usize..global_indices.len() {
                     let v = &vertices[global_indices[idx] as usize];
                     for j in 0..3 {
-                        if v.pos[j] < min[j] { min[j] = v.pos[j]; }
-                        if v.pos[j] > max[j] { max[j] = v.pos[j]; }
+                        if v.pos[j] < min[j] {
+                            min[j] = v.pos[j];
+                        }
+                        if v.pos[j] > max[j] {
+                            max[j] = v.pos[j];
+                        }
                     }
                 }
                 let center = [
@@ -152,19 +162,22 @@ impl Mesh {
             let vertex_buffer =
                 Buffer::new_device_local(vulkan, &vertices, vk::BufferUsageFlags::VERTEX_BUFFER)?;
 
-            let index_buffer =
-                Buffer::new_device_local(vulkan, &global_indices, vk::BufferUsageFlags::INDEX_BUFFER)?;
+            let index_buffer = Buffer::new_device_local(
+                vulkan,
+                &global_indices,
+                vk::BufferUsageFlags::INDEX_BUFFER,
+            )?;
 
             let meshlet_buffer = Buffer::new_device_local(
-                vulkan, 
-                &meshlet_data_vec, 
-                vk::BufferUsageFlags::STORAGE_BUFFER // Used by Compute Shader
+                vulkan,
+                &meshlet_data_vec,
+                vk::BufferUsageFlags::STORAGE_BUFFER, // Used by Compute Shader
             )?;
 
             let indirect_buffer = Buffer::new_device_local(
                 vulkan,
                 &vec![0u8; meshlet_data_vec.len() * 20], // 5 u32s per command
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
             )?;
 
             loaded_meshes.push(Self {
@@ -192,8 +205,11 @@ impl Mesh {
             return None;
         }
 
-        let vertex_buffer =
-            Buffer::new_device_local(vulkan, vertices, vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER)?;
+        let vertex_buffer = Buffer::new_device_local(
+            vulkan,
+            vertices,
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER,
+        )?;
 
         let index_buffer =
             Buffer::new_device_local(vulkan, indices, vk::BufferUsageFlags::INDEX_BUFFER)?;
@@ -207,15 +223,12 @@ impl Mesh {
             padding: [0; 2],
         }];
 
-        let meshlet_buffer = Buffer::new_device_local(
-            vulkan,
-            &meshlet_data,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-        )?;
+        let meshlet_buffer =
+            Buffer::new_device_local(vulkan, &meshlet_data, vk::BufferUsageFlags::STORAGE_BUFFER)?;
 
         let indirect_buffer = Buffer::new_device_local(
             vulkan,
-            &vec![0u8; 20], // Single indirect command (5 u32s)
+            &[0u8; 20], // Single indirect command (5 u32s)
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
         )?;
 

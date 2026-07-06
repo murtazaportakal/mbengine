@@ -12,6 +12,7 @@ pub struct VulkanDevice {
     pub graphics_queue: vk::Queue,
     pub graphics_queue_family_index: u32,
     pub command_pool: vk::CommandPool,
+    pub frame_command_buffers: [vk::CommandBuffer; 2],
 
     // Sync primitives for a single frame
     pub image_available_semaphores: [vk::Semaphore; 2],
@@ -162,6 +163,16 @@ impl VulkanDevice {
             .queue_family_index(queue_family_index);
 
         let command_pool = unsafe { device.create_command_pool(&pool_create_info, None).ok()? };
+        let command_buffer_alloc_info = vk::CommandBufferAllocateInfo::default()
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_pool(command_pool)
+            .command_buffer_count(2);
+        let allocated_command_buffers = unsafe {
+            device
+                .allocate_command_buffers(&command_buffer_alloc_info)
+                .ok()?
+        };
+        let frame_command_buffers = [allocated_command_buffers[0], allocated_command_buffers[1]];
 
         let semaphore_info = vk::SemaphoreCreateInfo::default();
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
@@ -189,6 +200,7 @@ impl VulkanDevice {
             graphics_queue,
             graphics_queue_family_index: queue_family_index,
             command_pool,
+            frame_command_buffers,
             image_available_semaphores,
             render_finished_semaphores,
             in_flight_fences,
@@ -266,14 +278,14 @@ impl RenderDevice for VulkanDevice {
 
     fn shutdown(&mut self) {
         unsafe {
-            for i in 0..8 {
-                self.device
-                    .destroy_semaphore(self.render_finished_semaphores[i], None);
+            for semaphore in self.render_finished_semaphores {
+                self.device.destroy_semaphore(semaphore, None);
             }
-            for i in 0..2 {
-                self.device
-                    .destroy_semaphore(self.image_available_semaphores[i], None);
-                self.device.destroy_fence(self.in_flight_fences[i], None);
+            for semaphore in self.image_available_semaphores {
+                self.device.destroy_semaphore(semaphore, None);
+            }
+            for fence in self.in_flight_fences {
+                self.device.destroy_fence(fence, None);
             }
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);

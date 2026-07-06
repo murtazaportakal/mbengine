@@ -15,6 +15,10 @@ pub struct Scheduler {
     systems: Vec<Option<Box<dyn System>>>,
     /// Each inner Vec represents a stage and contains indices into `self.systems`.
     stages: Vec<Vec<usize>>,
+    /// Pre-allocated scratch buffer for temporarily holding systems during
+    /// parallel execution. Sized in `build_graph()` to the largest stage width.
+    /// Reused every frame via `clear()` + `push()` — never reallocates on the hot path.
+    scratch_systems: Vec<Box<dyn System>>,
 }
 
 impl Default for Scheduler {
@@ -28,6 +32,7 @@ impl Scheduler {
         Self {
             systems: Vec::new(),
             stages: Vec::new(),
+            scratch_systems: Vec::new(),
         }
     }
 
@@ -48,7 +53,7 @@ impl Scheduler {
 
             // Find the earliest stage where this system doesn't conflict.
             let mut target_stage = 0;
-            
+
             for (stage_idx, stage) in self.stages.iter().enumerate() {
                 let mut conflict = false;
                 for &other_idx in stage.iter() {
@@ -56,14 +61,15 @@ impl Scheduler {
                     let other_reads = other.read_components();
                     let other_writes = other.write_components();
 
-                    if (writes & other_reads) != 0 || 
-                       (reads & other_writes) != 0 || 
-                       (writes & other_writes) != 0 {
+                    if (writes & other_reads) != 0
+                        || (reads & other_writes) != 0
+                        || (writes & other_writes) != 0
+                    {
                         conflict = true;
                         break;
                     }
                 }
-                
+
                 if conflict {
                     // Conflict in this stage, must go to the next stage or later.
                     target_stage = stage_idx + 1;
@@ -75,20 +81,30 @@ impl Scheduler {
             }
             self.stages[target_stage].push(i);
         }
+
+        // Pre-allocate the scratch buffer to the largest stage width so that
+        // `execute()` never heap-allocates during the game loop.
+        let max_stage_width = self.stages.iter().map(|s| s.len()).max().unwrap_or(0);
+        self.scratch_systems = Vec::with_capacity(max_stage_width);
     }
 
     /// Execute all systems concurrently.
+    ///
+    /// Uses `self.scratch_systems` as a pre-allocated scratch buffer — no heap
+    /// allocations occur on this path. The buffer was sized in `build_graph()`.
     pub fn execute(&mut self, world: &World, dt: f32) {
         // Execute stages sequentially
         for stage in &self.stages {
-            // Temporarily take ownership of systems for this stage
-            let mut active_systems: Vec<Box<dyn System>> = Vec::with_capacity(stage.len());
+            // Reuse the pre-allocated scratch buffer. `clear()` sets len to 0
+            // without releasing capacity, and `push()` never exceeds the
+            // capacity reserved in `build_graph()`.
+            self.scratch_systems.clear();
             for &idx in stage.iter() {
-                active_systems.push(self.systems[idx].take().unwrap());
+                self.scratch_systems.push(self.systems[idx].take().unwrap());
             }
 
             std::thread::scope(|s| {
-                for sys in active_systems.iter_mut() {
+                for sys in self.scratch_systems.iter_mut() {
                     // Send to background threads
                     s.spawn(move || {
                         sys.update(dt, world);
@@ -96,11 +112,12 @@ impl Scheduler {
                 }
             });
 
-            // Restore systems back into the main array
-            let mut idx_iter = stage.iter();
-            for sys in active_systems {
-                let idx = *idx_iter.next().unwrap();
-                self.systems[idx] = Some(sys);
+            // Restore systems back into the main array.
+            // `drain(..)` consumes elements in order without deallocating the
+            // backing storage, preserving our pre-allocated capacity.
+            let mut drain = self.scratch_systems.drain(..);
+            for &idx in stage.iter() {
+                self.systems[idx] = Some(drain.next().unwrap());
             }
         }
     }

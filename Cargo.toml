@@ -7,6 +7,7 @@ name = "engine"
 version = "0.1.0"
 edition = "2021"
 description = "Custom game engine — Data-Oriented Design, custom allocators, ECS"
+default-run = "engine"
 
 [lib]
 name = "engine"
@@ -18,6 +19,26 @@ path = "tests/test_ecs.rs"
 
 [profile.dev]
 overflow-checks = true
+# Maximize parallelism for fast incremental compilation
+codegen-units = 256
+# Pack debug info into a separate file — massively reduces link time on Windows
+split-debuginfo = "packed"
+
+# Optimize heavy math/physics dependencies even in dev builds.
+# Without this, rapier3d and nalgebra run ~50-100× slower in debug,
+# and the linker processes much larger unoptimized object files.
+[profile.dev.package.rapier3d]
+opt-level = 2
+[profile.dev.package.nalgebra]
+opt-level = 2
+[profile.dev.package.simba]
+opt-level = 2
+[profile.dev.package.parry3d]
+opt-level = 2
+[profile.dev.package.image]
+opt-level = 2
+[profile.dev.package.rodio]
+opt-level = 2
 
 [profile.release]
 opt-level = 3
@@ -39,3 +60,4 @@ meshopt = "0.3"
 rodio = "0.17.3"
 gltf = "1.4"
 rfd = "0.17.2"
+rhai = "1.19"

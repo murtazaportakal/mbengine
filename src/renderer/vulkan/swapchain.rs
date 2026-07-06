@@ -55,7 +55,11 @@ impl Swapchain {
         let format = formats
             .iter()
             .find(|f| f.format == vk::Format::B8G8R8A8_UNORM)
-            .or_else(|| formats.iter().find(|f| f.format == vk::Format::R8G8B8A8_UNORM))
+            .or_else(|| {
+                formats
+                    .iter()
+                    .find(|f| f.format == vk::Format::R8G8B8A8_UNORM)
+            })
             .cloned()
             .unwrap_or(formats[0]);
 

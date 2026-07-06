@@ -42,12 +42,12 @@ struct ComponentArrayEntry {
     ops: *mut dyn ComponentArrayOps,
 }
 
-// Safety: ComponentArrayEntry stores pointers allocated in the arena. 
+// Safety: ComponentArrayEntry stores pointers allocated in the arena.
 // As long as the Arena outlives the World, and we don't alias mutably, it's safe.
 unsafe impl Send for ComponentArrayEntry {}
 unsafe impl Sync for ComponentArrayEntry {}
 
-// Safety: World encapsulates the raw pointers and provides safe access, 
+// Safety: World encapsulates the raw pointers and provides safe access,
 // and the Scheduler enforces exclusive access rules.
 unsafe impl Send for World {}
 unsafe impl Sync for World {}
@@ -242,39 +242,45 @@ impl World {
         if let Some(entry) = &self.component_arrays[type_id as usize] {
             unsafe { &*(entry.ptr as *const ComponentArray<T>) }
         } else {
-            panic!("World::get_component_array: component type {} not registered.", type_id);
+            panic!(
+                "World::get_component_array: component type {} not registered.",
+                type_id
+            );
         }
     }
 
-    /// Get unchecked mutable access to a ComponentArray<T> via a shared reference.
+    /// Get a raw mutable pointer to a ComponentArray<T> via a shared reference.
     ///
     /// # Safety
     /// The caller (e.g. Scheduler) must guarantee exclusive access to the component array
     /// to avoid data races when executing systems concurrently.
-    pub unsafe fn get_component_array_mut_unchecked<T: 'static>(&self) -> &mut ComponentArray<T> {
+    pub unsafe fn get_component_array_mut_ptr<T: 'static>(&self) -> *mut ComponentArray<T> {
         let type_id = get_component_type_id::<T>();
         debug_assert!(
             (type_id as u32) < MAX_COMPONENT_TYPES,
-            "World::get_component_array_mut_unchecked: type ID out of range."
+            "World::get_component_array_mut_ptr: type ID out of range."
         );
         if let Some(entry) = &self.component_arrays[type_id as usize] {
-            unsafe { &mut *(entry.ptr as *mut ComponentArray<T>) }
+            entry.ptr as *mut ComponentArray<T>
         } else {
-            panic!("World::get_component_array_mut_unchecked: component type {} not registered.", type_id);
+            panic!(
+                "World::get_component_array_mut_ptr: component type {} not registered.",
+                type_id
+            );
         }
     }
 
-    /// Get unchecked mutable access to a specific entity's component via a shared reference.
+    /// Get a raw mutable pointer to a specific entity's component via a shared reference.
     ///
     /// # Safety
     /// The caller must guarantee exclusive access to the entity's component to avoid data races.
-    pub unsafe fn get_component_mut_unchecked<T: 'static>(&self, id: EntityId) -> &mut T {
+    pub unsafe fn get_component_mut_ptr<T: 'static>(&self, id: EntityId) -> *mut T {
         debug_assert!(
             self.is_alive(id),
-            "World::get_component_mut_unchecked: entity is not alive."
+            "World::get_component_mut_ptr: entity is not alive."
         );
-        self.get_component_array_mut_unchecked::<T>()
-            .get_mut(get_entity_index(id))
+        let array = self.get_component_array_mut_ptr::<T>();
+        unsafe { (*array).get_mut(get_entity_index(id)) as *mut T }
     }
 
     /// Get mutable access to a ComponentArray<T>.
@@ -284,7 +290,10 @@ impl World {
         if let Some(entry) = &self.component_arrays[type_id as usize] {
             unsafe { &mut *(entry.ptr as *mut ComponentArray<T>) }
         } else {
-            panic!("World::get_component_array: component type {} not registered.", type_id);
+            panic!(
+                "World::get_component_array: component type {} not registered.",
+                type_id
+            );
         }
     }
 

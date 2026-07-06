@@ -9,11 +9,10 @@ pub struct ComputeCullPipeline {
 }
 
 impl ComputeCullPipeline {
-    pub fn new(
-        vulkan: &VulkanDevice,
-    ) -> Option<Self> {
+    pub fn new(vulkan: &VulkanDevice) -> Option<Self> {
         let comp_code = std::fs::read("shaders/cull.spv").ok()?;
-        let comp_module = crate::renderer::vulkan::pipeline::Pipeline::create_shader_module(vulkan, &comp_code)?;
+        let comp_module =
+            crate::renderer::vulkan::pipeline::Pipeline::create_shader_module(vulkan, &comp_code)?;
 
         let entry_name = c"main";
         let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -44,7 +43,10 @@ impl ComputeCullPipeline {
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let descriptor_set_layout = unsafe {
-            vulkan.device.create_descriptor_set_layout(&layout_info, None).ok()?
+            vulkan
+                .device
+                .create_descriptor_set_layout(&layout_info, None)
+                .ok()?
         };
 
         let push_constant_range = vk::PushConstantRange::default()
@@ -57,7 +59,10 @@ impl ComputeCullPipeline {
             .push_constant_ranges(std::slice::from_ref(&push_constant_range));
 
         let layout = unsafe {
-            vulkan.device.create_pipeline_layout(&pipeline_layout_info, None).ok()?
+            vulkan
+                .device
+                .create_pipeline_layout(&pipeline_layout_info, None)
+                .ok()?
         };
 
         let pipeline_info = vk::ComputePipelineCreateInfo::default()
@@ -65,11 +70,15 @@ impl ComputeCullPipeline {
             .layout(layout);
 
         let pipeline = unsafe {
-            vulkan.device.create_compute_pipelines(
-                vk::PipelineCache::null(),
-                std::slice::from_ref(&pipeline_info),
-                None,
-            ).map_err(|e| e.1).ok()?[0]
+            vulkan
+                .device
+                .create_compute_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&pipeline_info),
+                    None,
+                )
+                .map_err(|e| e.1)
+                .ok()?[0]
         };
 
         unsafe {
@@ -128,10 +137,9 @@ impl ComputeCullPipeline {
             .buffer_info(std::slice::from_ref(&indirect_info));
 
         unsafe {
-            vulkan.device.update_descriptor_sets(
-                &[write_ubo, write_meshlet, write_indirect],
-                &[],
-            );
+            vulkan
+                .device
+                .update_descriptor_sets(&[write_ubo, write_meshlet, write_indirect], &[]);
         }
     }
 
@@ -139,7 +147,9 @@ impl ComputeCullPipeline {
         unsafe {
             vulkan.device.destroy_pipeline(self.pipeline, None);
             vulkan.device.destroy_pipeline_layout(self.layout, None);
-            vulkan.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
     }
 }

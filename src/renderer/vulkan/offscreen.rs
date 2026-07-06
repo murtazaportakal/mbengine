@@ -20,7 +20,12 @@ pub struct OffscreenTarget {
 }
 
 impl OffscreenTarget {
-    pub fn new(vulkan: &VulkanDevice, width: u32, height: u32, color_format: vk::Format) -> Option<Self> {
+    pub fn new(
+        vulkan: &VulkanDevice,
+        width: u32,
+        height: u32,
+        color_format: vk::Format,
+    ) -> Option<Self> {
         let (color_image, color_memory, color_view) =
             Self::create_color_resources(vulkan, width, height, color_format)?;
         let (depth_image, depth_memory, depth_view) =
@@ -193,15 +198,24 @@ pub struct BloomTarget {
 }
 
 impl BloomTarget {
-    pub fn new(vulkan: &VulkanDevice, base_width: u32, base_height: u32, num_mips: usize) -> Option<Self> {
+    pub fn new(
+        vulkan: &VulkanDevice,
+        base_width: u32,
+        base_height: u32,
+        num_mips: usize,
+    ) -> Option<Self> {
         let mut mips = Vec::with_capacity(num_mips);
-        
+
         let mut current_width = base_width / 2;
         let mut current_height = base_height / 2;
 
         for _ in 0..num_mips {
-            if current_width == 0 { current_width = 1; }
-            if current_height == 0 { current_height = 1; }
+            if current_width == 0 {
+                current_width = 1;
+            }
+            if current_height == 0 {
+                current_height = 1;
+            }
 
             let format = vk::Format::R16G16B16A16_SFLOAT;
             let image_info = vk::ImageCreateInfo::default()

@@ -67,18 +67,14 @@ impl System for PhysicsSystem {
             &(),
         );
 
-        // Synchronize state from Rapier to ECS Transforms
-        let mut updates = Vec::new();
-        {
-            let rb_components = world.get_component_array::<RigidBodyComponent>();
-            let entities = rb_components.dense_entities_slice();
-            for (i, rb_comp) in rb_components.as_slice().iter().enumerate() {
-                updates.push((entities[i], rb_comp.handle));
-            }
-        }
+        // Synchronize state from Rapier to ECS Transforms.
+        let rb_components = world.get_component_array::<RigidBodyComponent>();
+        let entities = rb_components.dense_entities_slice();
+        let transforms = unsafe { &mut *world.get_component_array_mut_ptr::<TransformComponent>() };
 
-        let transforms = unsafe { world.get_component_array_mut_unchecked::<TransformComponent>() };
-        for (entity, handle) in updates {
+        for (i, rb_comp) in rb_components.as_slice().iter().enumerate() {
+            let entity = entities[i];
+            let handle = rb_comp.handle;
             if transforms.has(entity) {
                 if let Some(rb) = self.rigid_body_set.get(handle) {
                     let translation = rb.translation();
@@ -94,10 +90,14 @@ impl System for PhysicsSystem {
     }
 
     fn read_components(&self) -> ComponentMask {
-        crate::ecs::types::build_mask(&[crate::ecs::types::get_component_type_id::<RigidBodyComponent>()])
+        crate::ecs::types::build_mask(&[crate::ecs::types::get_component_type_id::<
+            RigidBodyComponent,
+        >()])
     }
 
     fn write_components(&self) -> ComponentMask {
-        crate::ecs::types::build_mask(&[crate::ecs::types::get_component_type_id::<TransformComponent>()])
+        crate::ecs::types::build_mask(&[crate::ecs::types::get_component_type_id::<
+            TransformComponent,
+        >()])
     }
 }

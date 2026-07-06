@@ -86,9 +86,56 @@ pub const fn is_valid_entity(id: EntityId) -> bool {
 // ── component-type ID assignment ────────────────────────────────────────────
 //
 // Each unique component type T gets a unique ComponentTypeId via
-// `get_component_type_id::<T>()`. IDs are assigned sequentially starting
-// from 0. Uses a global registry protected by a Mutex — registration
-// happens during init, never on the hot path.
+// `get_component_type_id::<T>()`. Core engine component types receive
+// deterministic IDs (0–11) via a compile-time table keyed by `TypeId`.
+// Additional types are assigned sequentially from 12 onwards via a
+// Mutex-protected fallback registry — this only happens during init,
+// never on the hot path.
+
+/// Published constants for core component type IDs.
+/// Game code can use these directly to avoid function-call overhead.
+pub const TRANSFORM_TYPE_ID: ComponentTypeId = 0;
+pub const RENDER_TYPE_ID: ComponentTypeId = 1;
+pub const CAMERA_TYPE_ID: ComponentTypeId = 2;
+pub const LIGHT_TYPE_ID: ComponentTypeId = 3;
+pub const POINT_LIGHT_TYPE_ID: ComponentTypeId = 4;
+pub const HIERARCHY_TYPE_ID: ComponentTypeId = 5;
+pub const RIGID_BODY_TYPE_ID: ComponentTypeId = 6;
+pub const COLLIDER_TYPE_ID: ComponentTypeId = 7;
+pub const SKELETON_TYPE_ID: ComponentTypeId = 8;
+pub const ANIMATOR_TYPE_ID: ComponentTypeId = 9;
+pub const AUDIO_LISTENER_TYPE_ID: ComponentTypeId = 10;
+pub const AUDIO_EMITTER_TYPE_ID: ComponentTypeId = 11;
+
+/// First ID available for dynamically registered component types.
+const DYNAMIC_ID_START: ComponentTypeId = 12;
+
+/// Table of (TypeId, assigned ComponentTypeId) for core engine components.
+/// Populated lazily on first access via `OnceLock`.
+fn core_type_table() -> &'static [(TypeId, ComponentTypeId)] {
+    use crate::ecs::components::*;
+
+    static TABLE: OnceLock<Vec<(TypeId, ComponentTypeId)>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        vec![
+            (TypeId::of::<TransformComponent>(), TRANSFORM_TYPE_ID),
+            (TypeId::of::<RenderComponent>(), RENDER_TYPE_ID),
+            (TypeId::of::<CameraComponent>(), CAMERA_TYPE_ID),
+            (TypeId::of::<LightComponent>(), LIGHT_TYPE_ID),
+            (TypeId::of::<PointLightComponent>(), POINT_LIGHT_TYPE_ID),
+            (TypeId::of::<HierarchyComponent>(), HIERARCHY_TYPE_ID),
+            (TypeId::of::<RigidBodyComponent>(), RIGID_BODY_TYPE_ID),
+            (TypeId::of::<ColliderComponent>(), COLLIDER_TYPE_ID),
+            (TypeId::of::<SkeletonComponent>(), SKELETON_TYPE_ID),
+            (TypeId::of::<AnimatorComponent>(), ANIMATOR_TYPE_ID),
+            (
+                TypeId::of::<AudioListenerComponent>(),
+                AUDIO_LISTENER_TYPE_ID,
+            ),
+            (TypeId::of::<AudioEmitterComponent>(), AUDIO_EMITTER_TYPE_ID),
+        ]
+    })
+}
 
 struct ComponentTypeRegistry {
     map: HashMap<TypeId, ComponentTypeId>,
@@ -101,34 +148,33 @@ fn registry() -> &'static Mutex<ComponentTypeRegistry> {
     REGISTRY.get_or_init(|| {
         Mutex::new(ComponentTypeRegistry {
             map: HashMap::new(),
-            next_id: 10,
+            next_id: DYNAMIC_ID_START,
         })
     })
 }
 
 /// Returns a unique, stable ComponentTypeId for the given type T.
-/// The first call for each T assigns the next available ID.
+///
+/// Core engine types (Transform, Render, Camera, etc.) receive
+/// deterministic IDs via a `TypeId` lookup table — no string matching.
+/// Any other type gets a sequentially assigned ID on first call.
 ///
 /// # Panics
 /// Panics if more than `MAX_COMPONENT_TYPES` distinct types are registered.
 pub fn get_component_type_id<T: 'static>() -> ComponentTypeId {
-    let name = std::any::type_name::<T>();
-    if name.contains("TransformComponent") { return 0; }
-    if name.contains("RenderComponent") { return 1; }
-    if name.contains("CameraComponent") { return 2; }
-    if name.contains("LightComponent") && !name.contains("PointLightComponent") { return 3; }
-    if name.contains("PointLightComponent") { return 4; }
-    if name.contains("HierarchyComponent") { return 5; }
-    if name.contains("RigidBodyComponent") { return 6; }
-    if name.contains("ColliderComponent") { return 7; }
-    if name.contains("SkeletonComponent") { return 8; }
-    if name.contains("AnimatorComponent") { return 9; }
-    
-    // Fallback for any other types
-    let type_id = TypeId::of::<T>();
+    let tid = TypeId::of::<T>();
+
+    // Fast path: scan the core type table (small, cache-friendly linear search).
+    for &(core_tid, id) in core_type_table() {
+        if core_tid == tid {
+            return id;
+        }
+    }
+
+    // Slow path: dynamic fallback for non-core types (init-time only).
     let mut reg = registry().lock().unwrap();
 
-    if let Some(&id) = reg.map.get(&type_id) {
+    if let Some(&id) = reg.map.get(&tid) {
         return id;
     }
 
@@ -138,7 +184,7 @@ pub fn get_component_type_id<T: 'static>() -> ComponentTypeId {
         "Exceeded MAX_COMPONENT_TYPES component registrations."
     );
     reg.next_id += 1;
-    reg.map.insert(type_id, id);
+    reg.map.insert(tid, id);
     id
 }
 
@@ -156,7 +202,7 @@ pub fn build_mask(type_ids: &[ComponentTypeId]) -> ComponentMask {
 pub fn reset_component_registry() {
     let mut reg = registry().lock().unwrap();
     reg.map.clear();
-    reg.next_id = 10;
+    reg.next_id = DYNAMIC_ID_START;
 }
 
 #[cfg(test)]

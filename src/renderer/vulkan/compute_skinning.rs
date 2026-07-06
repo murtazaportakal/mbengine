@@ -4,10 +4,10 @@
 //! applies weighted bone transforms, and writes deformed vertices to an output buffer.
 //! The output buffer is then bound as the vertex buffer during rendering.
 
+use crate::math::mat4::Mat4;
+use crate::renderer::vulkan::buffer::Buffer;
 use crate::renderer::vulkan::skeleton::MAX_BONES;
 use crate::renderer::vulkan::VulkanDevice;
-use crate::renderer::vulkan::buffer::Buffer;
-use crate::math::mat4::Mat4;
 use ash::vk;
 
 /// GPU resources for a single skinned mesh instance.
@@ -63,9 +63,8 @@ impl SkinningInstance {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&set_layouts);
 
-        let descriptor_set = unsafe {
-            vulkan.device.allocate_descriptor_sets(&alloc_info).ok()?[0]
-        };
+        let descriptor_set =
+            unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).ok()?[0] };
 
         // Update descriptor set
         let bone_info = vk::DescriptorBufferInfo::default()
@@ -139,7 +138,8 @@ impl ComputeSkinningPipeline {
     /// Create the skinning compute pipeline.
     pub fn new(vulkan: &VulkanDevice) -> Option<Self> {
         let comp_code = std::fs::read("shaders/skinning.spv").ok()?;
-        let comp_module = crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &comp_code)?;
+        let comp_module =
+            crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &comp_code)?;
 
         let entry_name = c"main";
         let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -171,7 +171,10 @@ impl ComputeSkinningPipeline {
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let descriptor_set_layout = unsafe {
-            vulkan.device.create_descriptor_set_layout(&layout_info, None).ok()?
+            vulkan
+                .device
+                .create_descriptor_set_layout(&layout_info, None)
+                .ok()?
         };
 
         // Push constant: vertex_count (u32)
@@ -185,7 +188,10 @@ impl ComputeSkinningPipeline {
             .push_constant_ranges(std::slice::from_ref(&push_constant_range));
 
         let layout = unsafe {
-            vulkan.device.create_pipeline_layout(&pipeline_layout_info, None).ok()?
+            vulkan
+                .device
+                .create_pipeline_layout(&pipeline_layout_info, None)
+                .ok()?
         };
 
         let pipeline_info = vk::ComputePipelineCreateInfo::default()
@@ -193,11 +199,15 @@ impl ComputeSkinningPipeline {
             .layout(layout);
 
         let pipeline = unsafe {
-            vulkan.device.create_compute_pipelines(
-                vk::PipelineCache::null(),
-                std::slice::from_ref(&pipeline_info),
-                None,
-            ).map_err(|e| e.1).ok()?[0]
+            vulkan
+                .device
+                .create_compute_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&pipeline_info),
+                    None,
+                )
+                .map_err(|e| e.1)
+                .ok()?[0]
         };
 
         unsafe {
@@ -250,8 +260,10 @@ impl ComputeSkinningPipeline {
         );
 
         // Dispatch: ceil(vertex_count / 256)
-        let group_count = (vertex_count + 255) / 256;
-        vulkan.device.cmd_dispatch(command_buffer, group_count, 1, 1);
+        let group_count = vertex_count.div_ceil(256);
+        vulkan
+            .device
+            .cmd_dispatch(command_buffer, group_count, 1, 1);
 
         // Memory barrier: compute write → vertex read
         let barrier = vk::MemoryBarrier::default()
@@ -273,7 +285,9 @@ impl ComputeSkinningPipeline {
         unsafe {
             vulkan.device.destroy_pipeline(self.pipeline, None);
             vulkan.device.destroy_pipeline_layout(self.layout, None);
-            vulkan.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
     }
 }

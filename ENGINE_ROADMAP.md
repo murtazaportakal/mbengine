@@ -1,6 +1,6 @@
 # Custom Game Engine — Architecture & Roadmap
 
-> **Last updated:** 2026-07-03 — V1/V2 Final Stability Polish & Editor UI Improvements
+> **Last updated:** 2026-07-06 — P0/P1 Zero-Heap Violations Resolved
 
 ---
 
@@ -30,6 +30,12 @@ The engine has reached full maturity for its baseline requirements. All V1 and V
 - **Editor UX**: Revamped Egui theme (light gray, sharp corners, distinct dropdown shadows).
 - **Vulkan Fixes**: Corrected Swapchain format selection to strictly prioritize `B8G8R8A8_UNORM` to prevent red/blue channel swaps, and fixed font texture descriptor tracking.
 - **Asynchronous IO**: Offloaded blocking native file dialogs (`rfd`) to background threads to prevent OS 'ghosting' overlays and thread deadlocks.
+
+### Zero-Heap Audit & Philosophy Fixes (July 4, 2026)
+- **Component Type IDs**: Replaced fragile `type_name().contains()` string matching with `TypeId`-based lookup table. Core types (0–11) resolved via compile-time table, immune to module path changes and substring collisions. Published constants (`TRANSFORM_TYPE_ID`, etc.) for direct use.
+- **TransformComponent Rotation**: Implemented full `T × Rz × Ry × Rx × S` Euler rotation matrix. Previously only `T × S` was computed, completely ignoring the rotation field.
+- **Game DLL Lock-Free**: Removed unnecessary `Mutex<Scheduler>` wrapper in `game.dll`. Replaced with `UnsafeCell` + `OnceLock` — `OnceLock` handles one-time init, `UnsafeCell` provides zero-overhead access since `game_update` is always single-threaded.
+- **Hot-Path HashMap Elimination**: Replaced `std::collections::HashMap` with pre-allocated `Vec`-based storage for `world_matrices` (flat `Vec<(u32, Mat4)>` with 256 reserved capacity) and `compute_descriptor_sets` (`Vec<Option<DescriptorSet>>` indexed by mesh index). Zero heap allocations during the game loop.
 
 ### 1. Memory Management Subsystem (`src/memory/`)
 - **Zero OS Heap on Hot Path**: The engine pre-allocates a 256 MB block from the OS (via `VirtualAlloc`/`mmap`) and slices it into distinct regions (Frame, Persistent, ECS, Stack).
@@ -67,6 +73,20 @@ The engine has reached full maturity for its baseline requirements. All V1 and V
 
 ---
 
+## Zero-Heap Compliance — Status
+
+### Resolved (July 6, 2026)
+- **P0 — Scheduler scratch buffer** (`src/ecs/scheduler.rs`): Replaced per-frame `Vec::with_capacity()` in `execute()` with a pre-allocated `scratch_systems` buffer, sized once in `build_graph()`. `clear()` + `push()` reuses capacity every frame — zero heap allocations.
+- **P0 — Resource tracker flat map** (`src/renderer/vulkan/render_graph.rs`, `src/app/application.rs`): Replaced `std::collections::HashMap<ResourceHandle, ResourceState>` with an inline `ResourceTracker` struct using a `[(ResourceHandle, ResourceState); 16]` fixed array with linear scan. Zero heap allocations.
+- **P1 — Audio sinks flat map** (`src/audio.rs`): Replaced `HashMap<u32, SpatialSink>` with `Vec<Option<SpatialSink>>` indexed by entity index. Pre-allocated to 128 slots at construction. Growth only occurs at entity creation time, never during the frame loop.
+- **P2 — Skeleton computed matrices** (`src/ecs/components.rs`): Replaced `Vec<Mat4>` with `FixedArray<Mat4, MAX_BONES>` to eliminate heap allocations inside `SkeletonComponent`.
+
+### Remaining Violations
+
+*None! The engine is now 100% Zero-Heap compliant on the hot path.*
+
+---
+
 ## The Next-Generation Engine (V3 Master Plan)
 
 With the rendering, hot-reloading, and multithreaded ECS foundations complete, the focus now shifts entirely to expanding the engine's capability as a full-suite game development platform.
@@ -78,19 +98,19 @@ With the rendering, hot-reloading, and multithreaded ECS foundations complete, t
 | **P1** | Spatial 3D Audio | Add `AudioEmitter` and `AudioListener` components. Implement HRTF/3D panning and distance attenuation based on ECS Transforms. *(Done)* |
 | **P2** | Audio Streaming | Stream large `.ogg` or `.wav` music tracks from the VFS to avoid high RAM consumption. *(Done)* |
 
-### Epic 2: Skeletal Animation & Blend Trees
+### Epic 2: Skeletal Animation & Blend Trees (Completed)
 | Priority | Feature | Description |
 |---|---|---|
-| **P1** | GLTF Skinning | Expand the GLTF loader to parse inverse bind matrices and bone weights. |
-| **P1** | Compute Shader Skinning | Move skeletal vertex deformation to a Vulkan compute shader for massive performance scaling. |
-| **P2** | Animation Graphs | Introduce an `AnimatorComponent` supporting 1D/2D blend trees, state machines, and cross-fading between animation clips. |
+| **P1** | GLTF Skinning | Expand the GLTF loader to parse inverse bind matrices and bone weights. *(Done)* |
+| **P1** | Compute Shader Skinning | Move skeletal vertex deformation to a Vulkan compute shader for massive performance scaling. *(Done)* |
+| **P2** | Animation Graphs | Introduce an `AnimatorComponent` supporting 1D/2D blend trees, state machines, and cross-fading between animation clips. *(Done)* |
 
-### Epic 3: Gameplay Scripting
+### Epic 3: Gameplay Scripting (Completed)
 | Priority | Feature | Description |
 |---|---|---|
-| **P1** | VM Integration | Embed a lightweight scripting language (e.g., `rhai` or `mlua`) to allow rapid behavior iteration without recompiling Rust DLLs. |
-| **P1** | API Bindings | Expose the ECS (entity creation, component modification, queries) and Math library to the scripting context securely. |
-| **P3** | Visual Node Graph | Build a visual node-based scripting tool inside the `egui` editor that transpiles to the embedded VM language. |
+| **P1** | VM Integration | Embed a lightweight scripting language (e.g., `rhai` or `mlua`) to allow rapid behavior iteration without recompiling Rust DLLs. *(Done)* |
+| **P1** | API Bindings | Expose the ECS (entity creation, component modification, queries) and Math library to the scripting context securely. *(Done)* |
+| **P3** | Visual Node Graph | Build a visual node-based scripting tool inside the `egui` editor that transpiles to the embedded VM language. *(Done)* |
 
 ### Epic 4: Advanced Physics & Queries
 | Priority | Feature | Description |
@@ -119,7 +139,7 @@ cargo run                   # Launch the Engine Editor
 ```
 
 ### Test Suite
-Run tests via `cargo test`. Contains 21 tests covering:
+Run tests via `cargo test`. Contains 40 tests covering:
 - Memory alignment, stack limits, arena save/restores, and OS region mapping.
 - ECS Entity ID lifecycle, generational bounds, component mapping.
 - Mutability safety across the Multithreaded Job System execution graph.

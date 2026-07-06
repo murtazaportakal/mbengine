@@ -1,6 +1,6 @@
-use notify::{Watcher, RecursiveMode};
 use crate::ecs::World;
 use crate::physics::PhysicsSystem;
+use notify::{RecursiveMode, Watcher};
 
 pub struct HotReloader {
     library: Option<libloading::Library>,
@@ -19,7 +19,7 @@ impl HotReloader {
             return None;
         }
         let mut watcher = watcher_res.unwrap();
-        
+
         let path = std::path::Path::new(dll_path);
         let dir = path.parent().unwrap_or(std::path::Path::new("."));
         if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
@@ -33,7 +33,7 @@ impl HotReloader {
             rx,
             _watcher: watcher,
         };
-        
+
         reloader.reload();
         Some(reloader)
     }
@@ -45,30 +45,34 @@ impl HotReloader {
         // If the DLL doesn't exist yet (first build), skip gracefully.
         // The file watcher will detect it when it appears and trigger a reload.
         if !std::path::Path::new(&self.dll_path).exists() {
-            println!("[HotReload] DLL not found yet at '{}', waiting for build...", self.dll_path);
+            println!(
+                "[HotReload] DLL not found yet at '{}', waiting for build...",
+                self.dll_path
+            );
             return;
         }
-        
-        // On Windows, rustc locks the DLL if it's loaded. 
+
+        // On Windows, rustc locks the DLL if it's loaded.
         // We copy it to a temporary file and load the copy.
         let temp_path = format!("{}_temp.dll", self.dll_path);
-        
+
         // Wait a few MS for the OS file lock to drop from rustc
         std::thread::sleep(std::time::Duration::from_millis(50));
-        
+
         match std::fs::copy(&self.dll_path, &temp_path) {
-            Ok(_) => {
-                unsafe {
-                    match libloading::Library::new(&temp_path) {
-                        Ok(lib) => {
-                            self.library = Some(lib);
-                            println!("[HotReload] Successfully loaded game DLL");
-                        }
-                        Err(e) => eprintln!("[HotReload] Failed to load DLL: {:?}", e),
+            Ok(_) => unsafe {
+                match libloading::Library::new(&temp_path) {
+                    Ok(lib) => {
+                        self.library = Some(lib);
+                        println!("[HotReload] Successfully loaded game DLL");
                     }
+                    Err(e) => eprintln!("[HotReload] Failed to load DLL: {:?}", e),
                 }
-            }
-            Err(e) => eprintln!("[HotReload] Failed to copy DLL from {} to {}: {:?}", self.dll_path, temp_path, e),
+            },
+            Err(e) => eprintln!(
+                "[HotReload] Failed to copy DLL from {} to {}: {:?}",
+                self.dll_path, temp_path, e
+            ),
         }
     }
 
@@ -94,7 +98,10 @@ impl HotReloader {
     pub fn call_game_update(&self, world: &mut World, physics: &mut PhysicsSystem, dt: f32) {
         if let Some(lib) = &self.library {
             unsafe {
-                match lib.get::<libloading::Symbol<unsafe extern "C" fn(&mut World, &mut PhysicsSystem, f32)>>(b"game_update") {
+                match lib.get::<libloading::Symbol<
+                    unsafe extern "C" fn(&mut World, &mut PhysicsSystem, f32),
+                >>(b"game_update")
+                {
                     Ok(func) => {
                         func(world, physics, dt);
                     }

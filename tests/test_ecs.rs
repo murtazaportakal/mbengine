@@ -43,9 +43,7 @@ struct MovementSystem {
 
 impl MovementSystem {
     fn new() -> Self {
-        Self {
-            update_count: 0,
-        }
+        Self { update_count: 0 }
     }
 }
 
@@ -67,9 +65,8 @@ impl System for MovementSystem {
         for entity_idx in entity_indices {
             unsafe {
                 let vel = *world.get_component_array::<Velocity>().get(entity_idx);
-                let pos = world
-                    .get_component_array_mut_unchecked::<Position>()
-                    .get_mut(entity_idx);
+                let positions = &mut *world.get_component_array_mut_ptr::<Position>();
+                let pos = positions.get_mut(entity_idx);
                 pos.x += vel.vx * dt;
                 pos.y += vel.vy * dt;
                 pos.z += vel.vz * dt;

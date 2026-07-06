@@ -124,3 +124,19 @@ impl<T, const N: usize> DerefMut for FixedArray<T, N> {
         self.as_mut_slice()
     }
 }
+
+impl<T: Clone, const N: usize> Clone for FixedArray<T, N> {
+    fn clone(&self) -> Self {
+        let mut new_arr = Self::new();
+        for item in self.as_slice() {
+            new_arr.push(item.clone());
+        }
+        new_arr
+    }
+}
+
+impl<T: std::fmt::Debug, const N: usize> std::fmt::Debug for FixedArray<T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_slice().fmt(f)
+    }
+}

@@ -59,7 +59,7 @@ impl Logger {
         let buf = self.buffer.lock().unwrap();
 
         // If the ring buffer is full, pop the oldest to make room
-        if let Err(_) = buf.push(entry) {
+        if buf.push(entry).is_err() {
             let _ = buf.pop();
             // Re-create the entry since it was consumed by `Err(entry)`
             let mut entry = LogEntry {

@@ -1,7 +1,6 @@
 //! Integration test booting the full Application loop.
 
 use engine::app::Application;
-use engine::renderer::RenderDevice;
 
 #[test]
 fn test_application_boot() {

@@ -66,11 +66,15 @@ impl Skeleton {
     ///   `final[i] = global_transform[i] * inverse_bind_matrix[i]`
     ///
     /// `local_transforms` must have exactly `bone_count()` entries.
-    pub fn compute_bone_matrices(&self, local_transforms: &[Mat4]) -> Vec<Mat4> {
+    pub fn compute_bone_matrices(
+        &self,
+        local_transforms: &[Mat4],
+        out_matrices: &mut crate::containers::FixedArray<Mat4, MAX_BONES>,
+    ) {
         debug_assert_eq!(local_transforms.len(), self.bones.len());
 
         let count = self.bones.len();
-        let mut global_transforms = vec![Mat4::identity(); count];
+        let mut global_transforms = [Mat4::identity(); MAX_BONES];
 
         // Forward pass: bones are stored in topological order (parents before children).
         for i in 0..count {
@@ -82,12 +86,10 @@ impl Skeleton {
         }
 
         // Final: global * inverse_bind
-        let mut final_matrices = vec![Mat4::identity(); count];
+        out_matrices.clear();
         for i in 0..count {
-            final_matrices[i] = global_transforms[i] * self.bones[i].inverse_bind_matrix;
+            out_matrices.push(global_transforms[i] * self.bones[i].inverse_bind_matrix);
         }
-
-        final_matrices
     }
 }
 
@@ -124,6 +126,92 @@ pub struct BoneChannel {
     pub scale_keys: Vec<(f32, Vec3)>,
 }
 
+// ── TransformTRS & SkeletonPose ─────────────────────────────────────────────
+
+/// Represents a raw decomposed transform (Translation, Rotation, Scale).
+#[derive(Clone, Copy, Debug)]
+pub struct TransformTRS {
+    pub translation: Vec3,
+    pub rotation: [f32; 4], // Quaternion (x, y, z, w)
+    pub scale: Vec3,
+}
+
+impl Default for TransformTRS {
+    fn default() -> Self {
+        Self {
+            translation: Vec3::new(0.0, 0.0, 0.0),
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: Vec3::new(1.0, 1.0, 1.0),
+        }
+    }
+}
+
+impl TransformTRS {
+    /// Blend two TRS transforms mathematically.
+    pub fn blend(a: &Self, b: &Self, weight: f32) -> Self {
+        Self {
+            translation: Vec3::new(
+                a.translation.x + (b.translation.x - a.translation.x) * weight,
+                a.translation.y + (b.translation.y - a.translation.y) * weight,
+                a.translation.z + (b.translation.z - a.translation.z) * weight,
+            ),
+            rotation: AnimationClip::slerp(&a.rotation, &b.rotation, weight),
+            scale: Vec3::new(
+                a.scale.x + (b.scale.x - a.scale.x) * weight,
+                a.scale.y + (b.scale.y - a.scale.y) * weight,
+                a.scale.z + (b.scale.z - a.scale.z) * weight,
+            ),
+        }
+    }
+
+    /// Convert to a Mat4.
+    pub fn to_matrix(&self) -> Mat4 {
+        AnimationClip::compose_trs(&self.translation, &self.rotation, &self.scale)
+    }
+}
+
+/// A pose of the skeleton containing a TRS for each bone.
+#[derive(Clone, Debug)]
+pub struct SkeletonPose {
+    pub bones: crate::containers::FixedArray<TransformTRS, MAX_BONES>,
+}
+
+impl Default for SkeletonPose {
+    fn default() -> Self {
+        Self {
+            bones: crate::containers::FixedArray::new(),
+        }
+    }
+}
+
+impl SkeletonPose {
+    pub fn new(bone_count: usize) -> Self {
+        let mut bones = crate::containers::FixedArray::new();
+        for _ in 0..bone_count {
+            bones.push(TransformTRS::default());
+        }
+        Self { bones }
+    }
+
+    pub fn blend(a: &Self, b: &Self, weight: f32, out_pose: &mut Self) {
+        out_pose.bones.clear();
+        for i in 0..a.bones.len() {
+            if i < b.bones.len() {
+                out_pose.bones.push(TransformTRS::blend(&a.bones[i], &b.bones[i], weight));
+            } else {
+                out_pose.bones.push(a.bones[i]); // Fallback
+            }
+        }
+    }
+
+    pub fn to_matrices(&self, out_transforms: &mut crate::containers::FixedArray<Mat4, MAX_BONES>) {
+        out_transforms.clear();
+        for trs in self.bones.as_slice() {
+            out_transforms.push(trs.to_matrix());
+        }
+    }
+}
+
 // ── AnimationClip ───────────────────────────────────────────────────────────
 
 /// A named animation clip containing keyframes for multiple bones.
@@ -138,21 +226,26 @@ pub struct AnimationClip {
 
 impl AnimationClip {
     /// Sample the clip at a given time `t` (in seconds), producing a local-space
-    /// transform matrix for each bone. `bone_count` is the total number of bones
+    /// TRS pose for each bone. `bone_count` is the total number of bones
     /// in the skeleton; channels without data at this bone default to identity.
-    pub fn sample(&self, t: f32, bone_count: usize) -> Vec<Mat4> {
-        let mut local_transforms = vec![Mat4::identity(); bone_count];
+    pub fn sample_pose(
+        &self,
+        t: f32,
+        bone_count: usize,
+        out_pose: &mut SkeletonPose,
+    ) {
+        out_pose.bones.clear();
+        for _ in 0..bone_count {
+            out_pose.bones.push(TransformTRS::default());
+        }
 
         for channel in &self.channels {
             let translation = Self::sample_vec3(&channel.translation_keys, t);
             let rotation = Self::sample_quat(&channel.rotation_keys, t);
             let scale = Self::sample_vec3(&channel.scale_keys, t);
 
-            local_transforms[channel.bone_index] =
-                Self::compose_trs(&translation, &rotation, &scale);
+            out_pose.bones[channel.bone_index] = TransformTRS { translation, rotation, scale };
         }
-
-        local_transforms
     }
 
     /// Linearly interpolate a Vec3 channel at time `t`.
@@ -209,7 +302,7 @@ impl AnimationClip {
     }
 
     /// Quaternion spherical linear interpolation.
-    fn slerp(a: &[f32; 4], b: &[f32; 4], t: f32) -> [f32; 4] {
+    pub fn slerp(a: &[f32; 4], b: &[f32; 4], t: f32) -> [f32; 4] {
         let mut dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
 
         // If dot < 0, negate one to take the short path.
@@ -253,7 +346,7 @@ impl AnimationClip {
     }
 
     /// Compose a TRS (Translation * Rotation * Scale) matrix from components.
-    fn compose_trs(translation: &Vec3, rotation: &[f32; 4], scale: &Vec3) -> Mat4 {
+    pub fn compose_trs(translation: &Vec3, rotation: &[f32; 4], scale: &Vec3) -> Mat4 {
         // Quaternion to rotation matrix
         let (x, y, z, w) = (rotation[0], rotation[1], rotation[2], rotation[3]);
 

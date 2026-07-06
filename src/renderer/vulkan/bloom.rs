@@ -17,7 +17,7 @@ pub struct BloomTarget {
 impl BloomTarget {
     pub fn new(vulkan: &VulkanDevice, width: u32, height: u32, mip_levels: u32) -> Option<Self> {
         let format = vk::Format::R16G16B16A16_SFLOAT;
-        
+
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D {
@@ -60,7 +60,12 @@ impl BloomTarget {
                 layer_count: 1,
             });
 
-        let full_view = unsafe { vulkan.device.create_image_view(&full_view_info, None).ok()? };
+        let full_view = unsafe {
+            vulkan
+                .device
+                .create_image_view(&full_view_info, None)
+                .ok()?
+        };
 
         let mut mip_views = Vec::with_capacity(mip_levels as usize);
         for i in 0..mip_levels {

@@ -1,6 +1,6 @@
-pub mod audio;
 pub mod app;
 pub mod asset_manager;
+pub mod audio;
 pub mod containers;
 pub mod ecs;
 pub mod logging;
@@ -11,3 +11,4 @@ pub mod platform;
 pub mod renderer;
 pub mod utils;
 pub mod vfs;
+pub mod scripting;

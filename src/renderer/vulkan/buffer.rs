@@ -48,7 +48,7 @@ impl Buffer {
 
     /// Upload CPU data directly into HOST_VISIBLE buffer memory.
     pub fn upload<T: Copy>(&self, vulkan: &VulkanDevice, data: &[T]) {
-        let data_size = (data.len() * std::mem::size_of::<T>()) as u64;
+        let data_size = std::mem::size_of_val(data) as u64;
         assert!(data_size <= self.size);
 
         unsafe {
@@ -69,7 +69,7 @@ impl Buffer {
         data: &[T],
         usage: vk::BufferUsageFlags,
     ) -> Option<Self> {
-        let buffer_size = (data.len() * std::mem::size_of::<T>()) as u64;
+        let buffer_size = std::mem::size_of_val(data) as u64;
 
         // 1. Create Staging Buffer
         let staging_buffer = Self::new(

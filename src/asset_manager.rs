@@ -1,9 +1,11 @@
+use crate::renderer::vulkan::skeleton::{AnimationClip, Skeleton};
 use crate::renderer::vulkan::{Mesh, Texture, VulkanDevice};
-use crate::renderer::vulkan::skeleton::{Skeleton, AnimationClip};
+use crate::scripting::engine::ScriptEngine;
+use rhai::AST;
 use crate::vfs::Vfs;
+use notify::{RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::Path;
-use notify::{Watcher, RecursiveMode};
 
 pub enum AssetEvent {
     ShaderChanged,
@@ -15,9 +17,9 @@ pub struct AssetManager {
     textures: HashMap<String, Texture>,
     meshes: Vec<Mesh>,
     model_map: HashMap<String, Vec<usize>>,
-    
+
     // File to Name reverse mappings to know which asset changed
-    texture_paths: HashMap<String, String>, 
+    texture_paths: HashMap<String, String>,
     model_paths: HashMap<String, String>,
 
     /// Skeletons loaded from GLTF files, keyed by asset name.
@@ -25,6 +27,10 @@ pub struct AssetManager {
     /// Animation clips loaded from GLTF files, keyed by asset name.
     /// Each GLTF can contain multiple clips.
     animation_clips: HashMap<String, Vec<AnimationClip>>,
+
+    /// Cached Rhai ASTs.
+    scripts: HashMap<String, AST>,
+    script_paths: HashMap<String, String>,
 
     pub vfs: Vfs,
     watcher: Option<notify::RecommendedWatcher>,
@@ -47,6 +53,8 @@ impl AssetManager {
             model_paths: HashMap::new(),
             skeletons: HashMap::new(),
             animation_clips: HashMap::new(),
+            scripts: HashMap::new(),
+            script_paths: HashMap::new(),
             vfs: Vfs::default(),
             watcher: None,
             rx: None,
@@ -73,7 +81,8 @@ impl AssetManager {
         if !self.textures.contains_key(name) {
             if let Some(tex) = Texture::load_from_file(vulkan, path) {
                 self.textures.insert(name.to_string(), tex);
-                self.texture_paths.insert(path.to_string(), name.to_string());
+                self.texture_paths
+                    .insert(path.to_string(), name.to_string());
             } else {
                 crate::log_info!("Failed to load texture: {}", path);
                 return None;
@@ -91,7 +100,8 @@ impl AssetManager {
         if !self.textures.contains_key(name) {
             if let Some(tex) = Texture::load_hdr(vulkan, path) {
                 self.textures.insert(name.to_string(), tex);
-                self.texture_paths.insert(path.to_string(), name.to_string());
+                self.texture_paths
+                    .insert(path.to_string(), name.to_string());
             } else {
                 crate::log_info!("Failed to load HDR texture: {}", path);
                 return None;
@@ -162,7 +172,8 @@ impl AssetManager {
 
         // Store animation clips
         if !gltf_data.clips.is_empty() {
-            self.animation_clips.insert(name.to_string(), gltf_data.clips);
+            self.animation_clips
+                .insert(name.to_string(), gltf_data.clips);
         }
 
         self.model_map.get(name).map(|v| v.as_slice())
@@ -180,7 +191,37 @@ impl AssetManager {
 
     /// Find an animation clip by asset name and clip name.
     pub fn get_animation_clip(&self, asset_name: &str, clip_name: &str) -> Option<&AnimationClip> {
-        self.animation_clips.get(asset_name)?.iter().find(|c| c.name == clip_name)
+        self.animation_clips
+            .get(asset_name)?
+            .iter()
+            .find(|c| c.name == clip_name)
+    }
+
+    /// Load and compile a Rhai script.
+    pub fn load_script(&mut self, engine: &ScriptEngine, name: &str, path: &str) -> Option<&AST> {
+        if !self.scripts.contains_key(name) {
+            if let Ok(source) = std::fs::read_to_string(path) {
+                match engine.compile(&source) {
+                    Ok(ast) => {
+                        self.scripts.insert(name.to_string(), ast);
+                        self.script_paths.insert(path.to_string(), name.to_string());
+                    }
+                    Err(e) => {
+                        crate::log_info!("Failed to compile script {}: {}", path, e);
+                        return None;
+                    }
+                }
+            } else {
+                crate::log_info!("Failed to read script file: {}", path);
+                return None;
+            }
+        }
+        self.scripts.get(name)
+    }
+
+    /// Get a compiled script AST by name.
+    pub fn get_script_ast(&self, name: &str) -> Option<&AST> {
+        self.scripts.get(name)
     }
 
     pub fn poll_changes(&mut self, vulkan: &VulkanDevice) -> Vec<AssetEvent> {
@@ -191,7 +232,7 @@ impl AssetManager {
                     for path in event.paths {
                         if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                             let path_str = path.to_string_lossy().replace('\\', "/");
-                            
+
                             if ext == "vert" || ext == "frag" {
                                 if crate::utils::shader_compiler::compile_shader(&path).is_ok() {
                                     events.push(AssetEvent::ShaderChanged);
@@ -208,16 +249,24 @@ impl AssetManager {
                                     crate::log_info!("Hot-reloading texture: {}", p);
                                     if ext == "hdr" {
                                         if let Some(tex) = Texture::load_hdr(vulkan, &p) {
-                                            if let Some(mut old) = self.textures.insert(name.clone(), tex) {
-                                                unsafe { vulkan.device.device_wait_idle().unwrap() };
+                                            if let Some(mut old) =
+                                                self.textures.insert(name.clone(), tex)
+                                            {
+                                                unsafe {
+                                                    vulkan.device.device_wait_idle().unwrap()
+                                                };
                                                 old.shutdown(vulkan);
                                             }
                                             events.push(AssetEvent::TextureChanged(name));
                                         }
                                     } else {
                                         if let Some(tex) = Texture::load_from_file(vulkan, &p) {
-                                            if let Some(mut old) = self.textures.insert(name.clone(), tex) {
-                                                unsafe { vulkan.device.device_wait_idle().unwrap() };
+                                            if let Some(mut old) =
+                                                self.textures.insert(name.clone(), tex)
+                                            {
+                                                unsafe {
+                                                    vulkan.device.device_wait_idle().unwrap()
+                                                };
                                                 old.shutdown(vulkan);
                                             }
                                             events.push(AssetEvent::TextureChanged(name));
@@ -245,18 +294,35 @@ impl AssetManager {
                                                     // Since we iterate forward, let's reverse loaded_meshes so we can pop.
                                                 }
                                             }
-                                            
+
                                             // Simplest way: reverse loaded_meshes and pop
                                             loaded_meshes.reverse();
-                                            for (_i, idx) in indices.iter().enumerate() {
+                                            for idx in indices.iter() {
                                                 if let Some(new_mesh) = loaded_meshes.pop() {
-                                                    let mut old_mesh = std::mem::replace(&mut self.meshes[*idx], new_mesh);
+                                                    let mut old_mesh = std::mem::replace(
+                                                        &mut self.meshes[*idx],
+                                                        new_mesh,
+                                                    );
                                                     old_mesh.shutdown(vulkan);
                                                 }
                                             }
                                             events.push(AssetEvent::ModelChanged(p));
                                         }
                                     }
+                                }
+                            } else if ext == "rhai" {
+                                let mut matched_name = None;
+                                for (p, name) in &self.script_paths {
+                                    if path_str.ends_with(p) {
+                                        matched_name = Some((name.clone(), p.clone()));
+                                        break;
+                                    }
+                                }
+                                if let Some((name, p)) = matched_name {
+                                    crate::log_info!("Hot-reloading script: {}", p);
+                                    // Notice: Since we don't have the engine here, we just remove the AST so it will reload next time.
+                                    // In a real scenario we might recompile it here if we stored the Engine.
+                                    self.scripts.remove(&name);
                                 }
                             }
                         }

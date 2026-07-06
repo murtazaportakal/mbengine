@@ -55,16 +55,14 @@ impl Window {
 
             win32::ShowWindow(hwnd, win32::SW_SHOW);
 
-            let window = Self {
+            Self {
                 hwnd,
                 hinstance,
                 should_close: false,
                 width: width as u32,
                 height: height as u32,
                 resized: false,
-            };
-
-            window
+            }
         }
     }
 

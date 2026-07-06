@@ -87,8 +87,8 @@ impl Texture {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D {
-                width: width as u32,
-                height: height as u32,
+                width,
+                height,
                 depth: 1,
             })
             .mip_levels(mip_levels)
@@ -144,8 +144,8 @@ impl Texture {
             )
             .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
             .image_extent(vk::Extent3D {
-                width: width as u32,
-                height: height as u32,
+                width,
+                height,
                 depth: 1,
             });
 
@@ -608,7 +608,11 @@ impl Texture {
                     .base_array_layer(0)
                     .layer_count(1),
             )
-            .image_offset(vk::Offset3D { x: x as i32, y: y as i32, z: 0 })
+            .image_offset(vk::Offset3D {
+                x: x as i32,
+                y: y as i32,
+                z: 0,
+            })
             .image_extent(vk::Extent3D {
                 width,
                 height,

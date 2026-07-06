@@ -80,7 +80,11 @@ fn extract_meshes(
             // Joint IDs (JOINTS_0) — up to 4 bone influences per vertex
             let joints: Vec<[u32; 4]> = reader
                 .read_joints(0)
-                .map(|iter| iter.into_u16().map(|j| [j[0] as u32, j[1] as u32, j[2] as u32, j[3] as u32]).collect())
+                .map(|iter| {
+                    iter.into_u16()
+                        .map(|j| [j[0] as u32, j[1] as u32, j[2] as u32, j[3] as u32])
+                        .collect()
+                })
                 .unwrap_or_else(|| vec![[0u32; 4]; positions.len()]);
 
             // Joint Weights (WEIGHTS_0)
@@ -130,7 +134,10 @@ fn extract_skeleton(
     let joints: Vec<gltf::Node<'_>> = skin.joints().collect();
 
     // Read inverse bind matrices
-    let inverse_bind_matrices: Vec<Mat4> = match skin.reader(|buffer| Some(&buffers[buffer.index()])).read_inverse_bind_matrices() {
+    let inverse_bind_matrices: Vec<Mat4> = match skin
+        .reader(|buffer| Some(&buffers[buffer.index()]))
+        .read_inverse_bind_matrices()
+    {
         Some(iter) => iter.map(|m| gltf_mat4_to_mat4(&m)).collect(),
         None => vec![Mat4::identity(); joints.len()],
     };
@@ -243,12 +250,14 @@ fn extract_animations(
                 }
             }
 
-            let entry = channel_map.entry(bone_index).or_insert_with(|| BoneChannel {
-                bone_index,
-                translation_keys: Vec::new(),
-                rotation_keys: Vec::new(),
-                scale_keys: Vec::new(),
-            });
+            let entry = channel_map
+                .entry(bone_index)
+                .or_insert_with(|| BoneChannel {
+                    bone_index,
+                    translation_keys: Vec::new(),
+                    rotation_keys: Vec::new(),
+                    scale_keys: Vec::new(),
+                });
 
             match reader.read_outputs() {
                 Some(gltf::animation::util::ReadOutputs::Translations(iter)) => {
@@ -279,10 +288,7 @@ fn extract_animations(
             channels.push(bone_channel);
         }
 
-        let clip_name = animation
-            .name()
-            .unwrap_or("unnamed_animation")
-            .to_string();
+        let clip_name = animation.name().unwrap_or("unnamed_animation").to_string();
 
         clips.push(AnimationClip {
             name: clip_name,

@@ -1,72 +1,9 @@
-use crate::ecs::{EntityId, World};
-use crate::ecs::TransformComponent;
-use crate::physics::PhysicsSystem;
 use crate::ecs::reflection::ComponentRegistry;
-pub fn configure_theme(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::light();
-    
-    // Light gray backgrounds
-    let bg_color = egui::Color32::from_rgb(245, 245, 245);
-    let panel_color = egui::Color32::from_rgb(255, 255, 255); // Solid white for distinct windows/menus
-    let text_color = egui::Color32::from_rgb(20, 20, 20);
-    let accent_color = egui::Color32::from_rgb(0, 112, 224); 
-    let accent_hovered = egui::Color32::from_rgb(30, 130, 240);
-    
-    visuals.widgets.noninteractive.bg_fill = panel_color;
-    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200));
-    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_color);
-    
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(225, 225, 225);
-    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200));
-    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text_color);
-    
-    visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(210, 210, 210);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent_hovered);
-    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text_color);
-    
-    visuals.widgets.active.bg_fill = accent_color;
-    visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, accent_color);
-    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-
-    visuals.selection.bg_fill = accent_color;
-    visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 80, 180));
-    
-    visuals.window_fill = panel_color;
-    visuals.panel_fill = bg_color;
-    visuals.faint_bg_color = bg_color;
-    visuals.extreme_bg_color = panel_color;
-    
-    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 180, 180));
-    
-    visuals.window_shadow = egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 8.0),
-        blur: 16.0,
-        spread: 0.0,
-        color: egui::Color32::from_black_alpha(60),
-    };
-    visuals.popup_shadow = egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 4.0),
-        blur: 8.0,
-        spread: 0.0,
-        color: egui::Color32::from_black_alpha(60),
-    };
-    
-    let rounding = egui::Rounding::same(2.0);
-    visuals.widgets.noninteractive.rounding = rounding;
-    visuals.widgets.inactive.rounding = rounding;
-    visuals.widgets.hovered.rounding = rounding;
-    visuals.widgets.active.rounding = rounding;
-    visuals.window_rounding = rounding;
-    visuals.menu_rounding = rounding;
-    
-    ctx.set_visuals(visuals);
-
-    let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(6.0, 4.0);
-    style.spacing.window_margin = egui::Margin::same(4.0);
-    ctx.set_style(style);
-}
+use crate::ecs::TransformComponent;
+use crate::ecs::{EntityId, World};
+use crate::physics::PhysicsSystem;
+use crate::app::docking::{DockingManager, PanelType};
+use crate::app::slate_theme::EngineTheme;
 
 pub enum EditorAction {
     Play,
@@ -74,17 +11,18 @@ pub enum EditorAction {
     SpawnModel(String),
 }
 
-#[derive(PartialEq)]
-pub enum BottomTab {
-    Console,
-    AssetBrowser,
-    Profiler,
-}
-
 pub struct Editor {
     pub registry: ComponentRegistry,
-    pub bottom_tab: BottomTab,
     pub file_dialog_receiver: Option<std::sync::mpsc::Receiver<String>>,
+    pub node_editor: crate::app::node_editor::NodeGraphEditor,
+    pub docking: DockingManager,
+    pub theme: EngineTheme,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Editor {
@@ -100,15 +38,19 @@ impl Editor {
         registry.register::<crate::ecs::components::AudioEmitterComponent>();
         registry.register::<crate::ecs::components::AudioListenerComponent>();
         registry.register::<crate::ecs::components::SkeletonComponent>();
+        registry.register::<crate::ecs::components::ScriptBehaviorComponent>();
         registry.register::<crate::ecs::components::AnimatorComponent>();
-        
-        Self { 
-            registry, 
-            bottom_tab: BottomTab::Console,
+
+        Self {
+            registry,
             file_dialog_receiver: None,
+            node_editor: crate::app::node_editor::NodeGraphEditor::new(),
+            docking: DockingManager::new(),
+            theme: EngineTheme::slate(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         ctx: &egui::Context,
@@ -118,8 +60,12 @@ impl Editor {
         bloom_threshold: &mut f32,
         fps: f32,
         is_playing: bool,
-    ) -> Vec<EditorAction> {
+        offscreen_texture_id: egui::TextureId,
+    ) -> (Vec<EditorAction>, Option<(u32, u32)>, Option<(f32, f32)>, bool) {
         let mut actions = Vec::new();
+        let mut new_viewport_size = None;
+        let mut raycast_request = None;
+        let mut viewport_hovered = false;
 
         // Check if a file dialog completed
         if let Some(rx) = &self.file_dialog_receiver {
@@ -130,152 +76,190 @@ impl Editor {
         }
 
         // --- Top Menu Bar ---
-        let top_frame = egui::Frame::default()
-            .fill(ctx.style().visuals.panel_fill)
-            .inner_margin(4.0);
+        let top_frame = crate::app::slate_theme::EditorFrame::panel();
         egui::TopBottomPanel::top("top_menu_bar")
             .frame(top_frame)
             .show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("New Scene").clicked() { /* ... */ }
-                    if ui.button("Open Scene...").clicked() { /* ... */ }
-                    ui.separator();
-                    if ui.button("Save Scene").clicked() { /* ... */ }
-                    ui.separator();
-                    if ui.button("Exit").clicked() { std::process::exit(0); }
-                });
-                ui.menu_button("Edit", |ui| {
-                    if ui.button("Undo").clicked() { /* ... */ }
-                    if ui.button("Redo").clicked() { /* ... */ }
-                });
-                ui.menu_button("View", |ui| {
-                    if ui.button("Toggle Fullscreen").clicked() { /* ... */ }
-                });
-                
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("FPS: {:.1}", fps));
-                    ui.separator();
-                    if is_playing {
-                        if ui.button("⏸ Pause").clicked() { actions.push(EditorAction::Pause); }
-                    } else {
-                        if ui.button("▶ Play").clicked() { actions.push(EditorAction::Play); }
-                    }
-                });
-            });
-        });
-
-        // --- Bottom Panel ---
-        let bottom_frame = egui::Frame::default()
-            .fill(ctx.style().visuals.window_fill)
-            .stroke(ctx.style().visuals.window_stroke())
-            .inner_margin(4.0);
-        egui::TopBottomPanel::bottom("bottom_panel")
-            .frame(bottom_frame)
-            .resizable(true)
-            .min_height(150.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(self.bottom_tab == BottomTab::Console, "Console").clicked() { self.bottom_tab = BottomTab::Console; }
-                    if ui.selectable_label(self.bottom_tab == BottomTab::AssetBrowser, "Asset Browser").clicked() { self.bottom_tab = BottomTab::AssetBrowser; }
-                    if ui.selectable_label(self.bottom_tab == BottomTab::Profiler, "Profiler").clicked() { self.bottom_tab = BottomTab::Profiler; }
-                });
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    match self.bottom_tab {
-                        BottomTab::Console => {
-                            ui.label("[System] Engine Booted Successfully.");
-                            ui.label("[Memory] Initialized 256MB arena block.");
-                            ui.label("[HotReload] game.dll attached.");
+                egui::menu::bar(ui, |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("New Scene").clicked() { /* ... */ }
+                        if ui.button("Open Scene...").clicked() { /* ... */ }
+                        ui.separator();
+                        if ui.button("Save Scene").clicked() { /* ... */ }
+                        ui.separator();
+                        if ui.button("Exit").clicked() {
+                            std::process::exit(0);
                         }
-                        BottomTab::AssetBrowser => {
-                            ui.label("Asset Browser is not yet implemented.");
-                        }
-                        BottomTab::Profiler => {
-                            ui.label(format!("Current FPS: {:.1}", fps));
-                            ui.label(format!("Frame Time: {:.2} ms", 1000.0 / fps));
-                            ui.label("More profiling metrics coming soon...");
-                        }
-                    }
-                });
-            });
+                    });
+                    ui.menu_button("Edit", |ui| {
+                        if ui.button("Undo").clicked() { /* ... */ }
+                        if ui.button("Redo").clicked() { /* ... */ }
+                    });
+                    ui.menu_button("View", |ui| {
+                        if ui.button("Toggle Fullscreen").clicked() { /* ... */ }
+                    });
 
-        // --- Left Panel (Hierarchy) ---
-        egui::SidePanel::left("hierarchy_panel")
-            .resizable(true)
-            .min_width(200.0)
-            .show(ctx, |ui| {
-                ui.heading("Hierarchy");
-                ui.label(format!("FPS: {:.1}", fps));
-                ui.separator();
-                if ui.button("Add Entity").clicked() {
-                    if self.file_dialog_receiver.is_none() {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        self.file_dialog_receiver = Some(rx);
-                        std::thread::spawn(move || {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("3D Models", &["obj", "gltf", "glb"])
-                                .pick_file()
-                            {
-                                let _ = tx.send(path.to_string_lossy().into_owned());
-                            }
-                        });
-                    }
-                }
-                ui.separator();
-
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let entities = world
-                        .get_component_array::<TransformComponent>()
-                        .dense_entities_slice()
-                        .to_vec(); // clone so we don't hold the borrow
-                        
-                    let hierarchies = world.get_component_array::<crate::ecs::components::HierarchyComponent>();
-
-                    let mut children_map: std::collections::HashMap<EntityId, Vec<EntityId>> =
-                        std::collections::HashMap::new();
-                    let mut roots = Vec::new();
-
-                    for &entity in &entities {
-                        if hierarchies.has(entity) {
-                            let parent_opt = unsafe { hierarchies.get(entity) }.parent;
-                            if let Some(parent) = parent_opt {
-                                children_map.entry(parent).or_default().push(entity);
-                            } else {
-                                roots.push(entity);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(format!("FPS: {:.1}", fps));
+                        ui.separator();
+                        if is_playing {
+                            if ui.button("⏸ Pause").clicked() {
+                                actions.push(EditorAction::Pause);
                             }
                         } else {
-                            roots.push(entity);
+                            if ui.button("▶ Play").clicked() {
+                                actions.push(EditorAction::Play);
+                            }
                         }
-                    }
-
-                    for &root in &roots {
-                        Self::draw_entity_tree(ui, root, &children_map, selected_entity, world);
-                    }
+                    });
                 });
             });
 
-        egui::SidePanel::right("inspector_panel")
-            .resizable(true)
-            .min_width(250.0)
+        // --- Central Panel (Docking Area) ---
+        egui::CentralPanel::default()
+            .frame(crate::app::slate_theme::EditorFrame::central_viewport())
             .show(ctx, |ui| {
-                ui.heading("Inspector");
-                ui.separator();
-                if let Some(entity_id) = *selected_entity {
-                    ui.label(format!("Entity ID: {}", entity_id));
-                    ui.separator();
+                
+                // Borrow extraction for closure
+                let docking = &mut self.docking;
+                let theme = &self.theme;
+                let node_editor = &mut self.node_editor;
+                let registry = &mut self.registry;
+                let mut receiver = self.file_dialog_receiver.take();
+                let mut triggered_file_dialog = false;
 
-                    ui.heading("Post Processing");
-                    ui.add(egui::Slider::new(bloom_threshold, 0.0..=10.0).text("Bloom Threshold"));
-                    ui.separator();
+                docking.draw(ui, theme, |panel_type, ui, _rect| {
+                    match panel_type {
+                        PanelType::Console => {
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                ui.label("[System] Engine Booted Successfully.");
+                                ui.label("[Memory] Initialized 256MB arena block.");
+                                ui.label("[HotReload] game.dll attached.");
+                                ui.label(format!("Current FPS: {:.1}", fps));
+                            });
+                        }
+                        PanelType::NodeGraph => {
+                            ui.horizontal(|ui| {
+                                if ui.button("Compile to Rhai").clicked() {
+                                    let code = node_editor.compile_to_rhai();
+                                    let path = std::path::Path::new("assets/scripts/visual_graph.rhai");
+                                    if let Some(parent) = path.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+                                    let mut msg = crate::containers::FixedString::<128>::new();
+                                    use std::fmt::Write;
+                                    if let Err(e) = std::fs::write(path, code) {
+                                        let _ = write!(&mut msg, "Error saving script: {}", e);
+                                    } else {
+                                        let _ = write!(&mut msg, "Success! Saved to assets/scripts/visual_graph.rhai");
+                                    }
+                                    node_editor.compile_message = Some((msg, std::time::Instant::now()));
+                                }
+                                
+                                if let Some((msg, time)) = &node_editor.compile_message {
+                                    if time.elapsed().as_secs_f32() < 3.0 {
+                                        ui.label(egui::RichText::new(msg.as_str()).color(theme.accent));
+                                    } else {
+                                        node_editor.compile_message = None;
+                                    }
+                                }
+                            });
+                            ui.separator();
+                            node_editor.draw(ui);
+                        }
+                        PanelType::Hierarchy => {
+                            if ui.button("Add Entity").clicked() && receiver.is_none() {
+                                triggered_file_dialog = true;
+                            }
+                            ui.separator();
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                let entities = world
+                                    .get_component_array::<TransformComponent>()
+                                    .dense_entities_slice()
+                                    .to_vec();
 
-                    self.registry.draw_entity(entity_id, world, ui, physics);
-                } else {
-                    ui.label("No Entity Selected.");
+                                let hierarchies =
+                                    world.get_component_array::<crate::ecs::components::HierarchyComponent>();
+
+                                let mut children_map: std::collections::HashMap<EntityId, Vec<EntityId>> =
+                                    std::collections::HashMap::new();
+                                let mut roots = Vec::new();
+
+                                for &entity in &entities {
+                                    if hierarchies.has(entity) {
+                                        let parent_opt = unsafe { hierarchies.get(entity) }.parent;
+                                        if let Some(parent) = parent_opt {
+                                            children_map.entry(parent).or_default().push(entity);
+                                        } else {
+                                            roots.push(entity);
+                                        }
+                                    } else {
+                                        roots.push(entity);
+                                    }
+                                }
+
+                                for &root in &roots {
+                                    Self::draw_entity_tree(ui, root, &children_map, selected_entity, world);
+                                }
+                            });
+                        }
+                        PanelType::Inspector => {
+                            if let Some(entity_id) = *selected_entity {
+                                ui.label(format!("Entity ID: {}", entity_id));
+                                ui.separator();
+
+                                ui.heading("Post Processing");
+                                ui.add(egui::Slider::new(bloom_threshold, 0.0..=10.0).text("Bloom Threshold"));
+                                ui.separator();
+
+                                registry.draw_entity(entity_id, world, ui, physics);
+                            } else {
+                                ui.label("No Entity Selected.");
+                            }
+                        }
+                        PanelType::Viewport => {
+                            let size = ui.available_size();
+                            new_viewport_size = Some((size.x.max(1.0) as u32, size.y.max(1.0) as u32));
+                            let image = egui::Image::new(egui::load::SizedTexture::new(
+                                offscreen_texture_id,
+                                size,
+                            ))
+                            .sense(egui::Sense::click() | egui::Sense::drag());
+
+                            let response = ui.add(image);
+                            viewport_hovered = response.hovered() || response.dragged();
+
+                            if response.clicked() {
+                                *selected_entity = None;
+                                if let Some(pos) = response.interact_pointer_pos() {
+                                    let local_pos = pos - response.rect.min;
+                                    let ndc_x = (local_pos.x / response.rect.width()) * 2.0 - 1.0;
+                                    let ndc_y = (local_pos.y / response.rect.height()) * 2.0 - 1.0;
+                                    raycast_request = Some((ndc_x, ndc_y));
+                                }
+                            }
+                        }
+                        PanelType::None => {}
+                    }
+                });
+
+                if triggered_file_dialog {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    receiver = Some(rx);
+                    std::thread::spawn(move || {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("3D Models", &["obj", "gltf", "glb"])
+                            .pick_file()
+                        {
+                            let _ = tx.send(path.to_string_lossy().into_owned());
+                        }
+                    });
                 }
+                
+                self.file_dialog_receiver = receiver;
             });
-        
-        actions
+
+        (actions, new_viewport_size, raycast_request, viewport_hovered)
     }
 
     fn draw_entity_tree(

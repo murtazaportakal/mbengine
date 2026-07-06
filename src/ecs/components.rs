@@ -1,7 +1,7 @@
+use crate::ecs::reflection::ReflectComponent;
 use crate::math::mat4::Mat4;
 use crate::math::vec::Vec3;
 use serde::{Deserialize, Serialize};
-use crate::ecs::reflection::ReflectComponent;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct TransformComponent {
@@ -43,7 +43,9 @@ impl TransformComponent {
 }
 
 impl ReflectComponent for TransformComponent {
-    fn name() -> &'static str { "Transform" }
+    fn name() -> &'static str {
+        "Transform"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         egui::Grid::new("transform_grid")
@@ -53,29 +55,83 @@ impl ReflectComponent for TransformComponent {
             .show(ui, |ui| {
                 ui.label("Position");
                 ui.horizontal(|ui| {
-                    changed |= ui.add(egui::DragValue::new(&mut self.position.x).speed(0.1).prefix("X: ")).changed();
-                    changed |= ui.add(egui::DragValue::new(&mut self.position.y).speed(0.1).prefix("Y: ")).changed();
-                    changed |= ui.add(egui::DragValue::new(&mut self.position.z).speed(0.1).prefix("Z: ")).changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.position.x)
+                                .speed(0.1)
+                                .prefix("X: "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.position.y)
+                                .speed(0.1)
+                                .prefix("Y: "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.position.z)
+                                .speed(0.1)
+                                .prefix("Z: "),
+                        )
+                        .changed();
                 });
                 ui.end_row();
 
                 ui.label("Rotation");
                 ui.horizontal(|ui| {
-                    changed |= ui.add(egui::DragValue::new(&mut self.rotation.x).speed(0.05).prefix("X: ")).changed();
-                    changed |= ui.add(egui::DragValue::new(&mut self.rotation.y).speed(0.05).prefix("Y: ")).changed();
-                    changed |= ui.add(egui::DragValue::new(&mut self.rotation.z).speed(0.05).prefix("Z: ")).changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.rotation.x)
+                                .speed(0.05)
+                                .prefix("X: "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.rotation.y)
+                                .speed(0.05)
+                                .prefix("Y: "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.rotation.z)
+                                .speed(0.05)
+                                .prefix("Z: "),
+                        )
+                        .changed();
                 });
                 ui.end_row();
 
                 ui.label("Scale");
                 ui.horizontal(|ui| {
-                    changed |= ui.add(egui::DragValue::new(&mut self.scale.x).speed(0.1).prefix("X: ")).changed();
-                    changed |= ui.add(egui::DragValue::new(&mut self.scale.y).speed(0.1).prefix("Y: ")).changed();
-                    changed |= ui.add(egui::DragValue::new(&mut self.scale.z).speed(0.1).prefix("Z: ")).changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.scale.x)
+                                .speed(0.1)
+                                .prefix("X: "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.scale.y)
+                                .speed(0.1)
+                                .prefix("Y: "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.scale.z)
+                                .speed(0.1)
+                                .prefix("Z: "),
+                        )
+                        .changed();
                 });
                 ui.end_row();
             });
-        
+
         if changed {
             self.update_matrix();
         }
@@ -105,7 +161,9 @@ impl Default for RenderComponent {
 }
 
 impl ReflectComponent for RenderComponent {
-    fn name() -> &'static str { "Render" }
+    fn name() -> &'static str {
+        "Render"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         egui::Grid::new("render_grid")
@@ -118,11 +176,15 @@ impl ReflectComponent for RenderComponent {
                 ui.end_row();
 
                 ui.label("Metallic");
-                changed |= ui.add(egui::Slider::new(&mut self.metallic, 0.0..=1.0)).changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut self.metallic, 0.0..=1.0))
+                    .changed();
                 ui.end_row();
 
                 ui.label("Roughness");
-                changed |= ui.add(egui::Slider::new(&mut self.roughness, 0.0..=1.0)).changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut self.roughness, 0.0..=1.0))
+                    .changed();
                 ui.end_row();
             });
         changed
@@ -151,7 +213,9 @@ impl Default for CameraComponent {
 }
 
 impl ReflectComponent for CameraComponent {
-    fn name() -> &'static str { "Camera" }
+    fn name() -> &'static str {
+        "Camera"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         egui::Grid::new("camera_grid")
@@ -160,15 +224,21 @@ impl ReflectComponent for CameraComponent {
             .striped(true)
             .show(ui, |ui| {
                 ui.label("FOV");
-                changed |= ui.add(egui::Slider::new(&mut self.fov, 10.0..=120.0)).changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut self.fov, 10.0..=120.0))
+                    .changed();
                 ui.end_row();
 
                 ui.label("Near Plane");
-                changed |= ui.add(egui::DragValue::new(&mut self.near).speed(0.1)).changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut self.near).speed(0.1))
+                    .changed();
                 ui.end_row();
 
                 ui.label("Far Plane");
-                changed |= ui.add(egui::DragValue::new(&mut self.far).speed(1.0)).changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut self.far).speed(1.0))
+                    .changed();
                 ui.end_row();
             });
         changed
@@ -206,7 +276,9 @@ impl Default for PointLightComponent {
 }
 
 impl ReflectComponent for PointLightComponent {
-    fn name() -> &'static str { "Point Light" }
+    fn name() -> &'static str {
+        "Point Light"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         egui::Grid::new("pointlight_grid")
@@ -225,7 +297,9 @@ impl ReflectComponent for PointLightComponent {
                 ui.end_row();
 
                 ui.label("Intensity");
-                changed |= ui.add(egui::Slider::new(&mut self.intensity, 0.0..=100.0)).changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut self.intensity, 0.0..=100.0))
+                    .changed();
                 ui.end_row();
             });
         changed
@@ -239,7 +313,9 @@ pub struct HierarchyComponent {
 }
 
 impl ReflectComponent for HierarchyComponent {
-    fn name() -> &'static str { "Hierarchy" }
+    fn name() -> &'static str {
+        "Hierarchy"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         if let Some(parent) = self.parent {
             ui.label(format!("Parent Entity: {}", parent));
@@ -256,7 +332,9 @@ pub struct RigidBodyComponent {
 }
 
 impl ReflectComponent for RigidBodyComponent {
-    fn name() -> &'static str { "Rigid Body" }
+    fn name() -> &'static str {
+        "Rigid Body"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label(format!("Handle Index: {}", self.handle.into_raw_parts().0));
         false
@@ -269,7 +347,9 @@ pub struct ColliderComponent {
 }
 
 impl ReflectComponent for ColliderComponent {
-    fn name() -> &'static str { "Collider" }
+    fn name() -> &'static str {
+        "Collider"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label(format!("Handle Index: {}", self.handle.into_raw_parts().0));
         false
@@ -286,7 +366,9 @@ impl Default for AudioListenerComponent {
 }
 
 impl ReflectComponent for AudioListenerComponent {
-    fn name() -> &'static str { "Audio Listener" }
+    fn name() -> &'static str {
+        "Audio Listener"
+    }
     fn draw_inspector(&mut self, _ui: &mut egui::Ui) -> bool {
         false
     }
@@ -316,13 +398,19 @@ impl Default for AudioEmitterComponent {
 }
 
 impl ReflectComponent for AudioEmitterComponent {
-    fn name() -> &'static str { "Audio Emitter" }
+    fn name() -> &'static str {
+        "Audio Emitter"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         changed |= ui.checkbox(&mut self.is_playing, "Playing").changed();
         changed |= ui.checkbox(&mut self.loop_audio, "Loop").changed();
-        changed |= ui.add(egui::Slider::new(&mut self.volume, 0.0..=2.0).text("Volume")).changed();
-        changed |= ui.add(egui::Slider::new(&mut self.max_distance, 1.0..=500.0).text("Max Distance")).changed();
+        changed |= ui
+            .add(egui::Slider::new(&mut self.volume, 0.0..=2.0).text("Volume"))
+            .changed();
+        changed |= ui
+            .add(egui::Slider::new(&mut self.max_distance, 1.0..=500.0).text("Max Distance"))
+            .changed();
         changed
     }
 }
@@ -332,28 +420,23 @@ impl ReflectComponent for AudioEmitterComponent {
 /// The `skeleton_name` references a skeleton loaded by the AssetManager.
 /// The `skinning_instance_index` is the index into the application's skinning
 /// instance storage, set during scene setup.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SkeletonComponent {
     pub skeleton_name: crate::containers::FixedString<64>,
     /// Index into the application's `skinning_instances` array.
     /// Set during GLTF loading. `None` if not yet initialized.
     pub skinning_instance_index: Option<usize>,
     /// The final bone matrices computed by the AnimationSystem.
-    pub computed_matrices: Vec<crate::math::mat4::Mat4>,
-}
-
-impl Default for SkeletonComponent {
-    fn default() -> Self {
-        Self {
-            skeleton_name: crate::containers::FixedString::new(),
-            skinning_instance_index: None,
-            computed_matrices: Vec::new(),
-        }
-    }
+    pub computed_matrices: crate::containers::FixedArray<
+        crate::math::mat4::Mat4,
+        { crate::renderer::vulkan::skeleton::MAX_BONES },
+    >,
 }
 
 impl ReflectComponent for SkeletonComponent {
-    fn name() -> &'static str { "Skeleton" }
+    fn name() -> &'static str {
+        "Skeleton"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label(format!("Skeleton: {}", self.skeleton_name.as_str()));
         if let Some(idx) = self.skinning_instance_index {
@@ -365,13 +448,44 @@ impl ReflectComponent for SkeletonComponent {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum AnimationState {
+    Clip {
+        clip_name: crate::containers::FixedString<64>,
+    },
+    Blend1D {
+        clip_a: crate::containers::FixedString<64>,
+        clip_b: crate::containers::FixedString<64>,
+        weight: f32, // 0.0 = clip_a, 1.0 = clip_b
+    },
+}
+
+impl Default for AnimationState {
+    fn default() -> Self {
+        AnimationState::Clip {
+            clip_name: crate::containers::FixedString::new(),
+        }
+    }
+}
+
 /// Drives skeletal animation playback for entities with a SkeletonComponent.
 #[derive(Clone, Debug)]
 pub struct AnimatorComponent {
-    /// Name of the animation clip to play (references AssetManager).
-    pub clip_name: crate::containers::FixedString<64>,
-    /// Current playback time in seconds.
+    /// Current state (Single Clip or Blend1D).
+    pub state: AnimationState,
+    /// Current playback time in seconds for the primary state.
     pub current_time: f32,
+    
+    /// Target state if currently in a transition.
+    pub target_state: Option<AnimationState>,
+    /// Playback time for the target state.
+    pub transition_time: f32,
+    
+    /// Current time in the crossfade.
+    pub crossfade_current: f32,
+    /// Total duration of the crossfade.
+    pub crossfade_duration: f32,
+
     /// Playback speed multiplier (1.0 = normal).
     pub speed: f32,
     /// Whether the animation is currently playing.
@@ -383,8 +497,12 @@ pub struct AnimatorComponent {
 impl Default for AnimatorComponent {
     fn default() -> Self {
         Self {
-            clip_name: crate::containers::FixedString::new(),
+            state: AnimationState::default(),
             current_time: 0.0,
+            target_state: None,
+            transition_time: 0.0,
+            crossfade_current: 0.0,
+            crossfade_duration: 0.0,
             speed: 1.0,
             is_playing: true,
             is_looping: true,
@@ -392,15 +510,96 @@ impl Default for AnimatorComponent {
     }
 }
 
+impl AnimatorComponent {
+    /// Start a crossfade to a new state over a given duration (in seconds).
+    pub fn crossfade_to(&mut self, new_state: AnimationState, duration: f32) {
+        if duration <= 0.0 {
+            self.state = new_state;
+            self.current_time = 0.0;
+            self.target_state = None;
+        } else {
+            self.target_state = Some(new_state);
+            self.transition_time = 0.0;
+            self.crossfade_current = 0.0;
+            self.crossfade_duration = duration;
+        }
+    }
+}
+
 impl ReflectComponent for AnimatorComponent {
-    fn name() -> &'static str { "Animator" }
+    fn name() -> &'static str {
+        "Animator"
+    }
     fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        ui.label(format!("Clip: {}", self.clip_name.as_str()));
+        
+        match &self.state {
+            AnimationState::Clip { clip_name } => {
+                ui.label(format!("State: Clip ({})", clip_name.as_str()));
+            }
+            AnimationState::Blend1D { clip_a, clip_b, weight } => {
+                ui.label(format!("State: Blend1D ({} <-> {})", clip_a.as_str(), clip_b.as_str()));
+                ui.label(format!("Weight: {:.2}", weight));
+            }
+        }
+        
+        if self.target_state.is_some() {
+            ui.label(format!("Transitioning... ({:.2}/{:.2}s)", self.crossfade_current, self.crossfade_duration));
+        }
+
         changed |= ui.checkbox(&mut self.is_playing, "Playing").changed();
         changed |= ui.checkbox(&mut self.is_looping, "Looping").changed();
-        changed |= ui.add(egui::Slider::new(&mut self.speed, 0.0..=5.0).text("Speed")).changed();
+        changed |= ui
+            .add(egui::Slider::new(&mut self.speed, 0.0..=5.0).text("Speed"))
+            .changed();
         ui.label(format!("Time: {:.2}s", self.current_time));
+        changed
+    }
+}
+
+/// A component that executes a Rhai script to modify the entity's state.
+#[derive(Clone, Debug)]
+pub struct ScriptBehaviorComponent {
+    pub script_name: crate::containers::FixedString<64>,
+    pub state: rhai::Dynamic,
+    pub initialized: bool,
+}
+
+impl Default for ScriptBehaviorComponent {
+    fn default() -> Self {
+        Self {
+            script_name: crate::containers::FixedString::new(),
+            state: rhai::Dynamic::from(rhai::Map::new()),
+            initialized: false,
+        }
+    }
+}
+
+impl ReflectComponent for ScriptBehaviorComponent {
+    fn name() -> &'static str {
+        "Script Behavior"
+    }
+    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        
+        let mut script_name = self.script_name.as_str().to_string();
+        ui.horizontal(|ui| {
+            ui.label("Script Name:");
+            if ui.text_edit_singleline(&mut script_name).changed() {
+                self.script_name.clear();
+                self.script_name.push_str(&script_name);
+                self.initialized = false;
+                changed = true;
+            }
+        });
+
+        ui.label(format!("Initialized: {}", self.initialized));
+        
+        if ui.button("Reload").clicked() {
+            self.initialized = false;
+            changed = true;
+        }
+
         changed
     }
 }
