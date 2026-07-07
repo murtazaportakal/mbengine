@@ -72,6 +72,12 @@ impl AssetManager {
         manager
     }
 
+    pub fn add_mesh(&mut self, mesh: Mesh) -> usize {
+        let index = self.meshes.len();
+        self.meshes.push(mesh);
+        index
+    }
+
     pub fn load_texture(
         &mut self,
         vulkan: &VulkanDevice,

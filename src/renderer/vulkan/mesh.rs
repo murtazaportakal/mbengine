@@ -23,6 +23,11 @@ pub struct Mesh {
     pub meshlet_count: u32,
     pub indirect_buffer: Buffer,
     pub vertex_count: u32,
+    pub aabb_min: [f32; 3],
+    pub aabb_max: [f32; 3],
+    pub default_color: [f32; 3],
+    pub metallic: f32,
+    pub roughness: f32,
 }
 
 impl Mesh {
@@ -35,12 +40,37 @@ impl Mesh {
             ignore_lines: true,
         };
 
-        let (models, _materials) = tobj::load_obj(path, &options).ok()?;
+        let (models, materials_result) = tobj::load_obj(path, &options).ok()?;
+        let materials = materials_result.unwrap_or_default();
 
         let mut loaded_meshes = Vec::new();
 
         for model in models {
             let mesh = &model.mesh;
+            let mut default_color = [1.0, 1.0, 1.0];
+            let mut metallic = 0.2;
+            let mut roughness = 0.8;
+
+            if let Some(mat_id) = mesh.material_id {
+                if let Some(mat) = materials.get(mat_id) {
+                    if let Some(diffuse) = mat.diffuse {
+                        default_color = diffuse;
+                    }
+                    if let Some(shininess) = mat.shininess {
+                        if shininess > 0.0 {
+                            roughness = (2.0 / (shininess + 2.0)).sqrt();
+                        }
+                        // For OBJ, standard fallback for glossy is 0.2 metallic
+                        // If it's pure white/grey, maybe more metallic. We'll use 0.5.
+                        if shininess > 50.0 {
+                            metallic = 0.8;
+                        } else {
+                            metallic = 0.2;
+                        }
+                    }
+                }
+            }
+
             let mut vertices = Vec::new();
 
             let num_vertices = mesh.positions.len() / 3;
@@ -80,6 +110,15 @@ impl Mesh {
 
             if vertices.is_empty() || indices.is_empty() {
                 continue;
+            }
+
+            let mut aabb_min = [f32::MAX; 3];
+            let mut aabb_max = [f32::MIN; 3];
+            for v in &vertices {
+                for i in 0..3 {
+                    aabb_min[i] = aabb_min[i].min(v.pos[i]);
+                    aabb_max[i] = aabb_max[i].max(v.pos[i]);
+                }
             }
 
             // --- Meshlet Generation via meshopt ---
@@ -188,6 +227,11 @@ impl Mesh {
                 meshlet_count: meshlet_data_vec.len() as u32,
                 indirect_buffer,
                 vertex_count: vertices.len() as u32,
+                aabb_min,
+                aabb_max,
+                default_color,
+                metallic,
+                roughness,
             });
         }
 
@@ -203,6 +247,15 @@ impl Mesh {
     ) -> Option<Self> {
         if vertices.is_empty() || indices.is_empty() {
             return None;
+        }
+
+        let mut aabb_min = [f32::MAX; 3];
+        let mut aabb_max = [f32::MIN; 3];
+        for v in vertices {
+            for i in 0..3 {
+                aabb_min[i] = aabb_min[i].min(v.pos[i]);
+                aabb_max[i] = aabb_max[i].max(v.pos[i]);
+            }
         }
 
         let vertex_buffer = Buffer::new_device_local(
@@ -240,7 +293,68 @@ impl Mesh {
             meshlet_count: 1,
             indirect_buffer,
             vertex_count: vertices.len() as u32,
+            aabb_min,
+            aabb_max,
+            default_color: [1.0, 1.0, 1.0],
+            metallic: 0.0,
+            roughness: 0.8,
         })
+    }
+
+    pub fn create_grid(vulkan: &VulkanDevice, width: u32, height: u32, spacing: f32) -> Option<Self> {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+
+        let offset_x = (width as f32 * spacing) / 2.0;
+        let offset_z = (height as f32 * spacing) / 2.0;
+
+        for y in 0..height {
+            for x in 0..width {
+                let pos = [
+                    (x as f32 * spacing) - offset_x,
+                    5.0, // Start high up so it can fall
+                    (y as f32 * spacing) - offset_z,
+                ];
+                let normal = [0.0, 1.0, 0.0];
+                let uv = [x as f32 / (width - 1) as f32, y as f32 / (height - 1) as f32];
+
+                vertices.push(Vertex {
+                    pos,
+                    normal,
+                    uv,
+                    joint_ids: [0; 4],
+                    joint_weights: [0.0; 4],
+                });
+            }
+        }
+
+        let mut aabb_min = [f32::MAX; 3];
+        let mut aabb_max = [f32::MIN; 3];
+        for v in &vertices {
+            for i in 0..3 {
+                aabb_min[i] = aabb_min[i].min(v.pos[i]);
+                aabb_max[i] = aabb_max[i].max(v.pos[i]);
+            }
+        }
+
+        for y in 0..height - 1 {
+            for x in 0..width - 1 {
+                let idx0 = y * width + x;
+                let idx1 = idx0 + 1;
+                let idx2 = (y + 1) * width + x;
+                let idx3 = idx2 + 1;
+
+                indices.push(idx0);
+                indices.push(idx2);
+                indices.push(idx1);
+
+                indices.push(idx1);
+                indices.push(idx2);
+                indices.push(idx3);
+            }
+        }
+
+        Self::from_gltf_data(vulkan, &vertices, &indices)
     }
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {

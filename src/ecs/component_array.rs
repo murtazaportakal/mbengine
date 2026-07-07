@@ -122,7 +122,8 @@ impl<T> ComponentArray<T> {
     /// # Safety
     /// Caller must ensure `entity_index < MAX_ENTITIES`, the entity does not
     /// already have this component, and the dense array is not full.
-    pub unsafe fn insert(&mut self, entity_index: u32, component: T) {
+    pub unsafe fn insert(&mut self, raw_entity_index: u32, component: T) {
+        let entity_index = crate::ecs::types::get_entity_index(raw_entity_index);
         debug_assert!(
             entity_index < MAX_ENTITIES,
             "ComponentArray::insert: entityIndex out of range."
@@ -157,7 +158,8 @@ impl<T> ComponentArray<T> {
     /// # Safety
     /// Caller must ensure `entity_index < MAX_ENTITIES` and the entity
     /// currently has this component.
-    pub unsafe fn remove(&mut self, entity_index: u32) {
+    pub unsafe fn remove(&mut self, raw_entity_index: u32) {
+        let entity_index = crate::ecs::types::get_entity_index(raw_entity_index);
         debug_assert!(
             entity_index < MAX_ENTITIES,
             "ComponentArray::remove: entityIndex out of range."
@@ -200,7 +202,8 @@ impl<T> ComponentArray<T> {
     ///
     /// # Safety
     /// Entity must have this component (`has(entity_index)` must be true).
-    pub unsafe fn get(&self, entity_index: u32) -> &T {
+    pub unsafe fn get(&self, raw_entity_index: u32) -> &T {
+        let entity_index = crate::ecs::types::get_entity_index(raw_entity_index);
         debug_assert!(entity_index < MAX_ENTITIES);
         debug_assert!(self.has(entity_index));
         let dense_idx = *self.sparse.add(entity_index as usize);
@@ -211,7 +214,8 @@ impl<T> ComponentArray<T> {
     ///
     /// # Safety
     /// Entity must have this component.
-    pub unsafe fn get_mut(&mut self, entity_index: u32) -> &mut T {
+    pub unsafe fn get_mut(&mut self, raw_entity_index: u32) -> &mut T {
+        let entity_index = crate::ecs::types::get_entity_index(raw_entity_index);
         debug_assert!(entity_index < MAX_ENTITIES);
         debug_assert!(self.has(entity_index));
         let dense_idx = *self.sparse.add(entity_index as usize);
@@ -219,7 +223,8 @@ impl<T> ComponentArray<T> {
     }
 
     /// Check whether the given entity has this component.
-    pub fn has(&self, entity_index: u32) -> bool {
+    pub fn has(&self, raw_entity_index: u32) -> bool {
+        let entity_index = crate::ecs::types::get_entity_index(raw_entity_index);
         debug_assert!(entity_index < MAX_ENTITIES);
         unsafe { *self.sparse.add(entity_index as usize) != INVALID_INDEX }
     }

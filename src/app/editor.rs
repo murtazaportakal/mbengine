@@ -1,22 +1,25 @@
 use crate::ecs::reflection::ComponentRegistry;
-use crate::ecs::TransformComponent;
 use crate::ecs::{EntityId, World};
 use crate::physics::PhysicsSystem;
-use crate::app::docking::{DockingManager, PanelType};
-use crate::app::slate_theme::EngineTheme;
+use crate::ui::UiContext;
 
 pub enum EditorAction {
     Play,
     Pause,
     SpawnModel(String),
+    SpawnEntity,
+    DeleteEntity(EntityId),
+    AddComponent(EntityId, String),
+    TranslateSelected(crate::math::vec::Vec3),
 }
 
 pub struct Editor {
     pub registry: ComponentRegistry,
     pub file_dialog_receiver: Option<std::sync::mpsc::Receiver<String>>,
-    pub node_editor: crate::app::node_editor::NodeGraphEditor,
-    pub docking: DockingManager,
-    pub theme: EngineTheme,
+    pub file_dialog_sender: Option<std::sync::mpsc::Sender<String>>,
+    pub active_gizmo_axis: Option<u8>,
+    pub gizmo_drag_start_mouse: crate::math::vec::Vec2,
+    pub gizmo_drag_start_pos: crate::math::vec::Vec3,
 }
 
 impl Default for Editor {
@@ -29,10 +32,20 @@ impl Editor {
     pub fn new() -> Self {
         let mut registry = ComponentRegistry::new();
         registry.register::<crate::ecs::TransformComponent>();
+        registry.register_serializable::<crate::ecs::TransformComponent>();
+        
         registry.register::<crate::ecs::RenderComponent>();
+        registry.register_serializable::<crate::ecs::RenderComponent>();
+        
         registry.register::<crate::ecs::PointLightComponent>();
+        registry.register_serializable::<crate::ecs::PointLightComponent>();
+        
         registry.register::<crate::ecs::components::CameraComponent>();
+        registry.register_serializable::<crate::ecs::components::CameraComponent>();
+        
         registry.register::<crate::ecs::components::HierarchyComponent>();
+        registry.register_serializable::<crate::ecs::components::HierarchyComponent>();
+        
         registry.register::<crate::ecs::components::RigidBodyComponent>();
         registry.register::<crate::ecs::components::ColliderComponent>();
         registry.register::<crate::ecs::components::AudioEmitterComponent>();
@@ -40,30 +53,35 @@ impl Editor {
         registry.register::<crate::ecs::components::SkeletonComponent>();
         registry.register::<crate::ecs::components::ScriptBehaviorComponent>();
         registry.register::<crate::ecs::components::AnimatorComponent>();
+        registry.register::<crate::ecs::components::SoftBodyComponent>();
 
+        let (tx, rx) = std::sync::mpsc::channel();
         Self {
             registry,
-            file_dialog_receiver: None,
-            node_editor: crate::app::node_editor::NodeGraphEditor::new(),
-            docking: DockingManager::new(),
-            theme: EngineTheme::slate(),
+            file_dialog_receiver: Some(rx),
+            file_dialog_sender: Some(tx),
+            active_gizmo_axis: None,
+            gizmo_drag_start_mouse: crate::math::vec::Vec2::new(0.0, 0.0),
+            gizmo_drag_start_pos: crate::math::vec::Vec3::new(0.0, 0.0, 0.0),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
-        ctx: &egui::Context,
+        ui_ctx: &mut UiContext,
         world: &mut World,
-        physics: &mut PhysicsSystem,
+        _physics: &mut PhysicsSystem,
         selected_entity: &mut Option<EntityId>,
-        bloom_threshold: &mut f32,
-        fps: f32,
-        is_playing: bool,
-        offscreen_texture_id: egui::TextureId,
+        _bloom_threshold: &mut f32,
+        _fps: f32,
+        _is_playing: bool,
+        screen_w: f32,
+        screen_h: f32,
+        view: crate::math::mat4::Mat4,
+        proj: crate::math::mat4::Mat4,
     ) -> (Vec<EditorAction>, Option<(u32, u32)>, Option<(f32, f32)>, bool) {
         let mut actions = Vec::new();
-        let mut new_viewport_size = None;
         let mut raycast_request = None;
         let mut viewport_hovered = false;
 
@@ -71,234 +89,327 @@ impl Editor {
         if let Some(rx) = &self.file_dialog_receiver {
             if let Ok(path) = rx.try_recv() {
                 actions.push(EditorAction::SpawnModel(path));
-                self.file_dialog_receiver = None; // Reset after receiving
             }
         }
 
-        // --- Top Menu Bar ---
-        let top_frame = crate::app::slate_theme::EditorFrame::panel();
-        egui::TopBottomPanel::top("top_menu_bar")
-            .frame(top_frame)
-            .show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("New Scene").clicked() { /* ... */ }
-                        if ui.button("Open Scene...").clicked() { /* ... */ }
-                        ui.separator();
-                        if ui.button("Save Scene").clicked() { /* ... */ }
-                        ui.separator();
-                        if ui.button("Exit").clicked() {
-                            std::process::exit(0);
-                        }
-                    });
-                    ui.menu_button("Edit", |ui| {
-                        if ui.button("Undo").clicked() { /* ... */ }
-                        if ui.button("Redo").clicked() { /* ... */ }
-                    });
-                    ui.menu_button("View", |ui| {
-                        if ui.button("Toggle Fullscreen").clicked() { /* ... */ }
-                    });
+        use crate::ui::context::{SLATE_BASE, SLATE_SECONDARY, UiRect, PanelBuilder, ButtonBuilder};
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(format!("FPS: {:.1}", fps));
-                        ui.separator();
-                        if is_playing {
-                            if ui.button("⏸ Pause").clicked() {
-                                actions.push(EditorAction::Pause);
-                            }
-                        } else {
-                            if ui.button("▶ Play").clicked() {
-                                actions.push(EditorAction::Play);
-                            }
-                        }
-                    });
-                });
-            });
-
-        // --- Central Panel (Docking Area) ---
-        egui::CentralPanel::default()
-            .frame(crate::app::slate_theme::EditorFrame::central_viewport())
-            .show(ctx, |ui| {
-                
-                // Borrow extraction for closure
-                let docking = &mut self.docking;
-                let theme = &self.theme;
-                let node_editor = &mut self.node_editor;
-                let registry = &mut self.registry;
-                let mut receiver = self.file_dialog_receiver.take();
-                let mut triggered_file_dialog = false;
-
-                docking.draw(ui, theme, |panel_type, ui, _rect| {
-                    match panel_type {
-                        PanelType::Console => {
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                                ui.label("[System] Engine Booted Successfully.");
-                                ui.label("[Memory] Initialized 256MB arena block.");
-                                ui.label("[HotReload] game.dll attached.");
-                                ui.label(format!("Current FPS: {:.1}", fps));
-                            });
-                        }
-                        PanelType::NodeGraph => {
-                            ui.horizontal(|ui| {
-                                if ui.button("Compile to Rhai").clicked() {
-                                    let code = node_editor.compile_to_rhai();
-                                    let path = std::path::Path::new("assets/scripts/visual_graph.rhai");
-                                    if let Some(parent) = path.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
-                                    }
-                                    let mut msg = crate::containers::FixedString::<128>::new();
-                                    use std::fmt::Write;
-                                    if let Err(e) = std::fs::write(path, code) {
-                                        let _ = write!(&mut msg, "Error saving script: {}", e);
-                                    } else {
-                                        let _ = write!(&mut msg, "Success! Saved to assets/scripts/visual_graph.rhai");
-                                    }
-                                    node_editor.compile_message = Some((msg, std::time::Instant::now()));
-                                }
-                                
-                                if let Some((msg, time)) = &node_editor.compile_message {
-                                    if time.elapsed().as_secs_f32() < 3.0 {
-                                        ui.label(egui::RichText::new(msg.as_str()).color(theme.accent));
-                                    } else {
-                                        node_editor.compile_message = None;
-                                    }
-                                }
-                            });
-                            ui.separator();
-                            node_editor.draw(ui);
-                        }
-                        PanelType::Hierarchy => {
-                            if ui.button("Add Entity").clicked() && receiver.is_none() {
-                                triggered_file_dialog = true;
-                            }
-                            ui.separator();
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                                let entities = world
-                                    .get_component_array::<TransformComponent>()
-                                    .dense_entities_slice()
-                                    .to_vec();
-
-                                let hierarchies =
-                                    world.get_component_array::<crate::ecs::components::HierarchyComponent>();
-
-                                let mut children_map: std::collections::HashMap<EntityId, Vec<EntityId>> =
-                                    std::collections::HashMap::new();
-                                let mut roots = Vec::new();
-
-                                for &entity in &entities {
-                                    if hierarchies.has(entity) {
-                                        let parent_opt = unsafe { hierarchies.get(entity) }.parent;
-                                        if let Some(parent) = parent_opt {
-                                            children_map.entry(parent).or_default().push(entity);
-                                        } else {
-                                            roots.push(entity);
-                                        }
-                                    } else {
-                                        roots.push(entity);
-                                    }
-                                }
-
-                                for &root in &roots {
-                                    Self::draw_entity_tree(ui, root, &children_map, selected_entity, world);
-                                }
-                            });
-                        }
-                        PanelType::Inspector => {
-                            if let Some(entity_id) = *selected_entity {
-                                ui.label(format!("Entity ID: {}", entity_id));
-                                ui.separator();
-
-                                ui.heading("Post Processing");
-                                ui.add(egui::Slider::new(bloom_threshold, 0.0..=10.0).text("Bloom Threshold"));
-                                ui.separator();
-
-                                registry.draw_entity(entity_id, world, ui, physics);
-                            } else {
-                                ui.label("No Entity Selected.");
-                            }
-                        }
-                        PanelType::Viewport => {
-                            let size = ui.available_size();
-                            new_viewport_size = Some((size.x.max(1.0) as u32, size.y.max(1.0) as u32));
-                            let image = egui::Image::new(egui::load::SizedTexture::new(
-                                offscreen_texture_id,
-                                size,
-                            ))
-                            .sense(egui::Sense::click() | egui::Sense::drag());
-
-                            let response = ui.add(image);
-                            viewport_hovered = response.hovered() || response.dragged();
-
-                            if response.clicked() {
-                                *selected_entity = None;
-                                if let Some(pos) = response.interact_pointer_pos() {
-                                    let local_pos = pos - response.rect.min;
-                                    let ndc_x = (local_pos.x / response.rect.width()) * 2.0 - 1.0;
-                                    let ndc_y = (local_pos.y / response.rect.height()) * 2.0 - 1.0;
-                                    raycast_request = Some((ndc_x, ndc_y));
-                                }
-                            }
-                        }
-                        PanelType::None => {}
+        // 1. Top Bar (Godot style)
+        let top_bar_rect = UiRect { x: 0.0, y: 0.0, w: screen_w, h: 40.0 };
+        PanelBuilder::new(ui_ctx, 1)
+            .rect(top_bar_rect)
+            .style(&SLATE_SECONDARY)
+            .begin();
+            
+        ui_ctx.begin_horizontal_layout(top_bar_rect);
+        if ButtonBuilder::new(ui_ctx, 2).text("3D Scene").style(&SLATE_BASE).build() {}
+        if ButtonBuilder::new(ui_ctx, 3).text("Script Graph").style(&SLATE_BASE).build() {}
+        if ButtonBuilder::new(ui_ctx, 4).text("Profiler").style(&SLATE_BASE).build() {}
+        if ButtonBuilder::new(ui_ctx, 11).text("Import Model").style(&SLATE_BASE).build() {
+            if let Some(tx) = &self.file_dialog_sender {
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Models", &["obj", "gltf", "glb"])
+                        .pick_file() 
+                    {
+                        let _ = tx.send(path.to_string_lossy().to_string());
                     }
                 });
+            }
+        }
+        
+        // Push play/pause to the center roughly
+        let center_offset = (screen_w / 2.0) - ui_ctx.cursor.x - 40.0;
+        if center_offset > 0.0 {
+            ui_ctx.indent_cursor(center_offset);
+        }
 
-                if triggered_file_dialog {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    receiver = Some(rx);
-                    std::thread::spawn(move || {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("3D Models", &["obj", "gltf", "glb"])
-                            .pick_file()
-                        {
-                            let _ = tx.send(path.to_string_lossy().into_owned());
-                        }
-                    });
+        if _is_playing {
+            if ButtonBuilder::new(ui_ctx, 5).text("Pause").style(&SLATE_BASE).build() {
+                actions.push(EditorAction::Pause);
+            }
+        } else {
+            if ButtonBuilder::new(ui_ctx, 6).text("Play").style(&SLATE_BASE).build() {
+                actions.push(EditorAction::Play);
+            }
+        }
+        ui_ctx.end_horizontal_layout();
+        ui_ctx.end_panel();
+
+        // 2. Left Scene Hierarchy
+        let hierarchy_w = 250.0;
+        let hierarchy_rect = UiRect { x: 0.0, y: 40.0, w: hierarchy_w, h: screen_h - 40.0 };
+        PanelBuilder::new(ui_ctx, 7)
+            .rect(hierarchy_rect)
+            .style(&SLATE_SECONDARY)
+            .begin();
+            
+        ui_ctx.begin_vertical_layout(hierarchy_rect);
+        ui_ctx.label("Scene Hierarchy");
+        ui_ctx.label_color("RED TEXT TEST", crate::ui::UiColor::rgba(255, 0, 0, 255));
+        ui_ctx.label(" ");
+        
+        if ButtonBuilder::new(ui_ctx, 100).text("Create Empty Entity").style(&SLATE_BASE).build() {
+            actions.push(EditorAction::SpawnEntity);
+        }
+        ui_ctx.label(" ");
+
+        let mut all_entities = [0; 1024];
+        let alive_count = world.get_alive_entities(&mut all_entities);
+        let alive = &all_entities[..alive_count];
+
+        for &entity in alive {
+            let mut is_root = true;
+            if world.has_component::<crate::ecs::components::HierarchyComponent>(entity) {
+                let parent = unsafe { world.get_component::<crate::ecs::components::HierarchyComponent>(entity).parent };
+                if parent.is_some() {
+                    is_root = false;
                 }
+            }
+            
+            if is_root {
+                Self::draw_entity_tree(ui_ctx, entity, selected_entity, world, alive, 0);
+            }
+        }
+
+        ui_ctx.end_vertical_layout();
+        ui_ctx.end_panel();
+
+        // 3. Right Inspector (Unity style)
+        let inspector_w = 300.0;
+        let inspector_rect = UiRect { x: screen_w - inspector_w, y: 40.0, w: inspector_w, h: screen_h - 40.0 };
+        PanelBuilder::new(ui_ctx, 8)
+            .rect(inspector_rect)
+            .style(&SLATE_SECONDARY)
+            .begin();
+            
+        ui_ctx.begin_vertical_layout(inspector_rect);
+        ui_ctx.label("Inspector");
+
+        if let Some(entity_id) = *selected_entity {
+            ui_ctx.label(" "); // spacing
+            use core::fmt::Write;
+            let mut label = crate::containers::FixedString::<128>::new();
+            let _ = write!(label, "Entity ID: {}", entity_id);
+            ui_ctx.label(&label);
+            
+            ui_ctx.label(" ");
+            let mut bloom_exp = true;
+            if ui_ctx.collapsing_header("Post Processing", &mut bloom_exp) {
+                ui_ctx.drag_float("Bloom Threshold", _bloom_threshold);
+            }
+            
+            ui_ctx.label(" ");
+            self.registry.draw_entity(entity_id, world, ui_ctx, _physics);
+            
+            ui_ctx.label(" ");
+            if ButtonBuilder::new(ui_ctx, 101).text("Delete Entity").style(&SLATE_BASE).build() {
+                actions.push(EditorAction::DeleteEntity(entity_id));
+            }
+            ui_ctx.label(" ");
+            ui_ctx.label("--- Add Component ---");
+            for comp_name in &self.registry.component_names {
+                // simple buttons for each component
+                if ButtonBuilder::new(ui_ctx, 200 + (comp_name.as_ptr() as u64 % 1000)).text(comp_name).style(&SLATE_BASE).build() {
+                    actions.push(EditorAction::AddComponent(entity_id, comp_name.clone()));
+                }
+            }
+
+        } else {
+            ui_ctx.label("No Entity Selected.");
+        }
+
+        ui_ctx.end_vertical_layout();
+        ui_ctx.end_panel();
+
+        // 4. Center Viewport (Unreal style)
+        let viewport_rect = UiRect {
+            x: hierarchy_w,
+            y: 40.0,
+            w: screen_w - hierarchy_w - inspector_w,
+            h: screen_h - 40.0,
+        };
+
+        ui_ctx.image(viewport_rect, 0); // 0 is offscreen_texture_id
+
+        // If mouse is inside viewport and clicked, trigger raycast
+        if viewport_rect.contains(ui_ctx.mouse_pos) {
+            viewport_hovered = true;
+            if ui_ctx.mouse_pressed {
+                // Convert mouse pos to Normalized Device Coordinates for the raycast
+                let local_x = ui_ctx.mouse_pos.x - viewport_rect.x;
+                let local_y = ui_ctx.mouse_pos.y - viewport_rect.y;
+                let ndc_x = (local_x / viewport_rect.w) * 2.0 - 1.0;
+                let ndc_y = (local_y / viewport_rect.h) * 2.0 - 1.0;
+                raycast_request = Some((ndc_x, ndc_y));
+            }
+        }
+
+        let new_viewport_size = Some((viewport_rect.w as u32, viewport_rect.h as u32));
+
+
+        // --- 3D GIZMOS ---
+        if let Some(entity) = selected_entity {
+            let transforms = world.get_component_array::<crate::ecs::components::TransformComponent>();
+            if transforms.has(*entity) {
+                let transform = unsafe { transforms.get(*entity) };
                 
-                self.file_dialog_receiver = receiver;
-            });
+                // Helper to project 3D to 2D
+                let project = |pos: crate::math::vec::Vec3| -> Option<crate::math::vec::Vec2> {
+                    let mut p = crate::math::vec::Vec4::new(pos.x, pos.y, pos.z, 1.0);
+                    p = view * p;
+                    p = proj * p;
+                    if p.w <= 0.0 { return None; }
+                    let ndc_x = p.x / p.w;
+                    let ndc_y = p.y / p.w;
+                    
+                    let screen_x = viewport_rect.x + (ndc_x * 0.5 + 0.5) * viewport_rect.w;
+                    let screen_y = viewport_rect.y + (ndc_y * 0.5 + 0.5) * viewport_rect.h;
+                    Some(crate::math::vec::Vec2::new(screen_x, screen_y))
+                };
+                
+                let origin_2d = project(transform.position);
+                
+                if let Some(o_2d) = origin_2d {
+                    // Check if origin_2d is inside the viewport rect
+                    if viewport_rect.contains(o_2d) || self.active_gizmo_axis.is_some() {
+                        let axis_len = 2.0;
+                        let x_pos = transform.position + crate::math::vec::Vec3::new(axis_len, 0.0, 0.0);
+                        let y_pos = transform.position + crate::math::vec::Vec3::new(0.0, axis_len, 0.0);
+                        let z_pos = transform.position + crate::math::vec::Vec3::new(0.0, 0.0, axis_len);
+                        
+                        let x_2d = project(x_pos);
+                        let y_2d = project(y_pos);
+                        let z_2d = project(z_pos);
+                        
+                        let mut hovering_axis = None;
+                        
+                        let dist_to_line = |p: crate::math::vec::Vec2, a: crate::math::vec::Vec2, b: crate::math::vec::Vec2| -> f32 {
+                            let l2 = (b.x - a.x)*(b.x - a.x) + (b.y - a.y)*(b.y - a.y);
+                            if l2 == 0.0 { return ((p.x - a.x)*(p.x - a.x) + (p.y - a.y)*(p.y - a.y)).sqrt(); }
+                            let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
+                            let t = t.clamp(0.0, 1.0);
+                            let proj_x = a.x + t * (b.x - a.x);
+                            let proj_y = a.y + t * (b.y - a.y);
+                            ((p.x - proj_x)*(p.x - proj_x) + (p.y - proj_y)*(p.y - proj_y)).sqrt()
+                        };
+                        
+                        if let Some(x2) = x_2d {
+                            if dist_to_line(ui_ctx.mouse_pos, o_2d, x2) < 15.0 { hovering_axis = Some(0); }
+                            let c = if hovering_axis == Some(0) || self.active_gizmo_axis == Some(0) { crate::ui::UiColor::rgb(255, 100, 100) } else { crate::ui::UiColor::rgb(200, 50, 50) };
+                            ui_ctx.add_line(o_2d, x2, c, if hovering_axis == Some(0) || self.active_gizmo_axis == Some(0) { 4.0 } else { 2.0 });
+                        }
+                        if let Some(y2) = y_2d {
+                            if dist_to_line(ui_ctx.mouse_pos, o_2d, y2) < 15.0 { hovering_axis = Some(1); }
+                            let c = if hovering_axis == Some(1) || self.active_gizmo_axis == Some(1) { crate::ui::UiColor::rgb(100, 255, 100) } else { crate::ui::UiColor::rgb(50, 200, 50) };
+                            ui_ctx.add_line(o_2d, y2, c, if hovering_axis == Some(1) || self.active_gizmo_axis == Some(1) { 4.0 } else { 2.0 });
+                        }
+                        if let Some(z2) = z_2d {
+                            if dist_to_line(ui_ctx.mouse_pos, o_2d, z2) < 15.0 { hovering_axis = Some(2); }
+                            let c = if hovering_axis == Some(2) || self.active_gizmo_axis == Some(2) { crate::ui::UiColor::rgb(100, 100, 255) } else { crate::ui::UiColor::rgb(50, 50, 200) };
+                            ui_ctx.add_line(o_2d, z2, c, if hovering_axis == Some(2) || self.active_gizmo_axis == Some(2) { 4.0 } else { 2.0 });
+                        }
+                        
+                        // Center dot
+                        ui_ctx.draw_commands.push(crate::ui::DrawCommand::Quad {
+                            rect: crate::ui::UiRect { x: o_2d.x - 4.0, y: o_2d.y - 4.0, w: 8.0, h: 8.0 },
+                            color: crate::ui::UiColor::WHITE,
+                            rounding: 4.0,
+                        });
+                        
+                        // Interaction
+                        if ui_ctx.mouse_pressed && hovering_axis.is_some() {
+                            self.active_gizmo_axis = hovering_axis;
+                            self.gizmo_drag_start_mouse = ui_ctx.mouse_pos;
+                            self.gizmo_drag_start_pos = transform.position;
+                            raycast_request = None; // block raycast selection
+                        }
+                        
+                        if !ui_ctx.mouse_down {
+                            self.active_gizmo_axis = None;
+                        }
+                        
+                        if let Some(axis) = self.active_gizmo_axis {
+                            let delta = crate::math::vec::Vec2::new(
+                                ui_ctx.mouse_pos.x - self.gizmo_drag_start_mouse.x,
+                                ui_ctx.mouse_pos.y - self.gizmo_drag_start_mouse.y,
+                            );
+                            
+                            let sensitivity = 0.02;
+                            let mut t_delta = crate::math::vec::Vec3::new(0.0, 0.0, 0.0);
+                            
+                            if axis == 0 {
+                                let projected_dir = if let Some(x2) = x_2d { crate::math::vec::Vec2::new(x2.x - o_2d.x, x2.y - o_2d.y) } else { crate::math::vec::Vec2::new(1.0, 0.0) };
+                                let len = (projected_dir.x*projected_dir.x + projected_dir.y*projected_dir.y).sqrt();
+                                let norm = if len > 0.0 { crate::math::vec::Vec2::new(projected_dir.x/len, projected_dir.y/len) } else { crate::math::vec::Vec2::new(1.0, 0.0) };
+                                let move_amt = (delta.x * norm.x + delta.y * norm.y) * sensitivity;
+                                t_delta.x = move_amt;
+                            } else if axis == 1 {
+                                let projected_dir = if let Some(y2) = y_2d { crate::math::vec::Vec2::new(y2.x - o_2d.x, y2.y - o_2d.y) } else { crate::math::vec::Vec2::new(0.0, -1.0) };
+                                let len = (projected_dir.x*projected_dir.x + projected_dir.y*projected_dir.y).sqrt();
+                                let norm = if len > 0.0 { crate::math::vec::Vec2::new(projected_dir.x/len, projected_dir.y/len) } else { crate::math::vec::Vec2::new(0.0, -1.0) };
+                                let move_amt = (delta.x * norm.x + delta.y * norm.y) * sensitivity;
+                                t_delta.y = move_amt;
+                            } else if axis == 2 {
+                                let projected_dir = if let Some(z2) = z_2d { crate::math::vec::Vec2::new(z2.x - o_2d.x, z2.y - o_2d.y) } else { crate::math::vec::Vec2::new(1.0, 1.0) };
+                                let len = (projected_dir.x*projected_dir.x + projected_dir.y*projected_dir.y).sqrt();
+                                let norm = if len > 0.0 { crate::math::vec::Vec2::new(projected_dir.x/len, projected_dir.y/len) } else { crate::math::vec::Vec2::new(1.0, 1.0) };
+                                let move_amt = (delta.x * norm.x + delta.y * norm.y) * sensitivity;
+                                t_delta.z = move_amt;
+                            }
+                            
+                            let new_pos = self.gizmo_drag_start_pos + t_delta;
+                            actions.push(EditorAction::TranslateSelected(new_pos));
+                            raycast_request = None; // block raycast when dragging
+                        }
+                    }
+                }
+            }
+        }
 
         (actions, new_viewport_size, raycast_request, viewport_hovered)
     }
 
     fn draw_entity_tree(
-        ui: &mut egui::Ui,
-        entity: EntityId,
-        children_map: &std::collections::HashMap<EntityId, Vec<EntityId>>,
-        selected_entity: &mut Option<EntityId>,
-        world: &World,
+        ui_ctx: &mut crate::ui::UiContext,
+        entity: crate::ecs::EntityId,
+        selected_entity: &mut Option<crate::ecs::EntityId>,
+        world: &crate::ecs::World,
+        all_alive: &[crate::ecs::EntityId],
+        depth: u32,
     ) {
-        let mut icon = "📦";
-        if world.get_component_array::<crate::ecs::components::CameraComponent>().has(entity) {
-            icon = "🎥";
-        } else if world.get_component_array::<crate::ecs::PointLightComponent>().has(entity) {
-            icon = "💡";
-        } else if world.get_component_array::<crate::ecs::RenderComponent>().has(entity) {
-            icon = "🧊";
-        } else if world.get_component_array::<crate::ecs::components::AudioEmitterComponent>().has(entity) {
-            icon = "🔊";
+        use core::fmt::Write;
+
+        let mut label = crate::containers::FixedString::<128>::new();
+        
+        let mut icon = "[O]";
+        if world.has_component::<crate::ecs::components::CameraComponent>(entity) {
+            icon = "[C]";
+        } else if world.has_component::<crate::ecs::components::PointLightComponent>(entity) {
+            icon = "[L]";
+        } else if world.has_component::<crate::ecs::components::RenderComponent>(entity) {
+            icon = "[M]";
+        } else if world.has_component::<crate::ecs::components::AudioEmitterComponent>(entity) {
+            icon = "[A]";
         }
 
-        let label = format!("{} Entity {}", icon, entity);
+        let _ = write!(label, "{} Entity {}", icon, entity);
         let is_selected = *selected_entity == Some(entity);
 
-        if let Some(children) = children_map.get(&entity) {
-            let id = ui.id().with(entity);
-            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-                .show_header(ui, |ui| {
-                    if ui.selectable_label(is_selected, &label).clicked() {
-                        *selected_entity = Some(entity);
-                    }
-                })
-                .body(|ui| {
-                    for &child in children {
-                        Self::draw_entity_tree(ui, child, children_map, selected_entity, world);
-                    }
-                });
-        } else {
-            if ui.selectable_label(is_selected, &label).clicked() {
-                *selected_entity = Some(entity);
+        let depth_offset = depth as f32 * 16.0;
+        ui_ctx.indent_cursor(depth_offset);
+        if ui_ctx.selectable_label(&label, is_selected) {
+            *selected_entity = Some(entity);
+        }
+        ui_ctx.unindent_cursor(depth_offset);
+
+        for &child in all_alive {
+            if world.has_component::<crate::ecs::components::HierarchyComponent>(child) {
+                let child_parent = unsafe { world.get_component::<crate::ecs::components::HierarchyComponent>(child).parent };
+                if child_parent == Some(entity) {
+                    Self::draw_entity_tree(ui_ctx, child, selected_entity, world, all_alive, depth + 1);
+                }
             }
         }
     }

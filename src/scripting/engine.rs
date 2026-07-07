@@ -111,4 +111,57 @@ impl ScriptEngine {
             }
         }
     }
+    pub fn call_on_trigger_enter(
+        &self,
+        ast: &AST,
+        state: &mut rhai::Dynamic,
+        other_entity: crate::ecs::EntityId,
+    ) {
+        let mut scope = Scope::new();
+        scope.push_dynamic("state", std::mem::take(state));
+        
+        let result: Result<(), Box<rhai::EvalAltResult>> = self.engine.call_fn(
+            &mut scope,
+            ast,
+            "on_trigger_enter",
+            (other_entity as i64,),
+        );
+
+        if let Some(state_ref) = scope.get_mut("state") {
+            *state = std::mem::take(state_ref);
+        }
+
+        if let Err(e) = result {
+            if !matches!(*e, rhai::EvalAltResult::ErrorFunctionNotFound(..)) {
+                crate::log_info!("Script Error (on_trigger_enter): {}", e);
+            }
+        }
+    }
+
+    pub fn call_on_trigger_exit(
+        &self,
+        ast: &AST,
+        state: &mut rhai::Dynamic,
+        other_entity: crate::ecs::EntityId,
+    ) {
+        let mut scope = Scope::new();
+        scope.push_dynamic("state", std::mem::take(state));
+        
+        let result: Result<(), Box<rhai::EvalAltResult>> = self.engine.call_fn(
+            &mut scope,
+            ast,
+            "on_trigger_exit",
+            (other_entity as i64,),
+        );
+
+        if let Some(state_ref) = scope.get_mut("state") {
+            *state = std::mem::take(state_ref);
+        }
+
+        if let Err(e) = result {
+            if !matches!(*e, rhai::EvalAltResult::ErrorFunctionNotFound(..)) {
+                crate::log_info!("Script Error (on_trigger_exit): {}", e);
+            }
+        }
+    }
 }

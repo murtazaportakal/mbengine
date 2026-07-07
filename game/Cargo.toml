@@ -4,7 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 engine = { path = ".." }
+
+[features]
+standalone = ["engine/standalone"]
+
+[[bin]]
+name = "game_standalone"
+path = "src/main.rs"
+required-features = ["standalone"]

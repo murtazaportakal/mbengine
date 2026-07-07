@@ -37,7 +37,8 @@ pub struct PushConstants {
     pub world: crate::math::mat4::Mat4,
     pub metallic: f32,
     pub roughness: f32,
-    pub _padding: [f32; 2],
+    pub padding: [f32; 2],
+    pub color: [f32; 4],
 }
 
 pub struct Pipeline {
@@ -47,10 +48,10 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn new(vulkan: &VulkanDevice, color_format: vk::Format) -> Option<Self> {
+    pub fn new(vulkan: &VulkanDevice, color_format: vk::Format, vfs: &crate::vfs::Vfs) -> Option<Self> {
         // Attempt to load shaders from disk. If missing, return None gracefully.
-        let vert_code = std::fs::read("shaders/vert.spv").ok()?;
-        let frag_code = std::fs::read("shaders/frag.spv").ok()?;
+        let vert_code = vfs.read_bytes("shaders/vert.spv").ok()?;
+        let frag_code = vfs.read_bytes("shaders/frag.spv").ok()?;
 
         let vert_module = Self::create_shader_module(vulkan, &vert_code)?;
         let frag_module = Self::create_shader_module(vulkan, &frag_code)?;

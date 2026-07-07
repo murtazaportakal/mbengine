@@ -162,6 +162,17 @@ impl World {
         unsafe { (*self.entity_manager).is_alive(id) }
     }
 
+    /// Get the maximum allocated entity index (useful for iteration bounding).
+    pub fn max_entity_index(&self) -> u32 {
+        unsafe { (*self.entity_manager).max_entity_index() }
+    }
+
+    /// Fills the provided buffer with all currently alive EntityIds, up to its capacity.
+    /// Returns the number of entities written.
+    pub fn get_alive_entities(&self, buffer: &mut [EntityId]) -> usize {
+        unsafe { (*self.entity_manager).get_alive_entities(buffer) }
+    }
+
     // ── component operations ────────────────────────────────────────────
 
     /// Add a component to an entity.

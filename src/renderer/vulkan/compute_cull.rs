@@ -9,8 +9,8 @@ pub struct ComputeCullPipeline {
 }
 
 impl ComputeCullPipeline {
-    pub fn new(vulkan: &VulkanDevice) -> Option<Self> {
-        let comp_code = std::fs::read("shaders/cull.spv").ok()?;
+    pub fn new(vulkan: &VulkanDevice, vfs: &crate::vfs::Vfs) -> Option<Self> {
+        let comp_code = vfs.read_bytes("shaders/cull.spv").ok()?;
         let comp_module =
             crate::renderer::vulkan::pipeline::Pipeline::create_shader_module(vulkan, &comp_code)?;
 

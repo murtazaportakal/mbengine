@@ -1,0 +1,133 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+struct InputVertex {
+    vec3 pos;       // offset 0
+    vec3 normal;    // offset 12
+    vec2 uv;        // offset 24
+    uvec4 joints;   // offset 32
+    vec4 weights;   // offset 48
+};
+
+layout(std430, binding = 0) buffer MeshVertices {
+    float vertexData[];
+};
+
+layout(std430, binding = 1) buffer ClothVelocities {
+    vec4 vel[]; // xyz = velocity, w = inv_mass
+};
+
+struct SphereCollider {
+    vec4 pos_radius; // xyz = pos, w = radius
+};
+
+layout(std430, binding = 2) readonly buffer Colliders {
+    SphereCollider colliders[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint grid_width;
+    uint grid_height;
+    float dt;
+    float stiffness;
+    float damping;
+    uint num_colliders;
+} pc;
+
+vec3 readPos(uint idx) {
+    uint base = idx * 16;
+    return vec3(vertexData[base], vertexData[base + 1], vertexData[base + 2]);
+}
+
+void writePos(uint idx, vec3 p) {
+    uint base = idx * 16;
+    vertexData[base] = p.x;
+    vertexData[base + 1] = p.y;
+    vertexData[base + 2] = p.z;
+}
+
+void writeNormal(uint idx, vec3 n) {
+    uint base = idx * 16;
+    vertexData[base + 3] = n.x;
+    vertexData[base + 4] = n.y;
+    vertexData[base + 5] = n.z;
+}
+
+vec3 computeSpringForce(vec3 p, vec3 neighbor_p, float rest_length) {
+    vec3 diff = neighbor_p - p;
+    float dist = length(diff);
+    if (dist > 0.0001) {
+        return pc.stiffness * (dist - rest_length) * (diff / dist);
+    }
+    return vec3(0.0);
+}
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+
+    if (x >= pc.grid_width || y >= pc.grid_height) {
+        return;
+    }
+
+    uint idx = y * pc.grid_width + x;
+    float inv_mass = vel[idx].w;
+    if (inv_mass == 0.0) {
+        return; // Pinned vertex
+    }
+
+    vec3 pos = readPos(idx);
+    vec3 velocity = vel[idx].xyz;
+    
+    float spacing_x = 10.0 / float(pc.grid_width - 1);
+    float spacing_y = 10.0 / float(pc.grid_height - 1);
+
+    vec3 force = vec3(0.0, -9.81 / inv_mass, 0.0); // Gravity
+
+    // Structural springs
+    if (x > 0) force += computeSpringForce(pos, readPos(idx - 1), spacing_x);
+    if (x < pc.grid_width - 1) force += computeSpringForce(pos, readPos(idx + 1), spacing_x);
+    if (y > 0) force += computeSpringForce(pos, readPos(idx - pc.grid_width), spacing_y);
+    if (y < pc.grid_height - 1) force += computeSpringForce(pos, readPos(idx + pc.grid_width), spacing_y);
+
+    // Shear springs
+    float diag = sqrt(spacing_x * spacing_x + spacing_y * spacing_y);
+    if (x > 0 && y > 0) force += computeSpringForce(pos, readPos(idx - pc.grid_width - 1), diag);
+    if (x < pc.grid_width - 1 && y < pc.grid_height - 1) force += computeSpringForce(pos, readPos(idx + pc.grid_width + 1), diag);
+    if (x > 0 && y < pc.grid_height - 1) force += computeSpringForce(pos, readPos(idx + pc.grid_width - 1), diag);
+    if (x < pc.grid_width - 1 && y > 0) force += computeSpringForce(pos, readPos(idx - pc.grid_width + 1), diag);
+
+    velocity += (force * inv_mass) * pc.dt;
+    velocity *= pc.damping;
+
+    vec3 next_pos = pos + velocity * pc.dt;
+
+    // Collision detection with Spheres
+    for (uint i = 0; i < pc.num_colliders; i++) {
+        vec3 c_pos = colliders[i].pos_radius.xyz;
+        float c_rad = colliders[i].pos_radius.w;
+        vec3 diff = next_pos - c_pos;
+        float dist = length(diff);
+        if (dist < c_rad + 0.05) { 
+            vec3 n = diff / (dist + 0.0001);
+            next_pos = c_pos + n * (c_rad + 0.05);
+            
+            float vel_along_n = dot(velocity, n);
+            if (vel_along_n < 0.0) {
+                velocity -= n * vel_along_n;
+            }
+        }
+    }
+
+    // Floor collision
+    if (next_pos.y < 0.55) {
+        next_pos.y = 0.55;
+        if (velocity.y < 0.0) velocity.y = 0.0;
+        velocity.x *= 0.9;
+        velocity.z *= 0.9;
+    }
+
+    vel[idx].xyz = velocity;
+    writePos(idx, next_pos);
+}

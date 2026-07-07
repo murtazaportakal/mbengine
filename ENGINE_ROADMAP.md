@@ -57,9 +57,9 @@ The engine has reached full maturity for its baseline requirements. All V1 and V
 
 ### 4. Hot-Reloading & Editor Tooling (`src/app/`, `src/platform/`)
 - **Native DLL Hot-Reloading**: Engine split into `engine.exe` (host/memory) and `game.dll` (systems). The host transparently unloads/reloads the DLL upon recompilation while persisting ECS data, enabling zero-downtime iteration.
-- **Egui Integration**: Custom Vulkan pipeline streams `egui` clipped meshes as an overlay layer.
+- **Custom IMGUI Integration**: Replaced `egui` with a fully custom, in-house, zero-heap Immediate Mode GUI framework optimized for our data-oriented engine.
 - **Scene Inspector**: ECS reflection (`ecs/reflection.rs`) automatically parses entities and exposes component properties for real-time editor tweaking.
-- **Offscreen Rendering (Viewport)**: The 3D scene renders to an offscreen target, embedded directly into scalable `egui` windows.
+- **Offscreen Rendering (Viewport)**: The 3D scene renders to an offscreen target, embedded directly into scalable custom UI windows.
 
 ### 5. Asset Pipeline & Virtual File System (`src/asset_manager.rs`, `src/vfs.rs`)
 - **File Watcher**: `notify`-based asynchronous file watching automatically hot-reloads GLTF models, PNG/JPG textures, and SPIR-V shaders instantly.
@@ -110,21 +110,28 @@ With the rendering, hot-reloading, and multithreaded ECS foundations complete, t
 |---|---|---|
 | **P1** | VM Integration | Embed a lightweight scripting language (e.g., `rhai` or `mlua`) to allow rapid behavior iteration without recompiling Rust DLLs. *(Done)* |
 | **P1** | API Bindings | Expose the ECS (entity creation, component modification, queries) and Math library to the scripting context securely. *(Done)* |
-| **P3** | Visual Node Graph | Build a visual node-based scripting tool inside the `egui` editor that transpiles to the embedded VM language. *(Done)* |
+| **P3** | Visual Node Graph | Build a visual node-based scripting tool inside the custom editor that transpiles to the embedded VM language. *(Done)* |
 
-### Epic 4: Advanced Physics & Queries
+### Epic 4: Advanced Physics & Queries (Completed)
 | Priority | Feature | Description |
 |---|---|---|
-| **P1** | Raycasting & Spatial Queries | Expose a clean API for line-of-sight checks, mouse picking (click-to-select), and sweep tests via `rapier3d`. |
-| **P2** | Triggers & Sensor Volumes | Implement sensor colliders that fire ECS events (e.g., `OnTriggerEnter`) without physical resolution. |
-| **P3** | Soft Bodies / Cloth | Expand physics support to handle deformable bodies, integrating with the compute shader mesh pipeline. |
+| **P1** | Raycasting & Spatial Queries | Expose a clean API for line-of-sight checks, mouse picking (click-to-select), and sweep tests via `rapier3d`. *(Done)* |
+| **P2** | Triggers & Sensor Volumes | Implement sensor colliders that fire ECS events (e.g., `OnTriggerEnter`) without physical resolution. *(Done)* |
+| **P3** | Soft Bodies / Cloth | Expand physics support to handle deformable bodies, integrating with the compute shader mesh pipeline. *(Done)* |
 
-### Epic 5: Project Export & Build Pipeline
+### Epic 5: Project Export & Build Pipeline (Completed)
 | Priority | Feature | Description |
 |---|---|---|
-| **P1** | VFS Archiver | Create a CLI tool to bundle all textures, shaders, and models into a single compressed binary package (e.g., `.pak`). |
-| **P1** | Standalone Executable | Provide a build step that strips the `egui` editor and hot-reloading components, linking `game.dll` statically into a highly optimized standalone `.exe`. |
-| **P2** | Build Profiles | Support multi-target output (e.g., Windows, Linux) via cross-compilation configurations. |
+| **P1** | VFS Archiver | Create a CLI tool to bundle all textures, shaders, and models into a single compressed binary package (e.g., `.pak`). *(Done)* |
+| **P1** | Standalone Executable | Provide a build step that strips the custom editor and hot-reloading components, linking `game.dll` statically into a highly optimized standalone `.exe`. *(Done)* |
+| **P2** | Build Profiles | Support multi-target output (e.g., Windows, Linux) via cross-compilation configurations. *(Done)* |
+
+### Epic 6: Custom IMGUI Framework (Completed)
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | Core Primitive Rendering | Implement basic immediate-mode UI shapes (quads, borders) and text using `FixedString` zero-heap constraints. *(Done)* |
+| **P1** | Layout Engine | Cursor-based automatic UI layout with support for `begin_panel`, vertical, and horizontal flows. *(Done)* |
+| **P1** | Component Inspector | Fully functional Right Inspector Panel utilizing `drag_float` and `checkbox` primitives to directly edit `ReflectComponent` structures. *(Done)* |
 
 ---
 

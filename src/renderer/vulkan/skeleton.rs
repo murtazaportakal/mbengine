@@ -172,17 +172,11 @@ impl TransformTRS {
 
 /// A pose of the skeleton containing a TRS for each bone.
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct SkeletonPose {
     pub bones: crate::containers::FixedArray<TransformTRS, MAX_BONES>,
 }
 
-impl Default for SkeletonPose {
-    fn default() -> Self {
-        Self {
-            bones: crate::containers::FixedArray::new(),
-        }
-    }
-}
 
 impl SkeletonPose {
     pub fn new(bone_count: usize) -> Self {

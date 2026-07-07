@@ -163,6 +163,43 @@ impl EntityManager {
         id_gen == slot_gen
     }
 
+    /// Get the maximum allocated entity index (useful for iteration bounding).
+    pub fn max_entity_index(&self) -> u32 {
+        self.next_fresh_index
+    }
+
+    /// Fills the provided buffer with all currently alive EntityIds, up to its capacity.
+    /// Returns the number of entities written.
+    pub fn get_alive_entities(&self, buffer: &mut [EntityId]) -> usize {
+        let mut count = 0;
+        for i in 0..self.next_fresh_index {
+            if count >= buffer.len() {
+                break;
+            }
+            
+            // Check if this index is in the recycle queue
+            let mut is_recycled = false;
+            if self.recycle_count > 0 {
+                let mut curr = self.recycle_head;
+                for _ in 0..self.recycle_count {
+                    let recycled_idx = unsafe { *self.recycle_queue.add(curr as usize) };
+                    if recycled_idx == i {
+                        is_recycled = true;
+                        break;
+                    }
+                    curr = (curr + 1) % MAX_ENTITIES;
+                }
+            }
+
+            if !is_recycled {
+                let gen = unsafe { *self.generations.add(i as usize) };
+                buffer[count] = make_entity_id(i, gen);
+                count += 1;
+            }
+        }
+        count
+    }
+
     // ── component mask ──────────────────────────────────────────────────
 
     /// Get the component presence bitset for the given entity.

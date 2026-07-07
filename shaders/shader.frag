@@ -26,7 +26,8 @@ layout(push_constant) uniform PushConstants {
     mat4 world;
     float metallic;
     float roughness;
-    vec2 _padding;
+    vec2 padding;
+    vec4 color;
 } pc;
 
 layout(binding = 1) uniform sampler2D texSampler;
@@ -112,7 +113,7 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 
 void main() {
     vec4 texColor = texture(texSampler, fragUV);
-    vec3 albedo = pow(texColor.rgb, vec3(2.2));
+    vec3 albedo = pow(texColor.rgb, vec3(2.2)) * pc.color.rgb;
 
     vec3 N = normalize(fragNormal);
     vec3 V = normalize(ubo.cameraPos.xyz - fragPos);
@@ -190,7 +191,7 @@ void main() {
     vec3 kS_ambient = fresnelSchlick(max(dot(N, V), 0.0), F0);
     vec3 kD_ambient = vec3(1.0) - kS_ambient;
     kD_ambient *= 1.0 - pc.metallic;
-    
+
     vec3 ambient = (kD_ambient * diffuseIBL) + specularIBL;
     vec3 color = ambient + Lo;
     

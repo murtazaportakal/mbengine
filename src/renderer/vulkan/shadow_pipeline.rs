@@ -8,8 +8,8 @@ pub struct ShadowPipeline {
 }
 
 impl ShadowPipeline {
-    pub fn new(vulkan: &VulkanDevice) -> Option<Self> {
-        let vert_code = std::fs::read("shaders/shadow.spv").ok()?;
+    pub fn new(vulkan: &VulkanDevice, vfs: &crate::vfs::Vfs) -> Option<Self> {
+        let vert_code = vfs.read_bytes("shaders/shadow.spv").ok()?;
         let vert_module =
             crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &vert_code)?;
 

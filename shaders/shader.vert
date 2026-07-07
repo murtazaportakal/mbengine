@@ -31,7 +31,8 @@ layout(push_constant) uniform PushConstants {
     mat4 world;
     float metallic;
     float roughness;
-    vec2 _padding;
+    vec2 padding;
+    vec4 color;
 } pc;
 
 void main() {

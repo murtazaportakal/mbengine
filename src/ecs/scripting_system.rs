@@ -9,12 +9,40 @@ pub fn process_scripts(
     world: &World,
     asset_manager: &AssetManager,
     script_engine: &ScriptEngine,
+    physics: &crate::physics::PhysicsSystem,
     dt: f32,
 ) {
     let script_components_mut = unsafe { &mut *world.get_component_array_mut_ptr::<ScriptBehaviorComponent>() };
     let transforms_mut = unsafe { &mut *world.get_component_array_mut_ptr::<TransformComponent>() };
     
     let entities = script_components_mut.dense_entities();
+
+    // Process physics trigger events
+    for event in &physics.trigger_events {
+        // Fire for entity1 if it has a script
+        if script_components_mut.has(event.entity1) {
+            let script_comp = unsafe { script_components_mut.get_mut(event.entity1) };
+            if let Some(ast) = asset_manager.get_script_ast(script_comp.script_name.as_str()) {
+                if event.started {
+                    script_engine.call_on_trigger_enter(ast, &mut script_comp.state, event.entity2);
+                } else {
+                    script_engine.call_on_trigger_exit(ast, &mut script_comp.state, event.entity2);
+                }
+            }
+        }
+        
+        // Fire for entity2 if it has a script
+        if script_components_mut.has(event.entity2) {
+            let script_comp = unsafe { script_components_mut.get_mut(event.entity2) };
+            if let Some(ast) = asset_manager.get_script_ast(script_comp.script_name.as_str()) {
+                if event.started {
+                    script_engine.call_on_trigger_enter(ast, &mut script_comp.state, event.entity1);
+                } else {
+                    script_engine.call_on_trigger_exit(ast, &mut script_comp.state, event.entity1);
+                }
+            }
+        }
+    }
 
     for (i, script_comp) in script_components_mut.as_mut_slice().iter_mut().enumerate() {
         let entity = unsafe { *entities.add(i) };

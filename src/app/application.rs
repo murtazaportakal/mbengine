@@ -33,15 +33,16 @@ pub struct Application {
     pub post_process_descriptor_pool: vk::DescriptorPool,
     pub tonemap_descriptor_set: vk::DescriptorSet,
     pub bloom_descriptor_sets: Vec<vk::DescriptorSet>,
-    pub offscreen_texture_id: egui::TextureId,
+    pub offscreen_texture_id: u32,
     pub swapchain: Swapchain,
     pub vulkan: VulkanDevice,
     pub window: Window,
     pub input: crate::app::input::Input,
     pub timer: Timer,
     pub memory: MemorySubsystem,
-    pub egui_ctx: egui::Context,
-    pub egui_backend: crate::renderer::vulkan::EguiBackend,
+    pub ui_ctx: crate::ui::UiContext,
+    pub ui_font: crate::ui::font::Font,
+    pub ui_backend: crate::renderer::vulkan::UiBackend,
     pub physics: crate::physics::PhysicsSystem,
     pub selected_entity: Option<crate::ecs::EntityId>,
     pub current_frame: usize,
@@ -109,8 +110,12 @@ impl Application {
             target_height / 2,
             mip_levels,
         )?;
+        // Initialize Asset Manager
+        let mut asset_manager = crate::asset_manager::AssetManager::new();
+        asset_manager.load_checkerboard(&vulkan, "default");
+        asset_manager.load_checkerboard(&vulkan, "fallback");
         let post_process =
-            crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::R8G8B8A8_UNORM)?;
+            crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::R8G8B8A8_UNORM, &asset_manager.vfs)?;
 
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -162,7 +167,7 @@ impl Application {
             }
         };
 
-        let pipeline = Pipeline::new(&vulkan, vk::Format::R16G16B16A16_SFLOAT);
+        let pipeline = Pipeline::new(&vulkan, vk::Format::R16G16B16A16_SFLOAT, &asset_manager.vfs);
 
         let compute_pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -184,10 +189,10 @@ impl Application {
 
         // We can pass a dummy max_meshlets to new() since it no longer allocates an indirect buffer
         let compute_pipeline =
-            crate::renderer::vulkan::compute_cull::ComputeCullPipeline::new(&vulkan);
+            crate::renderer::vulkan::compute_cull::ComputeCullPipeline::new(&vulkan, &asset_manager.vfs);
 
         let skinning_pipeline =
-            crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline::new(&vulkan);
+            crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline::new(&vulkan, &asset_manager.vfs);
 
         let skinning_pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -204,7 +209,7 @@ impl Application {
                 .unwrap()
         };
 
-        let mut asset_manager = crate::asset_manager::AssetManager::new();
+
         let mut descriptor_pool = vk::DescriptorPool::null();
         let mut descriptor_set = vk::DescriptorSet::null();
 
@@ -372,9 +377,10 @@ impl Application {
             world.register_component::<crate::ecs::components::SkeletonComponent>(100);
             world.register_component::<crate::ecs::components::AnimatorComponent>(100);
             world.register_component::<crate::ecs::components::ScriptBehaviorComponent>(100);
+            world.register_component::<crate::ecs::components::SoftBodyComponent>(100);
         }
 
-        let mut physics = crate::physics::PhysicsSystem::new();
+        let physics = crate::physics::PhysicsSystem::new();
 
         // Spawn a camera
         let camera_entity = world.create_entity();
@@ -410,268 +416,20 @@ impl Application {
             );
         }
 
-        // Spawn a few entities in a hierarchy
-        // 1. Planet
-        let planet = world.create_entity();
-        unsafe {
-            world.add_component(
-                planet,
-                TransformComponent {
-                    position: Vec3::new(0.0, 0.0, 0.0),
-                    scale: Vec3::new(1.0, 1.0, 1.0),
-                    ..Default::default()
-                },
-            );
-            if let Some(&mesh_index) = cube_model_indices.first() {
-                world.add_component(
-                    planet,
-                    RenderComponent {
-                        visible: true,
-                        mesh_index,
-                        metallic: 0.1,
-                        roughness: 0.8,
-                    },
-                );
-            }
-            world.add_component(
-                planet,
-                crate::ecs::components::AudioEmitterComponent::default(),
-            );
-        }
 
-        // 2. Moon (Child of Planet)
-        let moon = world.create_entity();
-        unsafe {
-            world.add_component(
-                moon,
-                TransformComponent {
-                    position: Vec3::new(2.5, 0.0, 0.0),
-                    scale: Vec3::new(0.4, 0.4, 0.4),
-                    ..Default::default()
-                },
-            );
-            if let Some(&mesh_index) = cube_model_indices.first() {
-                world.add_component(
-                    moon,
-                    RenderComponent {
-                        visible: true,
-                        mesh_index,
-                        metallic: 0.9,
-                        roughness: 0.2,
-                    },
-                );
-            }
-            world.add_component(
-                moon,
-                HierarchyComponent {
-                    parent: Some(planet),
-                    ..Default::default()
-                },
-            );
-        }
 
-        // 3. Satellite (Child of Moon)
-        let satellite = world.create_entity();
-        unsafe {
-            world.add_component(
-                satellite,
-                TransformComponent {
-                    position: Vec3::new(1.5, 0.0, 0.0),
-                    scale: Vec3::new(0.2, 0.2, 0.2),
-                    ..Default::default()
-                },
-            );
-            if let Some(&mesh_index) = cube_model_indices.first() {
-                world.add_component(
-                    satellite,
-                    RenderComponent {
-                        visible: true,
-                        mesh_index,
-                        metallic: 1.0,
-                        roughness: 0.1,
-                    },
-                );
-            }
-            world.add_component(
-                satellite,
-                HierarchyComponent {
-                    parent: Some(moon),
-                    ..Default::default()
-                },
-            );
-        }
-
-        // Add a Point Light
-        let light_entity = world.create_entity();
-        unsafe {
-            world.add_component(
-                light_entity,
-                TransformComponent {
-                    position: Vec3::new(3.0, 3.0, 3.0),
-                    ..Default::default()
-                },
-            );
-            world.add_component(
-                light_entity,
-                crate::ecs::components::PointLightComponent {
-                    color: Vec3::new(1.0, 0.5, 0.2),
-                    intensity: 100.0,
-                },
-            );
-        }
-
-        // Add Physics Entities (Floor and Falling Cube)
-        // 1. Static Floor
-        let floor = world.create_entity();
-        let floor_rb = rapier3d::prelude::RigidBodyBuilder::fixed()
-            .translation(rapier3d::math::Vector::new(0.0, -5.0, 0.0))
-            .build();
-        let floor_handle = physics.rigid_body_set.insert(floor_rb);
-        let floor_collider = rapier3d::prelude::ColliderBuilder::cuboid(10.0, 0.5, 10.0).build();
-        let floor_col_handle = physics.collider_set.insert_with_parent(
-            floor_collider,
-            floor_handle,
-            &mut physics.rigid_body_set,
-        );
-
-        unsafe {
-            world.add_component(
-                floor,
-                TransformComponent {
-                    position: Vec3::new(0.0, -5.0, 0.0),
-                    scale: Vec3::new(10.0, 0.5, 10.0),
-                    ..Default::default()
-                },
-            );
-            if let Some(&mesh_index) = cube_model_indices.first() {
-                world.add_component(
-                    floor,
-                    RenderComponent {
-                        visible: true,
-                        mesh_index,
-                        metallic: 0.1,
-                        roughness: 0.9,
-                    },
-                );
-            }
-            world.add_component(
-                floor,
-                crate::ecs::components::RigidBodyComponent {
-                    handle: floor_handle,
-                },
-            );
-            world.add_component(
-                floor,
-                crate::ecs::components::ColliderComponent {
-                    handle: floor_col_handle,
-                },
-            );
-        }
-
-        // 2. Dynamic Falling Cube
-        let falling_cube = world.create_entity();
-        let falling_rb = rapier3d::prelude::RigidBodyBuilder::dynamic()
-            .translation(rapier3d::math::Vector::new(0.0, 10.0, 0.0))
-            .build();
-        let falling_handle = physics.rigid_body_set.insert(falling_rb);
-        let falling_collider = rapier3d::prelude::ColliderBuilder::cuboid(1.0, 1.0, 1.0).build();
-        let falling_col_handle = physics.collider_set.insert_with_parent(
-            falling_collider,
-            falling_handle,
-            &mut physics.rigid_body_set,
-        );
-
-        unsafe {
-            world.add_component(
-                falling_cube,
-                TransformComponent {
-                    position: Vec3::new(0.0, 10.0, 0.0),
-                    scale: Vec3::new(1.0, 1.0, 1.0),
-                    ..Default::default()
-                },
-            );
-            if let Some(&mesh_index) = cube_model_indices.first() {
-                world.add_component(
-                    falling_cube,
-                    RenderComponent {
-                        visible: true,
-                        mesh_index,
-                        metallic: 0.5,
-                        roughness: 0.5,
-                    },
-                );
-            }
-            world.add_component(
-                falling_cube,
-                crate::ecs::components::RigidBodyComponent {
-                    handle: falling_handle,
-                },
-            );
-            world.add_component(
-                falling_cube,
-                crate::ecs::components::ColliderComponent {
-                    handle: falling_col_handle,
-                },
-            );
-        }
-
-        // 3. Bugatti Model
-        if let Some(bugatti_indices) = asset_manager.load_model(&vulkan, "bugatti.obj") {
-            let bugatti_root = world.create_entity();
-            unsafe {
-                world.add_component(
-                    bugatti_root,
-                    TransformComponent {
-                        position: Vec3::new(0.0, 0.0, 0.0),
-                        scale: Vec3::new(1.0, 1.0, 1.0),
-                        ..Default::default()
-                    },
-                );
-            }
-
-            for &mesh_index in bugatti_indices {
-                let bugatti_part = world.create_entity();
-                unsafe {
-                    world.add_component(
-                        bugatti_part,
-                        TransformComponent {
-                            position: Vec3::new(0.0, 0.0, 0.0),
-                            scale: Vec3::new(1.0, 1.0, 1.0),
-                            ..Default::default()
-                        },
-                    );
-                    world.add_component(
-                        bugatti_part,
-                        RenderComponent {
-                            visible: true,
-                            mesh_index,
-                            metallic: 0.8,
-                            roughness: 0.2,
-                        },
-                    );
-                    world.add_component(
-                        bugatti_part,
-                        HierarchyComponent {
-                            parent: Some(bugatti_root),
-                            ..Default::default()
-                        },
-                    );
-                }
-            }
-        }
-
-        let egui_ctx = egui::Context::default();
-        crate::app::slate_theme::apply_slate_theme(&egui_ctx);
-        let mut egui_backend =
-            crate::renderer::vulkan::EguiBackend::new(&vulkan, swapchain.format.format);
-        let offscreen_texture_id =
-            egui_backend.register_user_texture(&vulkan, sdr_target.color_view, sdr_target.sampler);
+        let ui_ctx = crate::ui::UiContext::new();
+        let font_bytes = asset_manager.vfs.read_bytes("assets/fonts/Roboto-Regular.ttf").unwrap_or_else(|_| vec![]);
+        let ui_font = crate::ui::font::Font::load_ascii(&font_bytes, 64.0).unwrap_or(crate::ui::font::Font { texture_data: vec![255; 1024*1024*4], width: 1024, height: 1024, glyphs: [crate::ui::font::GlyphInfo::default(); 128], line_height: 64.0 });
+        let mut ui_backend = crate::renderer::vulkan::UiBackend::new(&vulkan, swapchain.format.format, &asset_manager.vfs);
+        ui_backend.set_font(&vulkan, &ui_font);
+        let offscreen_texture_id = 0;
 
         let audio_subsystem = crate::audio::AudioSubsystem::new();
-        let audio_system = crate::audio::AudioSystem::new(audio_subsystem.as_ref());
+        let audio_system = crate::audio::AudioSystem::new(audio_subsystem.as_ref(), &asset_manager.vfs);
         let script_engine = crate::scripting::engine::ScriptEngine::new();
 
-        let app = Self {
+        let mut app = Self {
             world,
             pipeline,
             asset_manager,
@@ -694,8 +452,9 @@ impl Application {
             input,
             timer,
             memory,
-            egui_ctx,
-            egui_backend,
+            ui_ctx,
+            ui_font,
+            ui_backend,
             physics,
             selected_entity: None,
             current_frame: 0,
@@ -715,6 +474,14 @@ impl Application {
             is_playing: false,
         };
         app.update_post_process_descriptors();
+
+        app.ui_backend.update_user_texture(
+            &app.vulkan,
+            app.offscreen_texture_id,
+            app.sdr_target.color_view,
+            app.sdr_target.sampler,
+        );
+
         Some(app)
     }
 
@@ -821,7 +588,7 @@ impl Application {
 
         self.update_post_process_descriptors();
 
-        self.egui_backend.update_user_texture(
+        self.ui_backend.update_user_texture(
             &self.vulkan,
             self.offscreen_texture_id,
             self.sdr_target.color_view,
@@ -843,17 +610,9 @@ impl Application {
             let ppp = (self.window.height as f32 / 720.0).max(0.5);
             self.input.ui_scale = ppp;
 
-            self.input.egui_input.screen_rect = Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::Vec2::new(
-                    self.window.width as f32 / ppp,
-                    self.window.height as f32 / ppp,
-                ),
-            ));
 
-            let raw_input = self.input.egui_input.take();
-            self.egui_ctx.begin_frame(raw_input);
-            self.egui_ctx.set_zoom_factor(ppp);
+
+            self.ui_ctx.begin_frame(crate::math::vec::Vec2::new(self.input.mouse_x as f32, self.input.mouse_y as f32), self.input.keys[0x01]); // 0x01 is VK_LBUTTON
 
             if self.is_playing {
                 if let Some(reloader) = &mut self.hot_reloader {
@@ -872,19 +631,49 @@ impl Application {
                     &self.world,
                     &self.asset_manager,
                     &self.script_engine,
+                    &self.physics,
                     dt as f32,
                 );
             }
 
+            let mut view_mat = crate::math::mat4::Mat4::identity();
+            let mut proj_mat = crate::math::mat4::Mat4::identity();
+            
+            let cam_entity = {
+                let cameras = self.world.get_component_array::<CameraComponent>();
+                cameras.dense_entities_slice().first().copied()
+            };
+            if let Some(cam_entity) = cam_entity {
+                let transforms = self.world.get_component_array::<TransformComponent>();
+                if transforms.has(cam_entity) {
+                    let transform = unsafe { transforms.get(cam_entity) };
+                    let pitch = transform.rotation.x;
+                    let yaw = transform.rotation.y;
+                    let forward = crate::math::vec::Vec3::new(
+                        yaw.sin() * pitch.cos(),
+                        pitch.sin(),
+                        yaw.cos() * pitch.cos(),
+                    ).normalize();
+                    let center = transform.position + forward;
+                    view_mat = crate::math::mat4::Mat4::look_at(transform.position, center, crate::math::vec::Vec3::new(0.0, 1.0, 0.0));
+                    
+                    let aspect_ratio = self.offscreen_target.width as f32 / self.offscreen_target.height as f32;
+                    proj_mat = crate::math::mat4::Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
+                }
+            }
+
             let (actions, new_viewport_size, raycast_request, viewport_hovered) = self.editor.draw(
-                &self.egui_ctx,
+                &mut self.ui_ctx,
                 &mut self.world,
                 &mut self.physics,
                 &mut self.selected_entity,
                 &mut self.bloom_threshold,
                 1.0 / dt as f32,
                 self.is_playing,
-                self.offscreen_texture_id,
+                self.window.width as f32,
+                self.window.height as f32,
+                view_mat,
+                proj_mat,
             );
 
             for action in actions {
@@ -895,19 +684,114 @@ impl Application {
                     crate::app::editor::EditorAction::Pause => {
                         self.is_playing = false;
                     }
+                    crate::app::editor::EditorAction::SpawnEntity => {
+                        let new_entity = self.world.create_entity();
+                        unsafe {
+                            self.world.add_component(
+                                new_entity,
+                                crate::ecs::TransformComponent::default(),
+                            );
+                            self.world.add_component(
+                                new_entity,
+                                crate::ecs::components::HierarchyComponent::default(),
+                            );
+                        }
+                        self.selected_entity = Some(new_entity);
+                    }
+                    crate::app::editor::EditorAction::TranslateSelected(pos) => {
+                        if let Some(entity) = self.selected_entity {
+                            let transforms = self.world.get_component_array_mut::<TransformComponent>();
+                            if transforms.has(entity) {
+                                let transform = unsafe { transforms.get_mut(entity) };
+                                transform.position = pos;
+                                
+                                // Update physics body if needed
+                                let physics_comps = self.world.get_component_array::<crate::ecs::components::RigidBodyComponent>();
+                                if physics_comps.has(entity) {
+                                    let pc = unsafe { physics_comps.get(entity) };
+                                    let handle = pc.handle;
+                                    if true {
+                                        if let Some(body) = self.physics.rigid_body_set.get_mut(handle) {
+                                            let mut tr = body.position().clone();
+                                            tr.translation = rapier3d::math::Isometry::translation(pos.x, pos.y, pos.z).translation;
+                                            body.set_position(tr, true);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    crate::app::editor::EditorAction::DeleteEntity(e) => {
+                        let mut to_delete = vec![e];
+                        {
+                            let hierarchies = self.world.get_component_array::<crate::ecs::components::HierarchyComponent>();
+                            let mut i = 0;
+                            while i < to_delete.len() {
+                                let current = to_delete[i];
+                                let dense_hier = hierarchies.as_slice();
+                                let entities = hierarchies.dense_entities_slice();
+                                for (j, hier) in dense_hier.iter().enumerate() {
+                                    if hier.parent == Some(current) {
+                                        let child_entity = entities[j];
+                                        if !to_delete.contains(&child_entity) {
+                                            to_delete.push(child_entity);
+                                        }
+                                    }
+                                }
+                                i += 1;
+                            }
+                        }
+                        
+                        {
+                            let colliders = self.world.get_component_array::<crate::ecs::components::ColliderComponent>();
+                            let rigid_bodies = self.world.get_component_array::<crate::ecs::components::RigidBodyComponent>();
+                            for &entity in &to_delete {
+                                if colliders.has(entity) {
+                                    let handle = unsafe { colliders.get(entity) }.handle;
+                                    self.physics.collider_set.remove(
+                                        handle,
+                                        &mut self.physics.island_manager,
+                                        &mut self.physics.rigid_body_set,
+                                        true,
+                                    );
+                                }
+                                if rigid_bodies.has(entity) {
+                                    let handle = unsafe { rigid_bodies.get(entity) }.handle;
+                                    self.physics.rigid_body_set.remove(
+                                        handle,
+                                        &mut self.physics.island_manager,
+                                        &mut self.physics.collider_set,
+                                        &mut self.physics.impulse_joint_set,
+                                        &mut self.physics.multibody_joint_set,
+                                        true,
+                                    );
+                                }
+                            }
+                        }
+                        
+                        for &entity in &to_delete {
+                            self.world.destroy_entity(entity);
+                            if self.selected_entity == Some(entity) {
+                                self.selected_entity = None;
+                            }
+                        }
+                    }
+                    crate::app::editor::EditorAction::AddComponent(e, name) => {
+                        self.editor.registry.add_component(&name, e, &mut self.world, &mut self.physics);
+                    }
                     crate::app::editor::EditorAction::SpawnModel(path) => {
                         let new_entity = self.world.create_entity();
 
                         // Load model using AssetManager
                         let lower = path.to_lowercase();
-                        let mesh_idx = if lower.ends_with(".obj") {
+                        let mesh_indices = if lower.ends_with(".obj") {
                             self.asset_manager
                                 .load_model(&self.vulkan, &path)
-                                .map(|m| m[0])
+                                .map(|m| m.to_vec())
                         } else if lower.ends_with(".gltf") || lower.ends_with(".glb") {
                             self.asset_manager
                                 .load_gltf(&self.vulkan, &path, &path)
-                                .map(|m| m[0])
+                                .map(|m| m.to_vec())
                         } else {
                             None
                         };
@@ -924,20 +808,86 @@ impl Application {
                             );
                             self.world.add_component(
                                 new_entity,
-                                crate::ecs::RenderComponent {
-                                    visible: true,
-                                    mesh_index: mesh_idx.unwrap_or(0),
-                                    metallic: 0.0,
-                                    roughness: 0.8,
-                                },
-                            );
-                            self.world.add_component(
-                                new_entity,
                                 crate::ecs::components::HierarchyComponent {
                                     parent: None,
                                     local_matrix: crate::math::mat4::Mat4::identity(),
                                 },
                             );
+                        }
+
+                        if let Some(indices) = mesh_indices {
+                            for &mesh_index in &indices {
+                                let child_entity = self.world.create_entity();
+                                unsafe {
+                                    self.world.add_component(
+                                        child_entity,
+                                        crate::ecs::TransformComponent {
+                                            position: crate::math::vec::Vec3::new(0.0, 0.0, 0.0),
+                                            rotation: crate::math::vec::Vec3::new(0.0, 0.0, 0.0),
+                                            scale: crate::math::vec::Vec3::new(1.0, 1.0, 1.0),
+                                            matrix: crate::math::mat4::Mat4::identity(),
+                                        },
+                                    );
+                                    
+                                    let mut metallic = 0.0;
+                                    let mut roughness = 0.8;
+                                    let mut r = 1.0;
+                                    let mut g = 1.0;
+                                    let mut b = 1.0;
+
+                                    if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
+                                        metallic = mesh.metallic;
+                                        roughness = mesh.roughness;
+                                        r = mesh.default_color[0];
+                                        g = mesh.default_color[1];
+                                        b = mesh.default_color[2];
+
+                                        let hx = (mesh.aabb_max[0] - mesh.aabb_min[0]).abs() * 0.5;
+                                        let hy = (mesh.aabb_max[1] - mesh.aabb_min[1]).abs() * 0.5;
+                                        let hz = (mesh.aabb_max[2] - mesh.aabb_min[2]).abs() * 0.5;
+                                        
+                                        // Avoid zero-thickness colliders
+                                        let hx = hx.max(0.01);
+                                        let hy = hy.max(0.01);
+                                        let hz = hz.max(0.01);
+                                        
+                                        let cx = mesh.aabb_min[0] + hx;
+                                        let cy = mesh.aabb_min[1] + hy;
+                                        let cz = mesh.aabb_min[2] + hz;
+                                        
+                                        let collider = rapier3d::prelude::ColliderBuilder::cuboid(hx, hy, hz)
+                                            .translation(rapier3d::math::Vector::new(cx, cy, cz))
+                                            .build();
+                                            
+                                        let handle = self.physics.collider_set.insert(collider);
+                                        self.world.add_component(
+                                            child_entity,
+                                            crate::ecs::components::ColliderComponent { handle },
+                                        );
+                                    }
+
+                                    self.world.add_component(
+                                        child_entity,
+                                        crate::ecs::RenderComponent {
+                                            visible: true,
+                                            mesh_index,
+                                            metallic,
+                                            roughness,
+                                            r,
+                                            g,
+                                            b,
+                                        },
+                                    );
+                                    
+                                    self.world.add_component(
+                                        child_entity,
+                                        crate::ecs::components::HierarchyComponent {
+                                            parent: Some(new_entity),
+                                            local_matrix: crate::math::mat4::Mat4::identity(),
+                                        },
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -966,6 +916,7 @@ impl Application {
                 self.pipeline = crate::renderer::vulkan::Pipeline::new(
                     &self.vulkan,
                     vk::Format::R16G16B16A16_SFLOAT,
+                    &self.asset_manager.vfs,
                 );
 
                 // Re-allocate descriptor set
@@ -1071,7 +1022,7 @@ impl Application {
 
                     self.update_post_process_descriptors();
 
-                    self.egui_backend.update_user_texture(
+                    self.ui_backend.update_user_texture(
                         &self.vulkan,
                         self.offscreen_texture_id,
                         self.sdr_target.color_view,
@@ -1113,7 +1064,7 @@ impl Application {
                             std::f32::consts::FRAC_PI_4,
                             aspect_ratio,
                             0.1,
-                            100.0,
+                            10000.0,
                         );
 
                         if let (Some(inv_proj), Some(inv_view)) =
@@ -1149,7 +1100,7 @@ impl Application {
                                 &self.physics.rigid_body_set,
                                 &self.physics.collider_set,
                                 &ray,
-                                100.0,
+                                10000.0,
                                 true,
                                 rapier3d::prelude::QueryFilter::default(),
                             ) {
@@ -1159,7 +1110,16 @@ impl Application {
                                 self.selected_entity = None;
                                 for (i, col) in dense_colliders.iter().enumerate() {
                                     if col.handle == handle {
-                                        self.selected_entity = Some(entities[i]);
+                                        let mut selected = entities[i];
+                                        let hierarchies = self.world.get_component_array::<crate::ecs::components::HierarchyComponent>();
+                                        while hierarchies.has(selected) {
+                                            if let Some(parent) = unsafe { hierarchies.get(selected) }.parent {
+                                                selected = parent;
+                                            } else {
+                                                break;
+                                            }
+                                        }
+                                        self.selected_entity = Some(selected);
                                         break;
                                     }
                                 }
@@ -1221,7 +1181,20 @@ impl Application {
                                         }
                                     }
                                 }
-                                self.selected_entity = best_entity;
+                                
+                                if let Some(mut selected) = best_entity {
+                                    let hierarchies = self.world.get_component_array::<crate::ecs::components::HierarchyComponent>();
+                                    while hierarchies.has(selected) {
+                                        if let Some(parent) = unsafe { hierarchies.get(selected) }.parent {
+                                            selected = parent;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    self.selected_entity = Some(selected);
+                                } else {
+                                    self.selected_entity = None;
+                                }
                             }
                         }
                     }
@@ -1235,12 +1208,12 @@ impl Application {
 
             // Save Scene on F5
             if self.input.is_key_pressed(win32::VK_F5) {
-                crate::ecs::serialization::save_scene(&self.world, "scene.json");
+                crate::ecs::serialization::save_scene(&self.world, &self.editor.registry, "scene.json");
             }
 
             // Load Scene on F9
             if self.input.is_key_pressed(win32::VK_F9) {
-                crate::ecs::serialization::load_scene(&mut self.world, "scene.json");
+                crate::ecs::serialization::load_scene(&mut self.world, &self.editor.registry, "scene.json");
             }
 
             // 1. Update Game State (ECS)
@@ -1351,10 +1324,11 @@ impl Application {
             for (i, hier) in hierarchies.as_slice().iter().enumerate() {
                 let entity = hierarchies.dense_entities_slice()[i];
                 if let Some(parent) = hier.parent {
+                    let parent_index = crate::ecs::types::get_entity_index(parent);
                     if let Some(parent_world) = self
                         .world_matrices
                         .iter()
-                        .find(|(e, _)| *e == parent)
+                        .find(|(e, _)| *e == parent_index)
                         .map(|(_, m)| *m)
                     {
                         if let Some(child_idx) =
@@ -1367,19 +1341,10 @@ impl Application {
                 }
             }
 
-            let full_output = self.egui_ctx.end_frame();
-            for (id, delta) in full_output.textures_delta.set {
-                self.egui_backend.update_texture(&self.vulkan, id, &delta);
-            }
-            for id in full_output.textures_delta.free {
-                self.egui_backend.free_texture(&self.vulkan, id);
-            }
-            let clipped_primitives = self
-                .egui_ctx
-                .tessellate(full_output.shapes, full_output.pixels_per_point);
+            self.ui_ctx.end_frame();
 
             // 2. Render Frame
-            self.render_frame(&clipped_primitives, full_output.pixels_per_point);
+            self.render_frame();
 
             // 3. Cleanup Frame Allocator
             self.memory.frame_arena().reset(false);
@@ -1394,11 +1359,7 @@ impl Application {
         // to prevent double-free crashes during application exit.
     }
 
-    fn render_frame(
-        &mut self,
-        clipped_primitives: &[egui::ClippedPrimitive],
-        pixels_per_point: f32,
-    ) {
+    fn render_frame(&mut self) {
         // Only draw if we successfully compiled shaders and uploaded vertices
         let _pipeline = match &self.pipeline {
             Some(p) => p,
@@ -1439,7 +1400,7 @@ impl Application {
                         std::f32::consts::FRAC_PI_4,
                         aspect_ratio,
                         0.1,
-                        100.0,
+                        10000.0,
                     );
 
                     view_proj = proj * view;
@@ -2010,7 +1971,8 @@ impl Application {
                                         world: world_matrix,
                                         metallic: render.metallic,
                                         roughness: render.roughness,
-                                        _padding: [0.0; 2],
+                                        padding: [0.0; 2],
+                                        color: [render.r, render.g, render.b, 1.0],
                                     };
                                 let constants_ptr = &push_constants as *const _ as *const u8;
                                 let constants_slice = std::slice::from_raw_parts(
@@ -2145,15 +2107,13 @@ impl Application {
                         .device
                         .cmd_begin_rendering(command_buffer, &ui_rendering_info);
 
-                    self.egui_backend.draw(
+                    self.ui_backend.draw(
                         &self.vulkan,
                         command_buffer,
-                        clipped_primitives,
-                        pixels_per_point,
-                        [
-                            self.swapchain.extent.width as f32 / pixels_per_point,
-                            self.swapchain.extent.height as f32 / pixels_per_point,
-                        ],
+                        self.swapchain.extent.width,
+                        self.swapchain.extent.height,
+                        &self.ui_ctx,
+                        &self.ui_font,
                     );
 
                     self.vulkan.device.cmd_end_rendering(command_buffer);
@@ -2279,7 +2239,7 @@ impl Drop for Application {
             if let Some(mut p) = self.pipeline.take() {
                 p.shutdown(&self.vulkan);
             }
-            self.egui_backend.shutdown(&self.vulkan);
+            self.ui_backend.shutdown(&self.vulkan);
 
             // 4. Descriptor Pools & Buffers
             if self.post_process_descriptor_pool != vk::DescriptorPool::null() {

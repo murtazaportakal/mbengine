@@ -46,95 +46,22 @@ impl ReflectComponent for TransformComponent {
     fn name() -> &'static str {
         "Transform"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
         let mut changed = false;
-        egui::Grid::new("transform_grid")
-            .num_columns(2)
-            .spacing([40.0, 4.0])
-            .striped(true)
-            .show(ui, |ui| {
-                ui.label("Position");
-                ui.horizontal(|ui| {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.position.x)
-                                .speed(0.1)
-                                .prefix("X: "),
-                        )
-                        .changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.position.y)
-                                .speed(0.1)
-                                .prefix("Y: "),
-                        )
-                        .changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.position.z)
-                                .speed(0.1)
-                                .prefix("Z: "),
-                        )
-                        .changed();
-                });
-                ui.end_row();
-
-                ui.label("Rotation");
-                ui.horizontal(|ui| {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.rotation.x)
-                                .speed(0.05)
-                                .prefix("X: "),
-                        )
-                        .changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.rotation.y)
-                                .speed(0.05)
-                                .prefix("Y: "),
-                        )
-                        .changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.rotation.z)
-                                .speed(0.05)
-                                .prefix("Z: "),
-                        )
-                        .changed();
-                });
-                ui.end_row();
-
-                ui.label("Scale");
-                ui.horizontal(|ui| {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.scale.x)
-                                .speed(0.1)
-                                .prefix("X: "),
-                        )
-                        .changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.scale.y)
-                                .speed(0.1)
-                                .prefix("Y: "),
-                        )
-                        .changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.scale.z)
-                                .speed(0.1)
-                                .prefix("Z: "),
-                        )
-                        .changed();
-                });
-                ui.end_row();
-            });
-
-        if changed {
-            self.update_matrix();
-        }
+        changed |= ui.drag_float("Position X", &mut self.position.x);
+        changed |= ui.drag_float("Position Y", &mut self.position.y);
+        changed |= ui.drag_float("Position Z", &mut self.position.z);
+        
+        changed |= ui.drag_float("Rotation X", &mut self.rotation.x);
+        changed |= ui.drag_float("Rotation Y", &mut self.rotation.y);
+        changed |= ui.drag_float("Rotation Z", &mut self.rotation.z);
+        
+        changed |= ui.drag_float("Scale X", &mut self.scale.x);
+        changed |= ui.drag_float("Scale Y", &mut self.scale.y);
+        changed |= ui.drag_float("Scale Z", &mut self.scale.z);
         changed
     }
 }
@@ -147,6 +74,9 @@ pub struct RenderComponent {
     pub mesh_index: usize,
     pub metallic: f32,
     pub roughness: f32,
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
 }
 
 impl Default for RenderComponent {
@@ -156,6 +86,9 @@ impl Default for RenderComponent {
             mesh_index: 0,
             metallic: 0.0,
             roughness: 0.5,
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
         }
     }
 }
@@ -164,29 +97,17 @@ impl ReflectComponent for RenderComponent {
     fn name() -> &'static str {
         "Render"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
         let mut changed = false;
-        egui::Grid::new("render_grid")
-            .num_columns(2)
-            .spacing([40.0, 4.0])
-            .striped(true)
-            .show(ui, |ui| {
-                ui.label("Visible");
-                changed |= ui.checkbox(&mut self.visible, "").changed();
-                ui.end_row();
-
-                ui.label("Metallic");
-                changed |= ui
-                    .add(egui::Slider::new(&mut self.metallic, 0.0..=1.0))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Roughness");
-                changed |= ui
-                    .add(egui::Slider::new(&mut self.roughness, 0.0..=1.0))
-                    .changed();
-                ui.end_row();
-            });
+        changed |= ui.checkbox("Visible", &mut self.visible);
+        changed |= ui.drag_float("Metallic", &mut self.metallic);
+        changed |= ui.drag_float("Roughness", &mut self.roughness);
+        changed |= ui.drag_float("Color R", &mut self.r);
+        changed |= ui.drag_float("Color G", &mut self.g);
+        changed |= ui.drag_float("Color B", &mut self.b);
         changed
     }
 }
@@ -216,31 +137,14 @@ impl ReflectComponent for CameraComponent {
     fn name() -> &'static str {
         "Camera"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
         let mut changed = false;
-        egui::Grid::new("camera_grid")
-            .num_columns(2)
-            .spacing([40.0, 4.0])
-            .striped(true)
-            .show(ui, |ui| {
-                ui.label("FOV");
-                changed |= ui
-                    .add(egui::Slider::new(&mut self.fov, 10.0..=120.0))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Near Plane");
-                changed |= ui
-                    .add(egui::DragValue::new(&mut self.near).speed(0.1))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Far Plane");
-                changed |= ui
-                    .add(egui::DragValue::new(&mut self.far).speed(1.0))
-                    .changed();
-                ui.end_row();
-            });
+        changed |= ui.drag_float("FOV", &mut self.fov);
+        changed |= ui.drag_float("Near", &mut self.near);
+        changed |= ui.drag_float("Far", &mut self.far);
         changed
     }
 }
@@ -279,29 +183,15 @@ impl ReflectComponent for PointLightComponent {
     fn name() -> &'static str {
         "Point Light"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
         let mut changed = false;
-        egui::Grid::new("pointlight_grid")
-            .num_columns(2)
-            .spacing([40.0, 4.0])
-            .striped(true)
-            .show(ui, |ui| {
-                ui.label("Color");
-                let mut color_arr = [self.color.x, self.color.y, self.color.z];
-                if ui.color_edit_button_rgb(&mut color_arr).changed() {
-                    self.color.x = color_arr[0];
-                    self.color.y = color_arr[1];
-                    self.color.z = color_arr[2];
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Intensity");
-                changed |= ui
-                    .add(egui::Slider::new(&mut self.intensity, 0.0..=100.0))
-                    .changed();
-                ui.end_row();
-            });
+        changed |= ui.drag_float("Color R", &mut self.color.x);
+        changed |= ui.drag_float("Color G", &mut self.color.y);
+        changed |= ui.drag_float("Color B", &mut self.color.z);
+        changed |= ui.drag_float("Intensity", &mut self.intensity);
         changed
     }
 }
@@ -316,11 +206,17 @@ impl ReflectComponent for HierarchyComponent {
     fn name() -> &'static str {
         "Hierarchy"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
         if let Some(parent) = self.parent {
-            ui.label(format!("Parent Entity: {}", parent));
+            use core::fmt::Write;
+            let mut label = crate::containers::FixedString::<128>::new();
+            let _ = write!(label, "Parent: {}", parent);
+            ui.label(&label);
         } else {
-            ui.label("Parent Entity: None");
+            ui.label("Parent: None");
         }
         false
     }
@@ -335,9 +231,26 @@ impl ReflectComponent for RigidBodyComponent {
     fn name() -> &'static str {
         "Rigid Body"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
-        ui.label(format!("Handle Index: {}", self.handle.into_raw_parts().0));
-        false
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, physics: &mut crate::physics::PhysicsSystem) {
+        let rb = rapier3d::prelude::RigidBodyBuilder::dynamic().build();
+        let handle = physics.rigid_body_set.insert(rb);
+        unsafe { world.add_component(entity, Self { handle }); }
+    }
+    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, physics: &mut crate::physics::PhysicsSystem) -> bool {
+        let mut changed = false;
+        if let Some(rb) = physics.rigid_body_set.get_mut(self.handle) {
+            let mut lin_damp = rb.linear_damping();
+            if ui.drag_float("Linear Damping", &mut lin_damp) {
+                rb.set_linear_damping(lin_damp);
+                changed = true;
+            }
+            let mut ang_damp = rb.angular_damping();
+            if ui.drag_float("Angular Damping", &mut ang_damp) {
+                rb.set_angular_damping(ang_damp);
+                changed = true;
+            }
+        }
+        changed
     }
 }
 
@@ -350,9 +263,32 @@ impl ReflectComponent for ColliderComponent {
     fn name() -> &'static str {
         "Collider"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
-        ui.label(format!("Handle Index: {}", self.handle.into_raw_parts().0));
-        false
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, physics: &mut crate::physics::PhysicsSystem) {
+        let collider = rapier3d::prelude::ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
+        let arrays = world.get_component_array::<RigidBodyComponent>();
+        let handle = if arrays.has(entity) {
+            let rb_comp = unsafe { arrays.get(entity) };
+            physics.collider_set.insert_with_parent(collider, rb_comp.handle, &mut physics.rigid_body_set)
+        } else {
+            physics.collider_set.insert(collider)
+        };
+        unsafe { world.add_component(entity, Self { handle }); }
+    }
+    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, physics: &mut crate::physics::PhysicsSystem) -> bool {
+        let mut changed = false;
+        if let Some(col) = physics.collider_set.get_mut(self.handle) {
+            let mut friction = col.friction();
+            if ui.drag_float("Friction", &mut friction) {
+                col.set_friction(friction);
+                changed = true;
+            }
+            let mut restitution = col.restitution();
+            if ui.drag_float("Restitution", &mut restitution) {
+                col.set_restitution(restitution);
+                changed = true;
+            }
+        }
+        changed
     }
 }
 
@@ -369,7 +305,10 @@ impl ReflectComponent for AudioListenerComponent {
     fn name() -> &'static str {
         "Audio Listener"
     }
-    fn draw_inspector(&mut self, _ui: &mut egui::Ui) -> bool {
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
         false
     }
 }
@@ -401,17 +340,11 @@ impl ReflectComponent for AudioEmitterComponent {
     fn name() -> &'static str {
         "Audio Emitter"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut changed = false;
-        changed |= ui.checkbox(&mut self.is_playing, "Playing").changed();
-        changed |= ui.checkbox(&mut self.loop_audio, "Loop").changed();
-        changed |= ui
-            .add(egui::Slider::new(&mut self.volume, 0.0..=2.0).text("Volume"))
-            .changed();
-        changed |= ui
-            .add(egui::Slider::new(&mut self.max_distance, 1.0..=500.0).text("Max Distance"))
-            .changed();
-        changed
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+        false
     }
 }
 
@@ -437,13 +370,10 @@ impl ReflectComponent for SkeletonComponent {
     fn name() -> &'static str {
         "Skeleton"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
-        ui.label(format!("Skeleton: {}", self.skeleton_name.as_str()));
-        if let Some(idx) = self.skinning_instance_index {
-            ui.label(format!("Skinning Instance: {}", idx));
-        } else {
-            ui.label("Skinning Instance: Not bound");
-        }
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
         false
     }
 }
@@ -530,30 +460,11 @@ impl ReflectComponent for AnimatorComponent {
     fn name() -> &'static str {
         "Animator"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut changed = false;
-        
-        match &self.state {
-            AnimationState::Clip { clip_name } => {
-                ui.label(format!("State: Clip ({})", clip_name.as_str()));
-            }
-            AnimationState::Blend1D { clip_a, clip_b, weight } => {
-                ui.label(format!("State: Blend1D ({} <-> {})", clip_a.as_str(), clip_b.as_str()));
-                ui.label(format!("Weight: {:.2}", weight));
-            }
-        }
-        
-        if self.target_state.is_some() {
-            ui.label(format!("Transitioning... ({:.2}/{:.2}s)", self.crossfade_current, self.crossfade_duration));
-        }
-
-        changed |= ui.checkbox(&mut self.is_playing, "Playing").changed();
-        changed |= ui.checkbox(&mut self.is_looping, "Looping").changed();
-        changed |= ui
-            .add(egui::Slider::new(&mut self.speed, 0.0..=5.0).text("Speed"))
-            .changed();
-        ui.label(format!("Time: {:.2}s", self.current_time));
-        changed
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+        false
     }
 }
 
@@ -579,27 +490,46 @@ impl ReflectComponent for ScriptBehaviorComponent {
     fn name() -> &'static str {
         "Script Behavior"
     }
-    fn draw_inspector(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut changed = false;
-        
-        let mut script_name = self.script_name.as_str().to_string();
-        ui.horizontal(|ui| {
-            ui.label("Script Name:");
-            if ui.text_edit_singleline(&mut script_name).changed() {
-                self.script_name.clear();
-                self.script_name.push_str(&script_name);
-                self.initialized = false;
-                changed = true;
-            }
-        });
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+        false
+    }
+}
 
-        ui.label(format!("Initialized: {}", self.initialized));
-        
-        if ui.button("Reload").clicked() {
-            self.initialized = false;
-            changed = true;
+/// Defines a deformable cloth or soft body.
+#[derive(Clone, Debug)]
+pub struct SoftBodyComponent {
+    /// Grid dimensions (width, height) in vertices
+    pub grid_size: (u32, u32),
+    pub stiffness: f32,
+    pub mass: f32,
+    pub damping: f32,
+    /// Index into the application's cloth instances array
+    pub cloth_instance_index: Option<usize>,
+}
+
+impl Default for SoftBodyComponent {
+    fn default() -> Self {
+        Self {
+            grid_size: (10, 10),
+            stiffness: 1000.0,
+            mass: 1.0,
+            damping: 0.98,
+            cloth_instance_index: None,
         }
+    }
+}
 
-        changed
+impl ReflectComponent for SoftBodyComponent {
+    fn name() -> &'static str {
+        "Soft Body"
+    }
+    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+        false
     }
 }

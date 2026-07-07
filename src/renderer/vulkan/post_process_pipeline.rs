@@ -13,11 +13,11 @@ pub struct PostProcessPipeline {
 }
 
 impl PostProcessPipeline {
-    pub fn new(vulkan: &VulkanDevice, surface_format: vk::Format) -> Option<Self> {
-        let vert_code = std::fs::read("shaders/post_process_vert.spv").ok()?;
-        let tonemap_frag_code = std::fs::read("shaders/post_process_frag.spv").ok()?;
-        let downsample_frag_code = std::fs::read("shaders/bloom_downsample_frag.spv").ok()?;
-        let upsample_frag_code = std::fs::read("shaders/bloom_upsample_frag.spv").ok()?;
+    pub fn new(vulkan: &VulkanDevice, surface_format: vk::Format, vfs: &crate::vfs::Vfs) -> Option<Self> {
+        let vert_code = vfs.read_bytes("shaders/post_process_vert.spv").ok()?;
+        let tonemap_frag_code = vfs.read_bytes("shaders/post_process_frag.spv").ok()?;
+        let downsample_frag_code = vfs.read_bytes("shaders/bloom_downsample_frag.spv").ok()?;
+        let upsample_frag_code = vfs.read_bytes("shaders/bloom_upsample_frag.spv").ok()?;
 
         let vert_module =
             crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &vert_code)?;

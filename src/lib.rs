@@ -12,3 +12,4 @@ pub mod renderer;
 pub mod utils;
 pub mod vfs;
 pub mod scripting;
+pub mod ui;

@@ -9,6 +9,7 @@ pub mod system;
 pub mod types;
 pub mod world;
 pub mod scripting_system;
+pub mod soft_body_system;
 
 pub use component_array::*;
 pub use components::*;

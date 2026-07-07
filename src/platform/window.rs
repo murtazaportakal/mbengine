@@ -116,11 +116,7 @@ impl Window {
                 _ => {}
             }
 
-            crate::app::egui_win32::translate_win32_to_egui(
-                &msg,
-                &mut input.egui_input,
-                input.ui_scale,
-            );
+
 
             unsafe {
                 win32::TranslateMessage(&msg);

@@ -136,8 +136,8 @@ pub struct ComputeSkinningPipeline {
 
 impl ComputeSkinningPipeline {
     /// Create the skinning compute pipeline.
-    pub fn new(vulkan: &VulkanDevice) -> Option<Self> {
-        let comp_code = std::fs::read("shaders/skinning.spv").ok()?;
+    pub fn new(vulkan: &VulkanDevice, vfs: &crate::vfs::Vfs) -> Option<Self> {
+        let comp_code = vfs.read_bytes("shaders/skinning.spv").ok()?;
         let comp_module =
             crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &comp_code)?;
 

@@ -1,6 +1,4 @@
-use rodio::{Decoder, OutputStream, OutputStreamHandle, SpatialSink};
-use std::fs::File;
-use std::io::BufReader;
+use rodio::{OutputStream, OutputStreamHandle, SpatialSink};
 
 use crate::ecs::types::ComponentMask;
 use crate::ecs::{System, World};
@@ -36,15 +34,17 @@ pub struct AudioSystem {
     /// `INITIAL_SINK_CAPACITY` to avoid hot-path heap allocations.
     sinks: Vec<Option<SpatialSink>>,
     stream_handle: Option<OutputStreamHandle>,
+    vfs: crate::vfs::Vfs,
 }
 
 impl AudioSystem {
-    pub fn new(subsystem: Option<&AudioSubsystem>) -> Self {
+    pub fn new(subsystem: Option<&AudioSubsystem>, vfs: &crate::vfs::Vfs) -> Self {
         let mut sinks = Vec::with_capacity(INITIAL_SINK_CAPACITY);
         sinks.resize_with(INITIAL_SINK_CAPACITY, || None);
         Self {
             sinks,
             stream_handle: subsystem.map(|s| s.handle().clone()),
+            vfs: vfs.clone(),
         }
     }
 
@@ -120,10 +120,11 @@ impl System for AudioSystem {
                             SpatialSink::try_new(stream_handle, emitter_pos, left_ear, right_ear)
                                 .unwrap();
 
-                        // Load and play the audio file
+                        // Load and play the audio file via VFS
                         let path_str = emitter.asset_path.as_str();
-                        if let Ok(file) = File::open(path_str) {
-                            if let Ok(source) = Decoder::new(BufReader::new(file)) {
+                        if let Ok(bytes) = self.vfs.read_bytes(path_str) {
+                            let cursor = std::io::Cursor::new(bytes);
+                            if let Ok(source) = rodio::Decoder::new(cursor) {
                                 if emitter.loop_audio {
                                     s.append(rodio::Source::repeat_infinite(source));
                                 } else {

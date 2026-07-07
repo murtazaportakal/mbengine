@@ -11,7 +11,8 @@ fn main() {
     println!("cargo:rerun-if-changed=shaders/bloom_downsample.frag");
     println!("cargo:rerun-if-changed=shaders/bloom_upsample.frag");
     println!("cargo:rerun-if-changed=shaders/skinning.comp");
-
+    println!("cargo:rerun-if-changed=shaders/cloth_integrate.comp");
+    println!("cargo:rerun-if-changed=shaders/cloth_solve.comp");
     // First try local glslangValidator
     let local_compiler = PathBuf::from("glslang")
         .join("bin")
@@ -148,5 +149,29 @@ fn main() {
 
     if !skin_status.success() {
         panic!("Failed to compile skinning.comp");
+    }
+
+    // Compile Cloth Integrate Compute Shader
+    let mut cloth_int_args = args.clone();
+    cloth_int_args.extend(vec!["shaders/cloth_integrate.comp", "-o", "shaders/cloth_integrate.spv"]);
+    let cloth_int_status = Command::new(&compiler)
+        .args(&cloth_int_args)
+        .status()
+        .expect("Failed to execute shader compiler for cloth_integrate.comp");
+
+    if !cloth_int_status.success() {
+        panic!("Failed to compile cloth_integrate.comp");
+    }
+
+    // Compile Cloth Solve Compute Shader
+    let mut cloth_solve_args = args.clone();
+    cloth_solve_args.extend(vec!["shaders/cloth_solve.comp", "-o", "shaders/cloth_solve.spv"]);
+    let cloth_solve_status = Command::new(&compiler)
+        .args(&cloth_solve_args)
+        .status()
+        .expect("Failed to execute shader compiler for cloth_solve.comp");
+
+    if !cloth_solve_status.success() {
+        panic!("Failed to compile cloth_solve.comp");
     }
 }
