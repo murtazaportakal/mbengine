@@ -58,6 +58,7 @@ pub struct Application {
     /// Indexed by mesh index. Grown once when new meshes are loaded,
     /// never during the frame loop.
     pub compute_descriptor_sets: Vec<Option<vk::DescriptorSet>>,
+    pub material_descriptor_sets: Vec<Option<vk::DescriptorSet>>,
     pub skinning_pipeline:
         Option<crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline>,
     pub skinning_descriptor_pool: vk::DescriptorPool,
@@ -114,6 +115,9 @@ impl Application {
         let mut asset_manager = crate::asset_manager::AssetManager::new();
         asset_manager.load_checkerboard(&vulkan, "default");
         asset_manager.load_checkerboard(&vulkan, "fallback");
+        // Load a procedural studio environment map for gorgeous reflections
+        asset_manager.load_procedural_env(&vulkan, "env_default");
+        asset_manager.load_solid_color(&vulkan, "shadow_default", 255, 255, 255, 255); // White shadow map (no shadows)
         let post_process =
             crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::R8G8B8A8_UNORM, &asset_manager.vfs)?;
 
@@ -223,20 +227,20 @@ impl Application {
             let tex = asset_manager
                 .get_texture("default")
                 .or_else(|| asset_manager.get_texture("fallback"));
-            if let Some(tex) = tex {
+            if let Some(_tex) = tex {
                 // 1. Create Descriptor Pool
                 let pool_sizes = [
                     vk::DescriptorPoolSize::default()
                         .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                        .descriptor_count(10),
+                        .descriptor_count(100),
                     vk::DescriptorPoolSize::default()
                         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .descriptor_count(10),
+                        .descriptor_count(1000),
                 ];
 
                 let pool_info = vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
-                    .max_sets(1);
+                    .max_sets(1000);
 
                 descriptor_pool = unsafe {
                     vulkan
@@ -298,37 +302,37 @@ impl Application {
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .buffer_info(std::slice::from_ref(&ubo_info));
 
-                let image_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(tex.view)
-                    .sampler(tex.sampler);
+                let env_tex = asset_manager.get_texture("env_default").unwrap();
+                let shadow_tex = asset_manager.get_texture("shadow_default").unwrap();
 
-                let write_desc_sampler = vk::WriteDescriptorSet::default()
+                let env_image_info = vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(env_tex.view)
+                    .sampler(env_tex.sampler);
+
+                let shadow_image_info = vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(shadow_tex.view)
+                    .sampler(shadow_tex.sampler);
+
+                let write_desc_env = vk::WriteDescriptorSet::default()
                     .dst_set(descriptor_set)
                     .dst_binding(1)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&image_info));
+                    .image_info(std::slice::from_ref(&env_image_info));
 
-                let write_desc_env = vk::WriteDescriptorSet::default()
+                let write_desc_shadow = vk::WriteDescriptorSet::default()
                     .dst_set(descriptor_set)
                     .dst_binding(2)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&image_info));
-
-                let write_desc_shadow = vk::WriteDescriptorSet::default()
-                    .dst_set(descriptor_set)
-                    .dst_binding(3)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&image_info));
+                    .image_info(std::slice::from_ref(&shadow_image_info));
 
                 unsafe {
                     vulkan.device.update_descriptor_sets(
                         &[
                             write_desc_ubo,
-                            write_desc_sampler,
                             write_desc_env,
                             write_desc_shadow,
                         ],
@@ -409,9 +413,9 @@ impl Application {
             world.add_component(
                 light_entity,
                 LightComponent {
-                    // Pointing down and to the left/forward
-                    direction: Vec3::new(-1.0, -1.0, 1.0).normalize(),
-                    color: Vec3::new(1.0, 1.0, 1.0),
+                    // Pointing down and towards the front-right of the car
+                    direction: Vec3::new(0.5, -1.0, -0.5).normalize(),
+                    color: Vec3::new(3.0, 3.0, 3.0),
                 },
             );
         }
@@ -461,10 +465,11 @@ impl Application {
             bloom_threshold: 1.0,
             resource_tracker: crate::renderer::vulkan::render_graph::ResourceTracker::new(),
             editor: crate::app::editor::Editor::new(),
-            hot_reloader: crate::app::hot_reload::HotReloader::new("target/debug/game.dll"),
+            hot_reloader: None,
             compute_pipeline,
             compute_descriptor_pool,
             compute_descriptor_sets: Vec::new(),
+            material_descriptor_sets: Vec::new(),
             skinning_pipeline,
             skinning_descriptor_pool,
             skinning_instances: Vec::new(),
@@ -612,7 +617,7 @@ impl Application {
 
 
 
-            self.ui_ctx.begin_frame(crate::math::vec::Vec2::new(self.input.mouse_x as f32, self.input.mouse_y as f32), self.input.keys[0x01]); // 0x01 is VK_LBUTTON
+            self.ui_ctx.begin_frame(crate::math::vec::Vec2::new(self.input.mouse_x as f32, self.input.mouse_y as f32), self.input.keys[0x01], self.input.mouse_scroll_y);
 
             if self.is_playing {
                 if let Some(reloader) = &mut self.hot_reloader {
@@ -952,38 +957,51 @@ impl Application {
                             .asset_manager
                             .get_texture("default")
                             .or_else(|| self.asset_manager.get_texture("fallback"));
-                        if let Some(tex) = tex {
-                            let image_info = vk::DescriptorImageInfo::default()
-                                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                .image_view(tex.view)
-                                .sampler(tex.sampler);
+                        if let Some(_tex) = tex {
+                        let env_tex = self.asset_manager.get_texture("env_default").unwrap();
+                        let shadow_tex = self.asset_manager.get_texture("shadow_default").unwrap();
 
-                            let writes = [
-                                vk::WriteDescriptorSet::default()
-                                    .dst_set(self.descriptor_set)
-                                    .dst_binding(0)
-                                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                                    .buffer_info(std::slice::from_ref(&ubo_info)),
-                                vk::WriteDescriptorSet::default()
-                                    .dst_set(self.descriptor_set)
-                                    .dst_binding(1)
-                                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                    .image_info(std::slice::from_ref(&image_info)),
-                                vk::WriteDescriptorSet::default()
-                                    .dst_set(self.descriptor_set)
-                                    .dst_binding(2)
-                                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                    .image_info(std::slice::from_ref(&image_info)),
-                                vk::WriteDescriptorSet::default()
-                                    .dst_set(self.descriptor_set)
-                                    .dst_binding(3)
-                                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                    .image_info(std::slice::from_ref(&image_info)),
-                            ];
-                            unsafe { self.vulkan.device.update_descriptor_sets(&writes, &[]) };
-                        }
+                        let env_image_info = vk::DescriptorImageInfo::default()
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_view(env_tex.view)
+                            .sampler(env_tex.sampler);
+
+                        let shadow_image_info = vk::DescriptorImageInfo::default()
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_view(shadow_tex.view)
+                            .sampler(shadow_tex.sampler);
+
+                        let writes = [
+                            vk::WriteDescriptorSet::default()
+                                .dst_set(self.descriptor_set)
+                                .dst_binding(0)
+                                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                                .buffer_info(std::slice::from_ref(&ubo_info)),
+                            vk::WriteDescriptorSet::default()
+                                .dst_set(self.descriptor_set)
+                                .dst_binding(1)
+                                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                                .image_info(std::slice::from_ref(&env_image_info)),
+                            vk::WriteDescriptorSet::default()
+                                .dst_set(self.descriptor_set)
+                                .dst_binding(2)
+                                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                                .image_info(std::slice::from_ref(&shadow_image_info)),
+                        ];
+                        unsafe { self.vulkan.device.update_descriptor_sets(&writes, &[]) };
                     }
                 }
+                
+                // Reset material descriptor sets since the pool was reset
+                for set in self.material_descriptor_sets.iter_mut() {
+                    *set = None;
+                }
+            }
+        }
+
+            // Ensure material descriptor sets vector has enough capacity
+            if self.material_descriptor_sets.len() < self.asset_manager.meshes.len() {
+                self.material_descriptor_sets.resize(self.asset_manager.meshes.len(), None);
             }
 
             if let Some((w, h)) = new_viewport_size {
@@ -1829,7 +1847,7 @@ impl Application {
         let clear_values = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.1, 0.1, 0.1, 1.0],
+                    float32: [0.05, 0.05, 0.05, 1.0], // Dark studio grey background
                 },
             },
             vk::ClearValue {
@@ -1991,6 +2009,47 @@ impl Application {
                                 );
 
                                 let mesh = self.asset_manager.get_mesh(render.mesh_index).unwrap();
+                                
+                                if self.material_descriptor_sets[render.mesh_index].is_none() {
+                                    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                                        .descriptor_pool(self.descriptor_pool)
+                                        .set_layouts(std::slice::from_ref(&self.pipeline.as_ref().unwrap().material_descriptor_set_layout));
+                                    
+                                    if let Ok(sets) = self.vulkan.device.allocate_descriptor_sets(&alloc_info) {
+                                        let set = sets[0];
+                                        self.material_descriptor_sets[render.mesh_index] = Some(set);
+                                        
+                                        let tex = if let Some(tex_name) = &mesh.diffuse_texture {
+                                            self.asset_manager.get_texture(tex_name)
+                                        } else { None };
+                                        
+                                        let tex = tex.or_else(|| self.asset_manager.get_texture("default")).or_else(|| self.asset_manager.get_texture("fallback")).unwrap();
+                                        
+                                        let image_info = vk::DescriptorImageInfo::default()
+                                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                            .image_view(tex.view)
+                                            .sampler(tex.sampler);
+                                            
+                                        let writes = [vk::WriteDescriptorSet::default()
+                                            .dst_set(set)
+                                            .dst_binding(0)
+                                            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                                            .image_info(std::slice::from_ref(&image_info))];
+                                            
+                                        self.vulkan.device.update_descriptor_sets(&writes, &[]);
+                                    }
+                                }
+                                
+                                if let Some(mat_set) = self.material_descriptor_sets[render.mesh_index] {
+                                    self.vulkan.device.cmd_bind_descriptor_sets(
+                                        command_buffer,
+                                        vk::PipelineBindPoint::GRAPHICS,
+                                        self.pipeline.as_ref().unwrap().layout,
+                                        1, // first_set
+                                        std::slice::from_ref(&mat_set),
+                                        &[],
+                                    );
+                                }
 
                                 let mut vertex_buffer = mesh.vertex_buffer.handle;
                                 let skeletons = self.world.get_component_array::<crate::ecs::components::SkeletonComponent>();

@@ -15,7 +15,7 @@ pub enum AssetEvent {
 
 pub struct AssetManager {
     textures: HashMap<String, Texture>,
-    meshes: Vec<Mesh>,
+    pub meshes: Vec<Mesh>,
     model_map: HashMap<String, Vec<usize>>,
 
     // File to Name reverse mappings to know which asset changed
@@ -116,6 +116,24 @@ impl AssetManager {
         self.textures.get(name)
     }
 
+    pub fn load_solid_color(&mut self, vulkan: &VulkanDevice, name: &str, r: u8, g: u8, b: u8, a: u8) -> Option<&Texture> {
+        if !self.textures.contains_key(name) {
+            if let Some(tex) = Texture::new_solid_color(vulkan, r, g, b, a) {
+                self.textures.insert(name.to_string(), tex);
+            }
+        }
+        self.textures.get(name)
+    }
+
+    pub fn load_procedural_env(&mut self, vulkan: &VulkanDevice, name: &str) -> Option<&Texture> {
+        if !self.textures.contains_key(name) {
+            if let Some(tex) = Texture::new_procedural_env(vulkan) {
+                self.textures.insert(name.to_string(), tex);
+            }
+        }
+        self.textures.get(name)
+    }
+
     /// Provides a fallback checkerboard texture if requested
     pub fn load_checkerboard(&mut self, vulkan: &VulkanDevice, name: &str) -> Option<&Texture> {
         if !self.textures.contains_key(name) {
@@ -132,12 +150,21 @@ impl AssetManager {
         self.textures.get(name)
     }
 
-    /// Loads an OBJ file (potentially with multiple sub-meshes). Returns a list of indices into the internal mesh array.
     pub fn load_model(&mut self, vulkan: &VulkanDevice, path: &str) -> Option<&[usize]> {
         if !self.model_map.contains_key(path) {
             if let Some(loaded_meshes) = Mesh::load_models(path, vulkan) {
                 let mut indices = Vec::with_capacity(loaded_meshes.len());
                 for mesh in loaded_meshes {
+                    if let Some(tex_name) = &mesh.diffuse_texture {
+                        let tex_path = if std::path::Path::new(tex_name).is_absolute() {
+                            tex_name.clone()
+                        } else if let Some(parent) = std::path::Path::new(path).parent() {
+                            parent.join(tex_name).to_string_lossy().to_string()
+                        } else {
+                            tex_name.clone()
+                        };
+                        self.load_texture(vulkan, tex_name, &tex_path);
+                    }
                     indices.push(self.meshes.len());
                     self.meshes.push(mesh);
                 }

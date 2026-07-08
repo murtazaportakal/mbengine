@@ -75,6 +75,50 @@ impl ComponentRegistry {
                 }
                 expanded.set(is_expanded);
 
+                if changed && TypeId::of::<T>() == TypeId::of::<crate::ecs::components::RenderComponent>() {
+                    let mut render_copy = None;
+                    {
+                        let renders = world.get_component_array::<crate::ecs::components::RenderComponent>();
+                        if renders.has(entity) {
+                            render_copy = Some(unsafe { *renders.get(entity) });
+                        }
+                    }
+                    if let Some(r_copy) = render_copy {
+                        let hierarchies = world.get_component_array::<crate::ecs::components::HierarchyComponent>();
+                        let mut target_parent = None;
+                        if hierarchies.has(entity) {
+                            let hier = unsafe { hierarchies.get(entity) };
+                            // If it has a parent, use that parent (so we update all siblings).
+                            // If it doesn't have a parent, it might be the parent itself! So use `entity`.
+                            target_parent = Some(hier.parent.unwrap_or(entity));
+                        }
+                        
+                        if let Some(parent) = target_parent {
+                            let mut related_to_update = Vec::new();
+                            let dense_hier = hierarchies.as_slice();
+                            let entities = hierarchies.dense_entities_slice();
+                            for (i, hier) in dense_hier.iter().enumerate() {
+                                if hier.parent == Some(parent) {
+                                    related_to_update.push(entities[i]);
+                                }
+                            }
+                            
+                            let renders = world.get_component_array_mut::<crate::ecs::components::RenderComponent>();
+                            for child in related_to_update {
+                                if child != entity && renders.has(child) {
+                                    let child_r = unsafe { renders.get_mut(child) };
+                                    child_r.visible = r_copy.visible;
+                                    child_r.metallic = r_copy.metallic;
+                                    child_r.roughness = r_copy.roughness;
+                                    child_r.r = r_copy.r;
+                                    child_r.g = r_copy.g;
+                                    child_r.b = r_copy.b;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if changed && TypeId::of::<T>() == TypeId::of::<crate::ecs::TransformComponent>() {
                     let rb_components =
                         world.get_component_array::<crate::ecs::components::RigidBodyComponent>();

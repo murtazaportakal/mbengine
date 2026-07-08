@@ -8,6 +8,7 @@ pub struct Input {
     pub mouse_y: i32,
     pub mouse_dx: i32,
     pub mouse_dy: i32,
+    pub mouse_scroll_y: f32,
     pub first_mouse: bool,
     pub ui_scale: f32,
 }
@@ -27,6 +28,7 @@ impl Input {
             mouse_y: 0,
             mouse_dx: 0,
             mouse_dy: 0,
+            mouse_scroll_y: 0.0,
             first_mouse: true,
             ui_scale: 1.0,
         }
@@ -37,6 +39,7 @@ impl Input {
         self.keys_prev.copy_from_slice(&self.keys);
         self.mouse_dx = 0;
         self.mouse_dy = 0;
+        self.mouse_scroll_y = 0.0;
     }
 
     /// Is the key currently held down?

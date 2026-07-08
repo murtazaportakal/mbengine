@@ -113,6 +113,10 @@ impl Window {
                 win32::WM_RBUTTONUP => input.keys[win32::VK_RBUTTON] = false,
                 win32::WM_MBUTTONDOWN => input.keys[win32::VK_MBUTTON] = true,
                 win32::WM_MBUTTONUP => input.keys[win32::VK_MBUTTON] = false,
+                win32::WM_MOUSEWHEEL => {
+                    let delta = (msg.wParam >> 16) as i16;
+                    input.mouse_scroll_y += (delta as f32) / 120.0;
+                }
                 _ => {}
             }
 

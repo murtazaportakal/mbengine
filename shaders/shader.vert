@@ -16,7 +16,7 @@ struct PointLight {
     vec4 color;
 };
 
-layout(binding = 0) uniform GlobalUbo {
+layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 viewProj;
     mat4 lightSpaceMatrix;
     vec4 cameraPos;

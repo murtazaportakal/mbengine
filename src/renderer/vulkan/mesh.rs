@@ -28,6 +28,7 @@ pub struct Mesh {
     pub default_color: [f32; 3],
     pub metallic: f32,
     pub roughness: f32,
+    pub diffuse_texture: Option<String>,
 }
 
 impl Mesh {
@@ -41,37 +42,96 @@ impl Mesh {
         };
 
         let (models, materials_result) = tobj::load_obj(path, &options).ok()?;
-        let materials = materials_result.unwrap_or_default();
+        let materials = match materials_result {
+            Ok(m) => m,
+            Err(e) => {
+                crate::log_info!("Failed to load MTL file for {}: {:?}", path, e);
+                Vec::new()
+            }
+        };
 
         let mut loaded_meshes = Vec::new();
 
         for model in models {
             let mesh = &model.mesh;
             let mut default_color = [1.0, 1.0, 1.0];
-            let mut metallic = 0.2;
-            let mut roughness = 0.8;
+            let mut metallic = 0.0;
+            let mut roughness = 0.3;
+            let mut diffuse_texture = None;
 
             if let Some(mat_id) = mesh.material_id {
                 if let Some(mat) = materials.get(mat_id) {
                     if let Some(diffuse) = mat.diffuse {
                         default_color = diffuse;
                     }
+                    if let Some(tex) = &mat.diffuse_texture {
+                        if !tex.is_empty() {
+                            diffuse_texture = Some(tex.clone());
+                        }
+                    }
                     if let Some(shininess) = mat.shininess {
                         if shininess > 0.0 {
                             roughness = (2.0 / (shininess + 2.0)).sqrt();
                         }
-                        // For OBJ, standard fallback for glossy is 0.2 metallic
-                        // If it's pure white/grey, maybe more metallic. We'll use 0.5.
-                        if shininess > 50.0 {
-                            metallic = 0.8;
-                        } else {
-                            metallic = 0.2;
+                    }
+                    if let Some(pr) = mat.unknown_param.get("Pr") {
+                        if let Ok(val) = pr.parse::<f32>() {
+                            roughness = val;
+                        }
+                    }
+                    if let Some(pm) = mat.unknown_param.get("Pm") {
+                        if let Ok(val) = pm.parse::<f32>() {
+                            metallic = val;
                         }
                     }
                 }
             }
 
             let mut vertices = Vec::new();
+            
+            let mut calculated_normals = Vec::new();
+            if mesh.normals.is_empty() {
+                calculated_normals.resize(mesh.positions.len(), 0.0_f32);
+                for i in (0..mesh.indices.len()).step_by(3) {
+                    let i0 = mesh.indices[i] as usize;
+                    let i1 = mesh.indices[i + 1] as usize;
+                    let i2 = mesh.indices[i + 2] as usize;
+                    
+                    let v0 = [mesh.positions[i0 * 3], mesh.positions[i0 * 3 + 1], mesh.positions[i0 * 3 + 2]];
+                    let v1 = [mesh.positions[i1 * 3], mesh.positions[i1 * 3 + 1], mesh.positions[i1 * 3 + 2]];
+                    let v2 = [mesh.positions[i2 * 3], mesh.positions[i2 * 3 + 1], mesh.positions[i2 * 3 + 2]];
+                    
+                    let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+                    let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+                    
+                    let cross = [
+                        e1[1] * e2[2] - e1[2] * e2[1],
+                        e1[2] * e2[0] - e1[0] * e2[2],
+                        e1[0] * e2[1] - e1[1] * e2[0],
+                    ];
+                    
+                    for &idx in &[i0, i1, i2] {
+                        calculated_normals[idx * 3] += cross[0];
+                        calculated_normals[idx * 3 + 1] += cross[1];
+                        calculated_normals[idx * 3 + 2] += cross[2];
+                    }
+                }
+                for i in (0..calculated_normals.len()).step_by(3) {
+                    let n = &mut calculated_normals[i..i+3];
+                    let len = (n[0]*n[0] + n[1]*n[1] + n[2]*n[2]).sqrt();
+                    if len > 0.0 {
+                        n[0] /= len; n[1] /= len; n[2] /= len;
+                    } else {
+                        n[1] = 1.0;
+                    }
+                }
+            }
+
+            let normals_slice = if !mesh.normals.is_empty() {
+                &mesh.normals
+            } else {
+                &calculated_normals
+            };
 
             let num_vertices = mesh.positions.len() / 3;
             for i in 0..num_vertices {
@@ -81,15 +141,11 @@ impl Mesh {
                     mesh.positions[i * 3 + 2],
                 ];
 
-                let normal = if !mesh.normals.is_empty() {
-                    [
-                        mesh.normals[i * 3],
-                        mesh.normals[i * 3 + 1],
-                        mesh.normals[i * 3 + 2],
-                    ]
-                } else {
-                    [0.0, 1.0, 0.0]
-                };
+                let normal = [
+                    normals_slice[i * 3],
+                    normals_slice[i * 3 + 1],
+                    normals_slice[i * 3 + 2],
+                ];
 
                 let uv = if !mesh.texcoords.is_empty() {
                     [mesh.texcoords[i * 2], mesh.texcoords[i * 2 + 1]]
@@ -232,6 +288,7 @@ impl Mesh {
                 default_color,
                 metallic,
                 roughness,
+                diffuse_texture,
             });
         }
 
@@ -298,6 +355,7 @@ impl Mesh {
             default_color: [1.0, 1.0, 1.0],
             metallic: 0.0,
             roughness: 0.8,
+            diffuse_texture: None,
         })
     }
 

@@ -11,7 +11,7 @@ struct PointLight {
     vec4 color;
 };
 
-layout(binding = 0) uniform GlobalUbo {
+layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 viewProj;
     mat4 lightSpaceMatrix;
     vec4 cameraPos;
@@ -30,9 +30,9 @@ layout(push_constant) uniform PushConstants {
     vec4 color;
 } pc;
 
-layout(binding = 1) uniform sampler2D texSampler;
-layout(binding = 2) uniform sampler2D envSampler;
-layout(binding = 3) uniform sampler2D shadowMap;
+layout(set = 1, binding = 0) uniform sampler2D texSampler;
+layout(set = 0, binding = 1) uniform sampler2D envSampler;
+layout(set = 0, binding = 2) uniform sampler2D shadowMap;
 
 vec2 sampleEquirectangular(vec3 v) {
     vec2 uv = vec2(atan(v.z, v.x), asin(v.y));
@@ -113,7 +113,8 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 
 void main() {
     vec4 texColor = texture(texSampler, fragUV);
-    vec3 albedo = pow(texColor.rgb, vec3(2.2)) * pc.color.rgb;
+    vec3 baseColor = pow(pc.color.rgb, vec3(2.2));
+    vec3 albedo = pow(texColor.rgb, vec3(2.2)) * baseColor;
 
     vec3 N = normalize(fragNormal);
     vec3 V = normalize(ubo.cameraPos.xyz - fragPos);
@@ -125,7 +126,7 @@ void main() {
     
     // Directional Light
     {
-        vec3 L = normalize(ubo.lightDir.xyz);
+        vec3 L = normalize(-ubo.lightDir.xyz);
         vec3 H = normalize(V + L);
         vec3 radiance = ubo.lightColor.rgb;
         
@@ -177,12 +178,14 @@ void main() {
     // Approximate Irradiance by sampling the highest LOD (most blurry)
     vec2 irradianceUV = sampleEquirectangular(N);
     vec3 irradiance = textureLod(envSampler, irradianceUV, 10.0).rgb; // Hardcoded high LOD
+    irradiance = pow(irradiance, vec3(2.2)) * 2.0; // Convert to linear and boost
     vec3 diffuseIBL = irradiance * albedo;
     
     // Approximate Prefiltered Specular
     const float MAX_REFLECTION_LOD = 8.0;
     vec2 prefilteredUV = sampleEquirectangular(R);
     vec3 prefilteredColor = textureLod(envSampler, prefilteredUV, pc.roughness * MAX_REFLECTION_LOD).rgb;
+    prefilteredColor = pow(prefilteredColor, vec3(2.2)) * 2.0; // Convert to linear and boost
     
     // Approximate BRDF LUT
     vec2 brdfApprox = vec2(F0.x, 1.0 - pc.roughness); // simplistic approximation

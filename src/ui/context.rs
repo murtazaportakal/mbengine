@@ -107,6 +107,7 @@ pub struct UiContext {
     pub mouse_down: bool,
     pub mouse_pressed: bool,
     pub mouse_released: bool,
+    pub mouse_scroll_y: f32,
     
     pub hot_item: u64,
     pub active_item: u64,
@@ -143,6 +144,7 @@ impl UiContext {
             mouse_down: false,
             mouse_pressed: false,
             mouse_released: false,
+            mouse_scroll_y: 0.0,
             hot_item: 0,
             active_item: 0,
             current_rect: UiRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
@@ -153,7 +155,7 @@ impl UiContext {
         }
     }
 
-    pub fn begin_frame(&mut self, mouse_pos: Vec2, mouse_down: bool) {
+    pub fn begin_frame(&mut self, mouse_pos: Vec2, mouse_down: bool, scroll_y: f32) {
         self.draw_commands.clear();
         
         let was_down = self.mouse_down;
@@ -166,6 +168,7 @@ impl UiContext {
         self.mouse_down = mouse_down;
         self.mouse_pressed = !was_down && mouse_down;
         self.mouse_released = was_down && !mouse_down;
+        self.mouse_scroll_y = scroll_y;
         
         self.hot_item = 0;
     }
@@ -500,8 +503,9 @@ impl UiContext {
 
         let mut changed = false;
         if self.active_item == id
-            && self.mouse_delta.x != 0.0 {
-                *value += self.mouse_delta.x * 0.05;
+            && (self.mouse_delta.x != 0.0 || self.mouse_delta.y != 0.0) {
+                // Dragging right or up increases the value
+                *value += (self.mouse_delta.x - self.mouse_delta.y) * 0.05;
                 changed = true;
             }
 

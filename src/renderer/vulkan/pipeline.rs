@@ -45,6 +45,7 @@ pub struct Pipeline {
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
     pub descriptor_set_layout: vk::DescriptorSetLayout,
+    pub material_descriptor_set_layout: vk::DescriptorSetLayout,
 }
 
 impl Pipeline {
@@ -156,31 +157,35 @@ impl Pipeline {
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
 
         let sampler_layout_binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
+            .binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
 
         let env_map_layout_binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(2)
+            .binding(1)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
 
         let shadow_map_layout_binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(3)
+            .binding(2)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
 
-        let bindings = [
+        let global_bindings = [
             ubo_layout_binding,
-            sampler_layout_binding,
             env_map_layout_binding,
             shadow_map_layout_binding,
         ];
+        
+        let material_bindings = [
+            sampler_layout_binding,
+        ];
+        
         let descriptor_set_layout_info =
-            vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&global_bindings);
 
         let descriptor_set_layout = unsafe {
             vulkan
@@ -189,9 +194,21 @@ impl Pipeline {
                 .ok()?
         };
 
+        let material_descriptor_set_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&material_bindings);
+
+        let material_descriptor_set_layout = unsafe {
+            vulkan
+                .device
+                .create_descriptor_set_layout(&material_descriptor_set_layout_info, None)
+                .ok()?
+        };
+
+        let set_layouts = [descriptor_set_layout, material_descriptor_set_layout];
+
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
             .push_constant_ranges(std::slice::from_ref(&push_constant_range))
-            .set_layouts(std::slice::from_ref(&descriptor_set_layout));
+            .set_layouts(&set_layouts);
 
         let layout = unsafe {
             vulkan
@@ -243,6 +260,7 @@ impl Pipeline {
             layout,
             handle,
             descriptor_set_layout,
+            material_descriptor_set_layout,
         })
     }
 
@@ -260,9 +278,8 @@ impl Pipeline {
         unsafe {
             vulkan.device.destroy_pipeline(self.handle, None);
             vulkan.device.destroy_pipeline_layout(self.layout, None);
-            vulkan
-                .device
-                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            vulkan.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            vulkan.device.destroy_descriptor_set_layout(self.material_descriptor_set_layout, None);
         }
     }
 }
