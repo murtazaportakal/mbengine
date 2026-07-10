@@ -24,15 +24,23 @@ pub struct Application {
     pub world_matrices: Vec<(u32, crate::math::mat4::Mat4)>,
     pub ubo_buffer: vk::Buffer,
     pub ubo_memory: vk::DeviceMemory,
+    pub instance_buffers: [crate::renderer::vulkan::buffer::Buffer; 2],
+    pub instance_mapped: [*mut std::ffi::c_void; 2],
+    pub indirect_buffers: [crate::renderer::vulkan::buffer::Buffer; 2],
+    pub draw_count_buffers: [crate::renderer::vulkan::buffer::Buffer; 2],
     pub descriptor_pool: vk::DescriptorPool,
-    pub descriptor_set: vk::DescriptorSet,
+    pub descriptor_sets: [vk::DescriptorSet; 2],
+    pub global_texture_descriptor_sets: [vk::DescriptorSet; 2],
     pub offscreen_target: crate::renderer::vulkan::OffscreenTarget,
     pub sdr_target: crate::renderer::vulkan::OffscreenTarget,
+    pub blur_target: crate::renderer::vulkan::OffscreenTarget,
     pub bloom_target: crate::renderer::vulkan::bloom::BloomTarget,
     pub post_process: crate::renderer::vulkan::PostProcessPipeline,
     pub post_process_descriptor_pool: vk::DescriptorPool,
     pub tonemap_descriptor_set: vk::DescriptorSet,
     pub bloom_descriptor_sets: Vec<vk::DescriptorSet>,
+    pub blur_descriptor_sets: Vec<vk::DescriptorSet>,
+    pub geometry_pool: crate::renderer::vulkan::GeometryPool,
     pub offscreen_texture_id: u32,
     pub swapchain: Swapchain,
     pub vulkan: VulkanDevice,
@@ -118,8 +126,11 @@ impl Application {
         // Load a procedural studio environment map for gorgeous reflections
         asset_manager.load_procedural_env(&vulkan, "env_default");
         asset_manager.load_solid_color(&vulkan, "shadow_default", 255, 255, 255, 255); // White shadow map (no shadows)
-        let post_process =
-            crate::renderer::vulkan::PostProcessPipeline::new(&vulkan, vk::Format::R8G8B8A8_UNORM, &asset_manager.vfs)?;
+        let post_process = crate::renderer::vulkan::PostProcessPipeline::new(
+            &vulkan,
+            vk::Format::R8G8B8A8_UNORM,
+            &asset_manager.vfs,
+        )?;
 
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -171,7 +182,13 @@ impl Application {
             }
         };
 
-        let pipeline = Pipeline::new(&vulkan, vk::Format::R16G16B16A16_SFLOAT, &asset_manager.vfs);
+        let pipeline = Pipeline::new(
+            &vulkan,
+            vk::Format::R16G16B16A16_SFLOAT,
+            &asset_manager.vfs,
+            "shaders/vert.spv",
+            "shaders/frag.spv",
+        );
 
         let compute_pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -191,12 +208,16 @@ impl Application {
                 .unwrap()
         };
 
-        // We can pass a dummy max_meshlets to new() since it no longer allocates an indirect buffer
-        let compute_pipeline =
-            crate::renderer::vulkan::compute_cull::ComputeCullPipeline::new(&vulkan, &asset_manager.vfs);
+        let mut compute_pipeline = crate::renderer::vulkan::compute_cull::ComputeCullPipeline::new(
+            &vulkan,
+            &asset_manager.vfs,
+        );
 
         let skinning_pipeline =
-            crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline::new(&vulkan, &asset_manager.vfs);
+            crate::renderer::vulkan::compute_skinning::ComputeSkinningPipeline::new(
+                &vulkan,
+                &asset_manager.vfs,
+            );
 
         let skinning_pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -213,9 +234,8 @@ impl Application {
                 .unwrap()
         };
 
-
         let mut descriptor_pool = vk::DescriptorPool::null();
-        let mut descriptor_set = vk::DescriptorSet::null();
+        let mut descriptor_set = [vk::DescriptorSet::null(), vk::DescriptorSet::null()];
 
         let ubo_data = if let Some(pipe) = &pipeline {
             if asset_manager
@@ -236,9 +256,13 @@ impl Application {
                     vk::DescriptorPoolSize::default()
                         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .descriptor_count(1000),
+                    vk::DescriptorPoolSize::default()
+                        .ty(vk::DescriptorType::STORAGE_BUFFER)
+                        .descriptor_count(10),
                 ];
 
                 let pool_info = vk::DescriptorPoolCreateInfo::default()
+                    .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
                     .pool_sizes(&pool_sizes)
                     .max_sets(1000);
 
@@ -249,13 +273,14 @@ impl Application {
                         .unwrap()
                 };
 
-                // 2. Allocate Descriptor Set
+                // 2. Allocate Descriptor Sets
+                let layouts = [pipe.descriptor_set_layout, pipe.descriptor_set_layout];
                 let alloc_info = vk::DescriptorSetAllocateInfo::default()
                     .descriptor_pool(descriptor_pool)
-                    .set_layouts(std::slice::from_ref(&pipe.descriptor_set_layout));
+                    .set_layouts(&layouts);
 
-                descriptor_set =
-                    unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0] };
+                let sets = unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap() };
+                descriptor_set = [sets[0], sets[1]];
 
                 // Create UBO buffer
                 let ubo_size =
@@ -289,70 +314,111 @@ impl Application {
                         .unwrap()
                 };
 
-                // 3. Update Descriptor Set
-                let ubo_info = vk::DescriptorBufferInfo::default()
-                    .buffer(ubo_buffer)
-                    .offset(0)
-                    .range(ubo_size);
+                // 3. Update Descriptor Sets
+                for (_i, set) in descriptor_set.iter().enumerate() {
+                    let ubo_info = vk::DescriptorBufferInfo::default()
+                        .buffer(ubo_buffer)
+                        .offset(0)
+                        .range(ubo_size);
 
-                let write_desc_ubo = vk::WriteDescriptorSet::default()
-                    .dst_set(descriptor_set)
-                    .dst_binding(0)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(std::slice::from_ref(&ubo_info));
+                    let write_desc_ubo = vk::WriteDescriptorSet::default()
+                        .dst_set(*set)
+                        .dst_binding(0)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .buffer_info(std::slice::from_ref(&ubo_info));
 
-                let env_tex = asset_manager.get_texture("env_default").unwrap();
-                let shadow_tex = asset_manager.get_texture("shadow_default").unwrap();
+                    let env_tex = asset_manager.get_texture("env_default").unwrap();
+                    let shadow_tex = asset_manager.get_texture("shadow_default").unwrap();
 
-                let env_image_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(env_tex.view)
-                    .sampler(env_tex.sampler);
+                    let env_image_info = vk::DescriptorImageInfo::default()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(env_tex.view)
+                        .sampler(env_tex.sampler);
 
-                let shadow_image_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(shadow_tex.view)
-                    .sampler(shadow_tex.sampler);
+                    let shadow_image_info = vk::DescriptorImageInfo::default()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(shadow_tex.view)
+                        .sampler(shadow_tex.sampler);
 
-                let write_desc_env = vk::WriteDescriptorSet::default()
-                    .dst_set(descriptor_set)
-                    .dst_binding(1)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&env_image_info));
+                    let write_desc_env = vk::WriteDescriptorSet::default()
+                        .dst_set(*set)
+                        .dst_binding(1)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(std::slice::from_ref(&env_image_info));
 
-                let write_desc_shadow = vk::WriteDescriptorSet::default()
-                    .dst_set(descriptor_set)
-                    .dst_binding(2)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&shadow_image_info));
+                    let write_desc_shadow = vk::WriteDescriptorSet::default()
+                        .dst_set(*set)
+                        .dst_binding(2)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(std::slice::from_ref(&shadow_image_info));
 
-                unsafe {
-                    vulkan.device.update_descriptor_sets(
-                        &[
-                            write_desc_ubo,
-                            write_desc_env,
-                            write_desc_shadow,
-                        ],
-                        &[],
-                    )
+                    // Notice: binding 3 (instance data) is updated in render_frame because the buffer is multi-buffered! Wait, the buffers are ALREADY multi-buffered, so we can update them here if we had access to instance_buffers.
+                    // Actually, instance_buffers are created later! So we MUST update binding 3 later.
+
+                    unsafe {
+                        vulkan.device.update_descriptor_sets(
+                            &[write_desc_ubo, write_desc_env, write_desc_shadow],
+                            &[],
+                        )
+                    };
+                }
+
+                // Allocate a single bindless texture set
+                let counts = [1000];
+                let mut variable_info =
+                    vk::DescriptorSetVariableDescriptorCountAllocateInfo::default()
+                        .descriptor_counts(&counts);
+                let alloc_info_bindless = vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(descriptor_pool)
+                    .set_layouts(std::slice::from_ref(&pipe.material_descriptor_set_layout))
+                    .push_next(&mut variable_info);
+
+                let bindless_set = unsafe {
+                    vulkan
+                        .device
+                        .allocate_descriptor_sets(&alloc_info_bindless)
+                        .unwrap()[0]
                 };
 
-                Some((ubo_buffer, ubo_memory))
+                // Bind fallback texture to index 0 of the bindless set
+                let fallback_tex = asset_manager.get_texture("fallback").unwrap();
+                let image_info = vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(fallback_tex.view)
+                    .sampler(fallback_tex.sampler);
+                let write_desc = vk::WriteDescriptorSet::default()
+                    .dst_set(bindless_set)
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&image_info));
+
+                unsafe {
+                    vulkan.device.update_descriptor_sets(&[write_desc], &[]);
+                }
+
+                (Some((ubo_buffer, ubo_memory)), bindless_set)
             } else {
-                None
+                (None, vk::DescriptorSet::null())
             }
         } else {
-            None
+            (None, vk::DescriptorSet::null())
         };
 
-        let (ubo_buffer, ubo_memory) =
-            ubo_data.unwrap_or((vk::Buffer::null(), vk::DeviceMemory::null()));
+        let (ubo_buffer, ubo_memory) = ubo_data
+            .0
+            .unwrap_or((vk::Buffer::null(), vk::DeviceMemory::null()));
+        let bindless_set = ubo_data.1;
+
+        let mut geometry_pool =
+            crate::renderer::vulkan::GeometryPool::new(&vulkan, 1_000_000, 3_000_000, 100_000)
+                .expect("Failed to create GeometryPool");
 
         let cube_model_indices = asset_manager
-            .load_model(&vulkan, "cube.obj")
+            .load_model(&vulkan, &mut geometry_pool, "cube.obj")
             .unwrap_or(&[])
             .to_vec();
         if cube_model_indices.is_empty() {
@@ -420,18 +486,139 @@ impl Application {
             );
         }
 
-
-
         let ui_ctx = crate::ui::UiContext::new();
-        let font_bytes = asset_manager.vfs.read_bytes("assets/fonts/Roboto-Regular.ttf").unwrap_or_else(|_| vec![]);
-        let ui_font = crate::ui::font::Font::load_ascii(&font_bytes, 64.0).unwrap_or(crate::ui::font::Font { texture_data: vec![255; 1024*1024*4], width: 1024, height: 1024, glyphs: [crate::ui::font::GlyphInfo::default(); 128], line_height: 64.0 });
-        let mut ui_backend = crate::renderer::vulkan::UiBackend::new(&vulkan, swapchain.format.format, &asset_manager.vfs);
+        let font_bytes = asset_manager
+            .vfs
+            .read_bytes("assets/fonts/Roboto-Regular.ttf")
+            .unwrap_or_else(|_| vec![]);
+        let ui_font =
+            crate::ui::font::Font::load_ascii(&font_bytes, 64.0).unwrap_or(crate::ui::font::Font {
+                texture_data: vec![255; 1024 * 1024 * 4],
+                width: 1024,
+                height: 1024,
+                glyphs: [crate::ui::font::GlyphInfo::default(); 128],
+                line_height: 64.0,
+            });
+        let mut ui_backend = crate::renderer::vulkan::UiBackend::new(
+            &vulkan,
+            swapchain.format.format,
+            &asset_manager.vfs,
+        );
         ui_backend.set_font(&vulkan, &ui_font);
         let offscreen_texture_id = 0;
 
         let audio_subsystem = crate::audio::AudioSubsystem::new();
-        let audio_system = crate::audio::AudioSystem::new(audio_subsystem.as_ref(), &asset_manager.vfs);
+        let audio_system =
+            crate::audio::AudioSystem::new(audio_subsystem.as_ref(), &asset_manager.vfs);
         let script_engine = crate::scripting::engine::ScriptEngine::new();
+
+        let max_instances = 100_000;
+        let mut instance_buffers = Vec::new();
+        let mut instance_mapped = Vec::new();
+        let mut indirect_buffers = Vec::new();
+        let mut draw_count_buffers = Vec::new();
+
+        for _ in 0..2 {
+            let instance_buffer = crate::renderer::vulkan::buffer::Buffer::new(
+                &vulkan,
+                max_instances
+                    * std::mem::size_of::<crate::renderer::vulkan::pipeline::InstanceData>() as u64,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+            .expect("Failed to create instance buffer");
+            let mapped = unsafe {
+                vulkan
+                    .device
+                    .map_memory(
+                        instance_buffer.memory,
+                        0,
+                        vk::WHOLE_SIZE,
+                        vk::MemoryMapFlags::empty(),
+                    )
+                    .expect("Failed to map instance buffer memory")
+            };
+            instance_buffers.push(instance_buffer);
+            instance_mapped.push(mapped);
+
+            let indirect_buffer = crate::renderer::vulkan::buffer::Buffer::new(
+                &vulkan,
+                max_instances * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64,
+                vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::INDIRECT_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .expect("Failed to create indirect buffer");
+            indirect_buffers.push(indirect_buffer);
+
+            let draw_count_buffer = crate::renderer::vulkan::buffer::Buffer::new(
+                &vulkan,
+                4,
+                vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::INDIRECT_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .expect("Failed to create draw count buffer");
+            draw_count_buffers.push(draw_count_buffer);
+        }
+
+        let instance_buffers = [instance_buffers.remove(0), instance_buffers.remove(0)];
+        let instance_mapped = [instance_mapped.remove(0), instance_mapped.remove(0)];
+        let indirect_buffers = [indirect_buffers.remove(0), indirect_buffers.remove(0)];
+        let draw_count_buffers = [draw_count_buffers.remove(0), draw_count_buffers.remove(0)];
+
+        let blur_target = crate::renderer::vulkan::OffscreenTarget::new(
+            &vulkan,
+            window.width,
+            window.height,
+            vk::Format::R16G16B16A16_SFLOAT,
+        )
+        .unwrap();
+        let blur_descriptor_sets = Vec::new();
+
+        // Update descriptor sets with instance buffers (binding 3)
+        for i in 0..2 {
+            let instance_info = vk::DescriptorBufferInfo::default()
+                .buffer(instance_buffers[i].handle)
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
+
+            let write_desc_instance = vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set[i])
+                .dst_binding(3)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&instance_info));
+
+            unsafe {
+                vulkan
+                    .device
+                    .update_descriptor_sets(&[write_desc_instance], &[]);
+            }
+        }
+
+        if let Some(compute) = &mut compute_pipeline {
+            let layouts = [compute.descriptor_set_layout, compute.descriptor_set_layout];
+            let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(compute_descriptor_pool)
+                .set_layouts(&layouts);
+
+            compute.descriptor_sets =
+                unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap() };
+
+            for i in 0..2 {
+                compute.update_descriptor_set(
+                    &vulkan,
+                    ubo_buffer,
+                    indirect_buffers[i].handle,
+                    instance_buffers[i].handle,
+                    draw_count_buffers[i].handle,
+                    compute.descriptor_sets[i],
+                );
+            }
+        }
 
         let mut app = Self {
             world,
@@ -440,15 +627,23 @@ impl Application {
             world_matrices: Vec::with_capacity(256),
             ubo_buffer,
             ubo_memory,
+            instance_buffers,
+            instance_mapped,
+            indirect_buffers,
+            draw_count_buffers,
             descriptor_pool,
-            descriptor_set,
+            descriptor_sets: descriptor_set,
+            global_texture_descriptor_sets: [bindless_set, bindless_set],
             offscreen_target,
             sdr_target,
+            blur_target,
             bloom_target,
             post_process,
             post_process_descriptor_pool,
             tonemap_descriptor_set,
             bloom_descriptor_sets,
+            blur_descriptor_sets,
+            geometry_pool,
             offscreen_texture_id,
             swapchain,
             vulkan,
@@ -615,9 +810,11 @@ impl Application {
             let ppp = (self.window.height as f32 / 720.0).max(0.5);
             self.input.ui_scale = ppp;
 
-
-
-            self.ui_ctx.begin_frame(crate::math::vec::Vec2::new(self.input.mouse_x as f32, self.input.mouse_y as f32), self.input.keys[0x01], self.input.mouse_scroll_y);
+            self.ui_ctx.begin_frame(
+                crate::math::vec::Vec2::new(self.input.mouse_x as f32, self.input.mouse_y as f32),
+                self.input.keys[0x01],
+                self.input.mouse_scroll_y,
+            );
 
             if self.is_playing {
                 if let Some(reloader) = &mut self.hot_reloader {
@@ -643,7 +840,7 @@ impl Application {
 
             let mut view_mat = crate::math::mat4::Mat4::identity();
             let mut proj_mat = crate::math::mat4::Mat4::identity();
-            
+
             let cam_entity = {
                 let cameras = self.world.get_component_array::<CameraComponent>();
                 cameras.dense_entities_slice().first().copied()
@@ -658,12 +855,23 @@ impl Application {
                         yaw.sin() * pitch.cos(),
                         pitch.sin(),
                         yaw.cos() * pitch.cos(),
-                    ).normalize();
+                    )
+                    .normalize();
                     let center = transform.position + forward;
-                    view_mat = crate::math::mat4::Mat4::look_at(transform.position, center, crate::math::vec::Vec3::new(0.0, 1.0, 0.0));
-                    
-                    let aspect_ratio = self.offscreen_target.width as f32 / self.offscreen_target.height as f32;
-                    proj_mat = crate::math::mat4::Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
+                    view_mat = crate::math::mat4::Mat4::look_at(
+                        transform.position,
+                        center,
+                        crate::math::vec::Vec3::new(0.0, 1.0, 0.0),
+                    );
+
+                    let aspect_ratio =
+                        self.offscreen_target.width as f32 / self.offscreen_target.height as f32;
+                    proj_mat = crate::math::mat4::Mat4::perspective(
+                        std::f32::consts::FRAC_PI_4,
+                        aspect_ratio,
+                        0.1,
+                        100.0,
+                    );
                 }
             }
 
@@ -705,20 +913,26 @@ impl Application {
                     }
                     crate::app::editor::EditorAction::TranslateSelected(pos) => {
                         if let Some(entity) = self.selected_entity {
-                            let transforms = self.world.get_component_array_mut::<TransformComponent>();
+                            let transforms =
+                                self.world.get_component_array_mut::<TransformComponent>();
                             if transforms.has(entity) {
                                 let transform = unsafe { transforms.get_mut(entity) };
                                 transform.position = pos;
-                                
+
                                 // Update physics body if needed
                                 let physics_comps = self.world.get_component_array::<crate::ecs::components::RigidBodyComponent>();
                                 if physics_comps.has(entity) {
                                     let pc = unsafe { physics_comps.get(entity) };
                                     let handle = pc.handle;
                                     if true {
-                                        if let Some(body) = self.physics.rigid_body_set.get_mut(handle) {
+                                        if let Some(body) =
+                                            self.physics.rigid_body_set.get_mut(handle)
+                                        {
                                             let mut tr = body.position().clone();
-                                            tr.translation = rapier3d::math::Isometry::translation(pos.x, pos.y, pos.z).translation;
+                                            tr.translation = rapier3d::math::Isometry::translation(
+                                                pos.x, pos.y, pos.z,
+                                            )
+                                            .translation;
                                             body.set_position(tr, true);
                                         }
                                     }
@@ -729,7 +943,10 @@ impl Application {
                     crate::app::editor::EditorAction::DeleteEntity(e) => {
                         let mut to_delete = vec![e];
                         {
-                            let hierarchies = self.world.get_component_array::<crate::ecs::components::HierarchyComponent>();
+                            let hierarchies = self
+                                .world
+                                .get_component_array::<crate::ecs::components::HierarchyComponent>(
+                                );
                             let mut i = 0;
                             while i < to_delete.len() {
                                 let current = to_delete[i];
@@ -746,10 +963,15 @@ impl Application {
                                 i += 1;
                             }
                         }
-                        
+
                         {
-                            let colliders = self.world.get_component_array::<crate::ecs::components::ColliderComponent>();
-                            let rigid_bodies = self.world.get_component_array::<crate::ecs::components::RigidBodyComponent>();
+                            let colliders = self
+                                .world
+                                .get_component_array::<crate::ecs::components::ColliderComponent>();
+                            let rigid_bodies = self
+                                .world
+                                .get_component_array::<crate::ecs::components::RigidBodyComponent>(
+                                );
                             for &entity in &to_delete {
                                 if colliders.has(entity) {
                                     let handle = unsafe { colliders.get(entity) }.handle;
@@ -773,7 +995,7 @@ impl Application {
                                 }
                             }
                         }
-                        
+
                         for &entity in &to_delete {
                             self.world.destroy_entity(entity);
                             if self.selected_entity == Some(entity) {
@@ -782,7 +1004,12 @@ impl Application {
                         }
                     }
                     crate::app::editor::EditorAction::AddComponent(e, name) => {
-                        self.editor.registry.add_component(&name, e, &mut self.world, &mut self.physics);
+                        self.editor.registry.add_component(
+                            &name,
+                            e,
+                            &mut self.world,
+                            &mut self.physics,
+                        );
                     }
                     crate::app::editor::EditorAction::SpawnModel(path) => {
                         let new_entity = self.world.create_entity();
@@ -791,11 +1018,11 @@ impl Application {
                         let lower = path.to_lowercase();
                         let mesh_indices = if lower.ends_with(".obj") {
                             self.asset_manager
-                                .load_model(&self.vulkan, &path)
+                                .load_model(&self.vulkan, &mut self.geometry_pool, &path)
                                 .map(|m| m.to_vec())
                         } else if lower.ends_with(".gltf") || lower.ends_with(".glb") {
                             self.asset_manager
-                                .load_gltf(&self.vulkan, &path, &path)
+                                .load_gltf(&self.vulkan, &mut self.geometry_pool, &path, &path)
                                 .map(|m| m.to_vec())
                         } else {
                             None
@@ -833,7 +1060,7 @@ impl Application {
                                             matrix: crate::math::mat4::Mat4::identity(),
                                         },
                                     );
-                                    
+
                                     let mut metallic = 0.0;
                                     let mut roughness = 0.8;
                                     let mut r = 1.0;
@@ -850,20 +1077,23 @@ impl Application {
                                         let hx = (mesh.aabb_max[0] - mesh.aabb_min[0]).abs() * 0.5;
                                         let hy = (mesh.aabb_max[1] - mesh.aabb_min[1]).abs() * 0.5;
                                         let hz = (mesh.aabb_max[2] - mesh.aabb_min[2]).abs() * 0.5;
-                                        
+
                                         // Avoid zero-thickness colliders
                                         let hx = hx.max(0.01);
                                         let hy = hy.max(0.01);
                                         let hz = hz.max(0.01);
-                                        
+
                                         let cx = mesh.aabb_min[0] + hx;
                                         let cy = mesh.aabb_min[1] + hy;
                                         let cz = mesh.aabb_min[2] + hz;
-                                        
-                                        let collider = rapier3d::prelude::ColliderBuilder::cuboid(hx, hy, hz)
-                                            .translation(rapier3d::math::Vector::new(cx, cy, cz))
-                                            .build();
-                                            
+
+                                        let collider =
+                                            rapier3d::prelude::ColliderBuilder::cuboid(hx, hy, hz)
+                                                .translation(rapier3d::math::Vector::new(
+                                                    cx, cy, cz,
+                                                ))
+                                                .build();
+
                                         let handle = self.physics.collider_set.insert(collider);
                                         self.world.add_component(
                                             child_entity,
@@ -883,7 +1113,7 @@ impl Application {
                                             b,
                                         },
                                     );
-                                    
+
                                     self.world.add_component(
                                         child_entity,
                                         crate::ecs::components::HierarchyComponent {
@@ -922,6 +1152,8 @@ impl Application {
                     &self.vulkan,
                     vk::Format::R16G16B16A16_SFLOAT,
                     &self.asset_manager.vfs,
+                    "shaders/vert.spv",
+                    "shaders/frag.spv",
                 );
 
                 // Re-allocate descriptor set
@@ -935,73 +1167,83 @@ impl Application {
                             )
                             .unwrap();
                     }
-
+                    let layouts = [pipe.descriptor_set_layout, pipe.descriptor_set_layout];
                     let alloc_info = vk::DescriptorSetAllocateInfo::default()
                         .descriptor_pool(self.descriptor_pool)
-                        .set_layouts(std::slice::from_ref(&pipe.descriptor_set_layout));
+                        .set_layouts(&layouts);
 
                     if let Ok(sets) =
                         unsafe { self.vulkan.device.allocate_descriptor_sets(&alloc_info) }
                     {
-                        self.descriptor_set = sets[0];
-                        // Update descriptor set
-                        let ubo_info = vk::DescriptorBufferInfo::default()
-                            .buffer(self.ubo_buffer)
-                            .offset(0)
-                            .range(
-                                std::mem::size_of::<crate::renderer::vulkan::pipeline::GlobalUbo>()
-                                    as u64,
-                            );
+                        self.descriptor_sets = [sets[0], sets[1]];
+                        // Update descriptor sets
+                        for i in 0..2 {
+                            let ubo_info = vk::DescriptorBufferInfo::default()
+                                .buffer(self.ubo_buffer)
+                                .offset(0)
+                                .range(std::mem::size_of::<
+                                    crate::renderer::vulkan::pipeline::GlobalUbo,
+                                >() as u64);
 
-                        let tex = self
-                            .asset_manager
-                            .get_texture("default")
-                            .or_else(|| self.asset_manager.get_texture("fallback"));
-                        if let Some(_tex) = tex {
-                        let env_tex = self.asset_manager.get_texture("env_default").unwrap();
-                        let shadow_tex = self.asset_manager.get_texture("shadow_default").unwrap();
+                            let env_tex = self.asset_manager.get_texture("env_default").unwrap();
+                            let shadow_tex =
+                                self.asset_manager.get_texture("shadow_default").unwrap();
 
-                        let env_image_info = vk::DescriptorImageInfo::default()
-                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                            .image_view(env_tex.view)
-                            .sampler(env_tex.sampler);
+                            let env_image_info = vk::DescriptorImageInfo::default()
+                                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                .image_view(env_tex.view)
+                                .sampler(env_tex.sampler);
 
-                        let shadow_image_info = vk::DescriptorImageInfo::default()
-                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                            .image_view(shadow_tex.view)
-                            .sampler(shadow_tex.sampler);
+                            let shadow_image_info = vk::DescriptorImageInfo::default()
+                                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                .image_view(shadow_tex.view)
+                                .sampler(shadow_tex.sampler);
 
-                        let writes = [
-                            vk::WriteDescriptorSet::default()
-                                .dst_set(self.descriptor_set)
-                                .dst_binding(0)
-                                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                                .buffer_info(std::slice::from_ref(&ubo_info)),
-                            vk::WriteDescriptorSet::default()
-                                .dst_set(self.descriptor_set)
-                                .dst_binding(1)
-                                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                .image_info(std::slice::from_ref(&env_image_info)),
-                            vk::WriteDescriptorSet::default()
-                                .dst_set(self.descriptor_set)
-                                .dst_binding(2)
-                                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                .image_info(std::slice::from_ref(&shadow_image_info)),
-                        ];
-                        unsafe { self.vulkan.device.update_descriptor_sets(&writes, &[]) };
+                            let instance_info = vk::DescriptorBufferInfo::default()
+                                .buffer(self.instance_buffers[i].handle)
+                                .offset(0)
+                                .range(vk::WHOLE_SIZE);
+
+                            let writes = [
+                                vk::WriteDescriptorSet::default()
+                                    .dst_set(self.descriptor_sets[i])
+                                    .dst_binding(0)
+                                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                                    .buffer_info(std::slice::from_ref(&ubo_info)),
+                                vk::WriteDescriptorSet::default()
+                                    .dst_set(self.descriptor_sets[i])
+                                    .dst_binding(1)
+                                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                                    .image_info(std::slice::from_ref(&env_image_info)),
+                                vk::WriteDescriptorSet::default()
+                                    .dst_set(self.descriptor_sets[i])
+                                    .dst_binding(2)
+                                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                                    .image_info(std::slice::from_ref(&shadow_image_info)),
+                                vk::WriteDescriptorSet::default()
+                                    .dst_set(self.descriptor_sets[i])
+                                    .dst_binding(3)
+                                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                                    .buffer_info(std::slice::from_ref(&instance_info)),
+                            ];
+
+                            unsafe {
+                                self.vulkan.device.update_descriptor_sets(&writes, &[]);
+                            }
+                        }
+                    }
+
+                    // Reset material descriptor sets since the pool was reset
+                    for set in self.material_descriptor_sets.iter_mut() {
+                        *set = None;
                     }
                 }
-                
-                // Reset material descriptor sets since the pool was reset
-                for set in self.material_descriptor_sets.iter_mut() {
-                    *set = None;
-                }
             }
-        }
 
             // Ensure material descriptor sets vector has enough capacity
             if self.material_descriptor_sets.len() < self.asset_manager.meshes.len() {
-                self.material_descriptor_sets.resize(self.asset_manager.meshes.len(), None);
+                self.material_descriptor_sets
+                    .resize(self.asset_manager.meshes.len(), None);
             }
 
             if let Some((w, h)) = new_viewport_size {
@@ -1131,7 +1373,9 @@ impl Application {
                                         let mut selected = entities[i];
                                         let hierarchies = self.world.get_component_array::<crate::ecs::components::HierarchyComponent>();
                                         while hierarchies.has(selected) {
-                                            if let Some(parent) = unsafe { hierarchies.get(selected) }.parent {
+                                            if let Some(parent) =
+                                                unsafe { hierarchies.get(selected) }.parent
+                                            {
                                                 selected = parent;
                                             } else {
                                                 break;
@@ -1199,11 +1443,13 @@ impl Application {
                                         }
                                     }
                                 }
-                                
+
                                 if let Some(mut selected) = best_entity {
                                     let hierarchies = self.world.get_component_array::<crate::ecs::components::HierarchyComponent>();
                                     while hierarchies.has(selected) {
-                                        if let Some(parent) = unsafe { hierarchies.get(selected) }.parent {
+                                        if let Some(parent) =
+                                            unsafe { hierarchies.get(selected) }.parent
+                                        {
                                             selected = parent;
                                         } else {
                                             break;
@@ -1226,12 +1472,20 @@ impl Application {
 
             // Save Scene on F5
             if self.input.is_key_pressed(win32::VK_F5) {
-                crate::ecs::serialization::save_scene(&self.world, &self.editor.registry, "scene.json");
+                crate::ecs::serialization::save_scene(
+                    &self.world,
+                    &self.editor.registry,
+                    "scene.json",
+                );
             }
 
             // Load Scene on F9
             if self.input.is_key_pressed(win32::VK_F9) {
-                crate::ecs::serialization::load_scene(&mut self.world, &self.editor.registry, "scene.json");
+                crate::ecs::serialization::load_scene(
+                    &mut self.world,
+                    &self.editor.registry,
+                    "scene.json",
+                );
             }
 
             // 1. Update Game State (ECS)
@@ -1601,8 +1855,9 @@ impl Application {
                             crate::renderer::vulkan::compute_skinning::SkinningInstance::new(
                                 &self.vulkan,
                                 skinning_pipeline,
-                                self.skinning_descriptor_pool,
-                                mesh.vertex_buffer.handle,
+                                self.descriptor_pool,
+                                self.geometry_pool.vertex_buffer.handle,
+                                mesh.vertex_offset as u64,
                                 mesh.vertex_count,
                             )
                         {
@@ -1636,197 +1891,129 @@ impl Application {
         }
 
         // --- Compute Culling Pre-pass Setup ---
-        let mut compute_dispatches = Vec::new();
+        let mut instance_data = Vec::new();
+        let renders = self
+            .world
+            .get_component_array::<crate::ecs::RenderComponent>();
+        let transforms = self
+            .world
+            .get_component_array::<crate::ecs::TransformComponent>();
+        let dense_renders = renders.as_slice();
+        let entities = renders.dense_entities_slice();
+
+        for i in 0..dense_renders.len() {
+            let render = &dense_renders[i];
+            if render.visible {
+                let entity = entities[i];
+                if transforms.has(entity) {
+                    let transform = unsafe { transforms.get(entity) };
+                    let world_matrix = self
+                        .world_matrices
+                        .iter()
+                        .find(|(e, _)| *e == entity)
+                        .map(|(_, m)| *m)
+                        .unwrap_or(transform.matrix);
+
+                    if let Some(mesh) = self.asset_manager.get_mesh(render.mesh_index) {
+                        let albedo_idx: f32 = f32::from_bits(0);
+                        let normal_idx: f32 = f32::from_bits(0);
+                        let mr_idx: f32 = f32::from_bits(0);
+                        let emissive_idx: u32 = 0;
+
+                        instance_data.push(crate::renderer::vulkan::pipeline::InstanceData {
+                            world: world_matrix,
+                            aabb_min: [-1.0, -1.0, -1.0, 1.0], // Default AABB min for cubes
+                            aabb_max: [1.0, 1.0, 1.0, 1.0],    // Default AABB max for cubes
+                            color: [render.r, render.g, render.b, albedo_idx],
+                            pbr: [render.metallic, render.roughness, normal_idx, mr_idx],
+                            geometry: [
+                                mesh.index_count,
+                                mesh.index_offset as u32,
+                                mesh.vertex_offset as u32,
+                                emissive_idx,
+                            ],
+                        });
+                    }
+                }
+            }
+        }
+
+        let draw_count = instance_data.len() as u32;
+
+        unsafe {
+            let data_ptr = self.instance_mapped[self.current_frame];
+            std::ptr::copy_nonoverlapping(
+                instance_data.as_ptr(),
+                data_ptr as *mut _,
+                instance_data.len(),
+            );
+        }
+
+        let current_draw_count = self.draw_count_buffers[self.current_frame].handle;
+
+        unsafe {
+            // Fill draw count with 0
+            self.vulkan
+                .device
+                .cmd_fill_buffer(command_buffer, current_draw_count, 0, 4, 0);
+
+            // Barrier after fill
+            let memory_barrier = vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
+
+            self.vulkan.device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                std::slice::from_ref(&memory_barrier),
+                &[],
+                &[],
+            );
+        }
+
         if let Some(compute) = &self.compute_pipeline {
-            let renders = self
-                .world
-                .get_component_array::<crate::ecs::RenderComponent>();
-            let transforms = self
-                .world
-                .get_component_array::<crate::ecs::TransformComponent>();
-            let dense_renders = renders.as_slice();
-            let entities = renders.dense_entities_slice();
-
-            for i in 0..dense_renders.len() {
-                let render = &dense_renders[i];
-                if render.visible {
-                    let entity_index = entities[i];
-                    if transforms.has(entity_index) {
-                        let transform = unsafe { transforms.get(entity_index) };
-                        let world_matrix = self
-                            .world_matrices
-                            .iter()
-                            .find(|(e, _)| *e == entity_index)
-                            .map(|(_, m)| *m)
-                            .unwrap_or(transform.matrix);
-                        let mesh_index = render.mesh_index;
-
-                        if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
-                            // Grow the descriptor set cache if needed (one-time cost per mesh)
-                            if mesh_index >= self.compute_descriptor_sets.len() {
-                                self.compute_descriptor_sets.resize(mesh_index + 1, None);
-                            }
-                            if self.compute_descriptor_sets[mesh_index].is_none() {
-                                let alloc_info = vk::DescriptorSetAllocateInfo::default()
-                                    .descriptor_pool(self.compute_descriptor_pool)
-                                    .set_layouts(std::slice::from_ref(
-                                        &compute.descriptor_set_layout,
-                                    ));
-                                let set = unsafe {
-                                    self.vulkan
-                                        .device
-                                        .allocate_descriptor_sets(&alloc_info)
-                                        .unwrap()[0]
-                                };
-
-                                compute.update_descriptor_set(
-                                    &self.vulkan,
-                                    self.ubo_buffer,
-                                    mesh.meshlet_buffer.handle,
-                                    mesh.indirect_buffer.handle,
-                                    set,
-                                );
-                                self.compute_descriptor_sets[mesh_index] = Some(set);
-                            }
-
-                            let set = self.compute_descriptor_sets[mesh_index].unwrap();
-                            compute_dispatches.push((
-                                mesh_index,
-                                mesh.meshlet_count,
-                                world_matrix,
-                                set,
-                            ));
-                        }
-                    }
-                }
-            }
-
-            // Dispatch skinning compute for each animated entity
-            if !skinning_dispatches.is_empty() {
-                if let Some(skinning_pipeline) = &self.skinning_pipeline {
-                    unsafe {
-                        self.vulkan.device.cmd_bind_pipeline(
-                            command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            skinning_pipeline.pipeline,
-                        );
-                    }
-
-                    for (idx, vertex_count) in skinning_dispatches {
-                        let instance = &self.skinning_instances[idx];
-
-                        unsafe {
-                            self.vulkan.device.cmd_bind_descriptor_sets(
-                                command_buffer,
-                                vk::PipelineBindPoint::COMPUTE,
-                                skinning_pipeline.layout,
-                                0,
-                                std::slice::from_ref(&instance.descriptor_set),
-                                &[],
-                            );
-
-                            #[repr(C)]
-                            struct SkinningPushConstants {
-                                vertex_count: u32,
-                            }
-                            let pc = SkinningPushConstants { vertex_count };
-                            let pc_bytes = std::slice::from_raw_parts(
-                                &pc as *const _ as *const u8,
-                                std::mem::size_of::<SkinningPushConstants>(),
-                            );
-                            self.vulkan.device.cmd_push_constants(
-                                command_buffer,
-                                skinning_pipeline.layout,
-                                vk::ShaderStageFlags::COMPUTE,
-                                0,
-                                pc_bytes,
-                            );
-
-                            // 256 threads per group (match local_size_x in skinning.comp)
-                            let group_count_x = vertex_count.div_ceil(256);
-                            self.vulkan
-                                .device
-                                .cmd_dispatch(command_buffer, group_count_x, 1, 1);
-                        }
-                    }
-
-                    // Barrier: ensure skinning compute writes to SSBO are visible as vertex buffer reads in the graphics pass
-                    let memory_barrier = vk::MemoryBarrier::default()
-                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                        .dst_access_mask(vk::AccessFlags::VERTEX_ATTRIBUTE_READ);
-
-                    unsafe {
-                        self.vulkan.device.cmd_pipeline_barrier(
-                            command_buffer,
-                            vk::PipelineStageFlags::COMPUTE_SHADER,
-                            vk::PipelineStageFlags::VERTEX_INPUT,
-                            vk::DependencyFlags::empty(),
-                            std::slice::from_ref(&memory_barrier),
-                            &[],
-                            &[],
-                        );
-                    }
-                }
-            }
-
-            // Dispatch compute for each entity's mesh
-            if !compute_dispatches.is_empty() {
+            if draw_count > 0 {
                 unsafe {
                     self.vulkan.device.cmd_bind_pipeline(
                         command_buffer,
                         vk::PipelineBindPoint::COMPUTE,
                         compute.pipeline,
                     );
-                }
 
-                for (_mesh_index, meshlet_count, world_matrix, set) in compute_dispatches {
-                    unsafe {
-                        self.vulkan.device.cmd_bind_descriptor_sets(
-                            command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            compute.layout,
-                            0,
-                            std::slice::from_ref(&set),
-                            &[],
-                        );
+                    self.vulkan.device.cmd_bind_descriptor_sets(
+                        command_buffer,
+                        vk::PipelineBindPoint::COMPUTE,
+                        compute.layout,
+                        0,
+                        std::slice::from_ref(&compute.descriptor_sets[self.current_frame]),
+                        &[],
+                    );
 
-                        #[repr(C)]
-                        struct PushConstants {
-                            total_meshlets: u32,
-                            _pad: [u32; 3], // 12 bytes padding for 16-byte alignment of Mat4
-                            world: crate::math::mat4::Mat4,
-                        }
-
-                        let pc = PushConstants {
-                            total_meshlets: meshlet_count,
-                            _pad: [0; 3],
-                            world: world_matrix,
-                        };
-
-                        let pc_bytes = std::slice::from_raw_parts(
-                            &pc as *const _ as *const u8,
-                            std::mem::size_of::<PushConstants>(),
-                        );
-
-                        self.vulkan.device.cmd_push_constants(
-                            command_buffer,
-                            compute.layout,
-                            vk::ShaderStageFlags::COMPUTE,
-                            0,
-                            pc_bytes,
-                        );
-
-                        // 64 threads per group (match local_size_x in cull.comp)
-                        let group_count_x = meshlet_count.div_ceil(64);
-                        self.vulkan
-                            .device
-                            .cmd_dispatch(command_buffer, group_count_x, 1, 1);
+                    #[repr(C)]
+                    struct CullPushConstants {
+                        total_instances: u32,
                     }
-                }
 
-                // Barrier to ensure compute shader writes are visible to indirect draw
-                unsafe {
-                    let barrier = vk::MemoryBarrier::default()
+                    let pc = CullPushConstants {
+                        total_instances: draw_count,
+                    };
+
+                    self.vulkan.device.cmd_push_constants(
+                        command_buffer,
+                        compute.layout,
+                        vk::ShaderStageFlags::COMPUTE,
+                        0,
+                        std::slice::from_raw_parts(&pc as *const _ as *const u8, 4),
+                    );
+
+                    self.vulkan
+                        .device
+                        .cmd_dispatch(command_buffer, (draw_count + 63) / 64, 1, 1);
+
+                    // Barrier before drawing
+                    let draw_barrier = vk::MemoryBarrier::default()
                         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                         .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
 
@@ -1835,7 +2022,7 @@ impl Application {
                         vk::PipelineStageFlags::COMPUTE_SHADER,
                         vk::PipelineStageFlags::DRAW_INDIRECT,
                         vk::DependencyFlags::empty(),
-                        std::slice::from_ref(&barrier),
+                        std::slice::from_ref(&draw_barrier),
                         &[],
                         &[],
                     );
@@ -1926,13 +2113,13 @@ impl Application {
                             pipeline.handle,
                         );
 
-                        if self.descriptor_set != vk::DescriptorSet::null() {
+                        if self.descriptor_sets[self.current_frame] != vk::DescriptorSet::null() {
                             self.vulkan.device.cmd_bind_descriptor_sets(
                                 command_buffer,
                                 vk::PipelineBindPoint::GRAPHICS,
                                 pipeline.layout,
                                 0,
-                                std::slice::from_ref(&self.descriptor_set),
+                                std::slice::from_ref(&self.descriptor_sets[self.current_frame]),
                                 &[],
                             );
                         }
@@ -1965,138 +2152,42 @@ impl Application {
                         std::slice::from_ref(&scissor),
                     );
 
-                    let renders = self.world.get_component_array::<RenderComponent>();
-                    let transforms = self.world.get_component_array::<TransformComponent>();
+                    // Unified GPU-driven draw call
+                    self.vulkan.device.cmd_bind_vertex_buffers(
+                        command_buffer,
+                        0,
+                        &[self.geometry_pool.vertex_buffer.handle],
+                        &[0],
+                    );
+                    self.vulkan.device.cmd_bind_index_buffer(
+                        command_buffer,
+                        self.geometry_pool.index_buffer.handle,
+                        0,
+                        vk::IndexType::UINT32,
+                    );
 
-                    let mut _draw_count = 0;
-                    let dense_renders = renders.as_slice();
-                    let entities = renders.dense_entities_slice();
+                    let max_draws = 100_000;
 
-                    for i in 0..dense_renders.len() {
-                        let render = &dense_renders[i];
-                        if render.visible {
-                            let entity_index = entities[i];
-                            if transforms.has(entity_index) {
-                                let transform = transforms.get(entity_index);
-                                let world_matrix = self
-                                    .world_matrices
-                                    .iter()
-                                    .find(|(e, _)| *e == entity_index)
-                                    .map(|(_, m)| *m)
-                                    .unwrap_or(transform.matrix);
-                                let push_constants =
-                                    crate::renderer::vulkan::pipeline::PushConstants {
-                                        world: world_matrix,
-                                        metallic: render.metallic,
-                                        roughness: render.roughness,
-                                        padding: [0.0; 2],
-                                        color: [render.r, render.g, render.b, 1.0],
-                                    };
-                                let constants_ptr = &push_constants as *const _ as *const u8;
-                                let constants_slice = std::slice::from_raw_parts(
-                                    constants_ptr,
-                                    std::mem::size_of::<
-                                        crate::renderer::vulkan::pipeline::PushConstants,
-                                    >(),
-                                );
-
-                                self.vulkan.device.cmd_push_constants(
-                                    command_buffer,
-                                    self.pipeline.as_ref().unwrap().layout,
-                                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                                    0,
-                                    constants_slice,
-                                );
-
-                                let mesh = self.asset_manager.get_mesh(render.mesh_index).unwrap();
-                                
-                                if self.material_descriptor_sets[render.mesh_index].is_none() {
-                                    let alloc_info = vk::DescriptorSetAllocateInfo::default()
-                                        .descriptor_pool(self.descriptor_pool)
-                                        .set_layouts(std::slice::from_ref(&self.pipeline.as_ref().unwrap().material_descriptor_set_layout));
-                                    
-                                    if let Ok(sets) = self.vulkan.device.allocate_descriptor_sets(&alloc_info) {
-                                        let set = sets[0];
-                                        self.material_descriptor_sets[render.mesh_index] = Some(set);
-                                        
-                                        let tex = if let Some(tex_name) = &mesh.diffuse_texture {
-                                            self.asset_manager.get_texture(tex_name)
-                                        } else { None };
-                                        
-                                        let tex = tex.or_else(|| self.asset_manager.get_texture("default")).or_else(|| self.asset_manager.get_texture("fallback")).unwrap();
-                                        
-                                        let image_info = vk::DescriptorImageInfo::default()
-                                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                            .image_view(tex.view)
-                                            .sampler(tex.sampler);
-                                            
-                                        let writes = [vk::WriteDescriptorSet::default()
-                                            .dst_set(set)
-                                            .dst_binding(0)
-                                            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                            .image_info(std::slice::from_ref(&image_info))];
-                                            
-                                        self.vulkan.device.update_descriptor_sets(&writes, &[]);
-                                    }
-                                }
-                                
-                                if let Some(mat_set) = self.material_descriptor_sets[render.mesh_index] {
-                                    self.vulkan.device.cmd_bind_descriptor_sets(
-                                        command_buffer,
-                                        vk::PipelineBindPoint::GRAPHICS,
-                                        self.pipeline.as_ref().unwrap().layout,
-                                        1, // first_set
-                                        std::slice::from_ref(&mat_set),
-                                        &[],
-                                    );
-                                }
-
-                                let mut vertex_buffer = mesh.vertex_buffer.handle;
-                                let skeletons = self.world.get_component_array::<crate::ecs::components::SkeletonComponent>();
-                                if skeletons.has(entity_index) {
-                                    let sk_comp = skeletons.get(entity_index);
-                                    if let Some(idx) = sk_comp.skinning_instance_index {
-                                        if idx < self.skinning_instances.len() {
-                                            vertex_buffer = self.skinning_instances[idx].skinned_vertex_buffer.handle;
-                                        }
-                                    }
-                                }
-
-                                self.vulkan.device.cmd_bind_vertex_buffers(
-                                    command_buffer,
-                                    0,
-                                    &[vertex_buffer],
-                                    &[0],
-                                );
-                                self.vulkan.device.cmd_bind_index_buffer(
-                                    command_buffer,
-                                    mesh.index_buffer.handle,
-                                    0,
-                                    vk::IndexType::UINT32,
-                                );
-
-                                if self.compute_pipeline.is_some() {
-                                    self.vulkan.device.cmd_draw_indexed_indirect(
-                                        command_buffer,
-                                        mesh.indirect_buffer.handle,
-                                        0,
-                                        mesh.meshlet_count,
-                                        std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
-                                    );
-                                } else {
-                                    self.vulkan.device.cmd_draw_indexed(
-                                        command_buffer,
-                                        mesh.index_count,
-                                        1,
-                                        0,
-                                        0,
-                                        0,
-                                    );
-                                }
-                                _draw_count += 1;
-                            }
-                        }
+                    if self.global_texture_descriptor_sets[0] != vk::DescriptorSet::null() {
+                        self.vulkan.device.cmd_bind_descriptor_sets(
+                            command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.pipeline.as_ref().unwrap().layout,
+                            1,
+                            std::slice::from_ref(&self.global_texture_descriptor_sets[0]),
+                            &[],
+                        );
                     }
+
+                    self.vulkan.device.cmd_draw_indexed_indirect_count(
+                        command_buffer,
+                        self.indirect_buffers[self.current_frame].handle,
+                        0, // indirect offset
+                        self.draw_count_buffers[self.current_frame].handle,
+                        0, // count buffer offset
+                        max_draws,
+                        std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+                    );
 
                     self.vulkan.device.cmd_end_rendering(command_buffer);
                 }
@@ -2108,9 +2199,11 @@ impl Application {
             &self.vulkan,
             &self.offscreen_target,
             &self.sdr_target,
+            &self.blur_target,
             &self.bloom_target,
             self.tonemap_descriptor_set,
             &self.bloom_descriptor_sets,
+            &self.blur_descriptor_sets,
             self.bloom_threshold,
         );
 

@@ -29,7 +29,7 @@ pub struct UiBackend {
 
     vertex_capacity: usize,
     index_capacity: usize,
-    
+
     white_texture: Option<Texture>,
     pub white_descriptor_set: vk::DescriptorSet,
     pub user_descriptor_sets: [Option<vk::DescriptorSet>; 4],
@@ -205,17 +205,18 @@ impl UiBackend {
 
             vulkan.device.destroy_shader_module(vert_module, None);
             vulkan.device.destroy_shader_module(frag_module, None);
-            
+
             // Create white texture
             let white_pixels = vec![255, 255, 255, 255];
             let white_texture = Texture::from_rgba8(vulkan, 1, 1, &white_pixels).unwrap();
-            
+
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(descriptor_pool)
                 .set_layouts(std::slice::from_ref(&descriptor_set_layout));
 
-            let white_descriptor_set = vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0];
-            
+            let white_descriptor_set =
+                vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0];
+
             let image_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(white_texture.view)
@@ -247,14 +248,16 @@ impl UiBackend {
     }
 
     pub fn set_font(&mut self, vulkan: &VulkanDevice, font: &Font) {
-        let texture = Texture::from_rgba8(vulkan, font.width, font.height, &font.texture_data).unwrap();
-        
+        let texture =
+            Texture::from_rgba8(vulkan, font.width, font.height, &font.texture_data).unwrap();
+
         unsafe {
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(self.descriptor_pool)
                 .set_layouts(std::slice::from_ref(&self.descriptor_set_layout));
 
-            let font_descriptor_set = vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0];
+            let font_descriptor_set =
+                vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0];
 
             let image_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -271,7 +274,10 @@ impl UiBackend {
 
             if let Some(mut old) = self.font_texture.take() {
                 old.shutdown(vulkan);
-                vulkan.device.free_descriptor_sets(self.descriptor_pool, &[self.font_descriptor_set]).unwrap();
+                vulkan
+                    .device
+                    .free_descriptor_sets(self.descriptor_pool, &[self.font_descriptor_set])
+                    .unwrap();
             }
 
             self.font_texture = Some(texture);
@@ -279,28 +285,37 @@ impl UiBackend {
         }
     }
 
-    pub fn update_user_texture(&mut self, vulkan: &VulkanDevice, id: u32, view: vk::ImageView, sampler: vk::Sampler) {
-        if id >= 4 { return; }
+    pub fn update_user_texture(
+        &mut self,
+        vulkan: &VulkanDevice,
+        id: u32,
+        view: vk::ImageView,
+        sampler: vk::Sampler,
+    ) {
+        if id >= 4 {
+            return;
+        }
         unsafe {
             if self.user_descriptor_sets[id as usize].is_none() {
                 let alloc_info = vk::DescriptorSetAllocateInfo::default()
                     .descriptor_pool(self.descriptor_pool)
                     .set_layouts(std::slice::from_ref(&self.descriptor_set_layout));
-                self.user_descriptor_sets[id as usize] = Some(vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0]);
+                self.user_descriptor_sets[id as usize] =
+                    Some(vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap()[0]);
             }
-            
+
             let set = self.user_descriptor_sets[id as usize].unwrap();
             let image_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(view)
                 .sampler(sampler);
-                
+
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&image_info));
-                
+
             vulkan.device.update_descriptor_sets(&[write], &[]);
         }
     }
@@ -317,7 +332,7 @@ impl UiBackend {
         if ui_ctx.draw_commands.is_empty() {
             return;
         }
-        
+
         // Compute vertex and index count
         let mut num_vertices = 0;
         let mut num_indices = 0;
@@ -341,7 +356,7 @@ impl UiBackend {
                 }
             }
         }
-        
+
         if num_vertices == 0 {
             return;
         }
@@ -357,7 +372,8 @@ impl UiBackend {
                         vulkan,
                         (self.vertex_capacity * std::mem::size_of::<UiVertex>()) as u64,
                         vk::BufferUsageFlags::VERTEX_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
                     )
                     .unwrap(),
                 );
@@ -373,21 +389,28 @@ impl UiBackend {
                         vulkan,
                         (self.index_capacity * std::mem::size_of::<u32>()) as u64,
                         vk::BufferUsageFlags::INDEX_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
                     )
                     .unwrap(),
                 );
             }
-            
+
             // Build vertices and indices
             let v_mem = self.vertex_buffer.as_ref().unwrap().memory;
-            let v_ptr = vulkan.device.map_memory(v_mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut UiVertex;
+            let v_ptr = vulkan
+                .device
+                .map_memory(v_mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                .unwrap() as *mut UiVertex;
             let i_mem = self.index_buffer.as_ref().unwrap().memory;
-            let i_ptr = vulkan.device.map_memory(i_mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u32;
-            
+            let i_ptr = vulkan
+                .device
+                .map_memory(i_mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                .unwrap() as *mut u32;
+
             let mut v_offset = 0;
             let mut i_offset = 0;
-            
+
             struct DrawCall {
                 index_count: u32,
                 first_index: u32,
@@ -399,11 +422,13 @@ impl UiBackend {
                 first_index: 0,
                 descriptor: self.white_descriptor_set,
             };
-            
+
             for cmd in &ui_ctx.draw_commands {
                 match cmd {
                     DrawCommand::Quad { rect, color, .. } => {
-                        if current_draw_call.descriptor != self.white_descriptor_set && current_draw_call.index_count > 0 {
+                        if current_draw_call.descriptor != self.white_descriptor_set
+                            && current_draw_call.index_count > 0
+                        {
                             draw_calls.push(current_draw_call);
                             current_draw_call = DrawCall {
                                 index_count: 0,
@@ -414,32 +439,55 @@ impl UiBackend {
                             current_draw_call.descriptor = self.white_descriptor_set;
                             current_draw_call.first_index = i_offset as u32;
                         }
-                        
+
                         let base_vertex = v_offset as u32;
                         let r = color.r as f32 / 255.0;
                         let g = color.g as f32 / 255.0;
                         let b = color.b as f32 / 255.0;
                         let a = color.a as f32 / 255.0;
                         let c = [r * a, g * a, b * a, a];
-                        
-                        v_ptr.add(v_offset).write(UiVertex { pos: [rect.x, rect.y], uv: [0.0, 0.0], color: c });
-                        v_ptr.add(v_offset + 1).write(UiVertex { pos: [rect.x + rect.w, rect.y], uv: [0.0, 0.0], color: c });
-                        v_ptr.add(v_offset + 2).write(UiVertex { pos: [rect.x + rect.w, rect.y + rect.h], uv: [0.0, 0.0], color: c });
-                        v_ptr.add(v_offset + 3).write(UiVertex { pos: [rect.x, rect.y + rect.h], uv: [0.0, 0.0], color: c });
-                        
+
+                        v_ptr.add(v_offset).write(UiVertex {
+                            pos: [rect.x, rect.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 1).write(UiVertex {
+                            pos: [rect.x + rect.w, rect.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 2).write(UiVertex {
+                            pos: [rect.x + rect.w, rect.y + rect.h],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 3).write(UiVertex {
+                            pos: [rect.x, rect.y + rect.h],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+
                         i_ptr.add(i_offset).write(base_vertex);
                         i_ptr.add(i_offset + 1).write(base_vertex + 1);
                         i_ptr.add(i_offset + 2).write(base_vertex + 2);
                         i_ptr.add(i_offset + 3).write(base_vertex);
                         i_ptr.add(i_offset + 4).write(base_vertex + 2);
                         i_ptr.add(i_offset + 5).write(base_vertex + 3);
-                        
+
                         v_offset += 4;
                         i_offset += 6;
                         current_draw_call.index_count += 6;
                     }
-                    DrawCommand::Line { p1, p2, color, thickness } => {
-                        if current_draw_call.descriptor != self.white_descriptor_set && current_draw_call.index_count > 0 {
+                    DrawCommand::Line {
+                        p1,
+                        p2,
+                        color,
+                        thickness,
+                    } => {
+                        if current_draw_call.descriptor != self.white_descriptor_set
+                            && current_draw_call.index_count > 0
+                        {
                             draw_calls.push(current_draw_call);
                             current_draw_call = DrawCall {
                                 index_count: 0,
@@ -450,39 +498,70 @@ impl UiBackend {
                             current_draw_call.descriptor = self.white_descriptor_set;
                             current_draw_call.first_index = i_offset as u32;
                         }
-                        
+
                         let base_vertex = v_offset as u32;
                         let r = color.r as f32 / 255.0;
                         let g = color.g as f32 / 255.0;
                         let b = color.b as f32 / 255.0;
                         let a = color.a as f32 / 255.0;
                         let c = [r * a, g * a, b * a, a];
-                        
+
                         let dir = [p2.x - p1.x, p2.y - p1.y];
-                        let len = (dir[0]*dir[0] + dir[1]*dir[1]).sqrt();
-                        let norm = if len > 0.0 { [dir[0]/len, dir[1]/len] } else { [1.0, 0.0] };
+                        let len = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt();
+                        let norm = if len > 0.0 {
+                            [dir[0] / len, dir[1] / len]
+                        } else {
+                            [1.0, 0.0]
+                        };
                         let perp = [-norm[1], norm[0]];
                         let t = *thickness * 0.5;
-                        
-                        v_ptr.add(v_offset).write(UiVertex { pos: [p1.x + perp[0]*t, p1.y + perp[1]*t], uv: [0.0, 0.0], color: c });
-                        v_ptr.add(v_offset + 1).write(UiVertex { pos: [p2.x + perp[0]*t, p2.y + perp[1]*t], uv: [0.0, 0.0], color: c });
-                        v_ptr.add(v_offset + 2).write(UiVertex { pos: [p2.x - perp[0]*t, p2.y - perp[1]*t], uv: [0.0, 0.0], color: c });
-                        v_ptr.add(v_offset + 3).write(UiVertex { pos: [p1.x - perp[0]*t, p1.y - perp[1]*t], uv: [0.0, 0.0], color: c });
-                        
+
+                        v_ptr.add(v_offset).write(UiVertex {
+                            pos: [p1.x + perp[0] * t, p1.y + perp[1] * t],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 1).write(UiVertex {
+                            pos: [p2.x + perp[0] * t, p2.y + perp[1] * t],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 2).write(UiVertex {
+                            pos: [p2.x - perp[0] * t, p2.y - perp[1] * t],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 3).write(UiVertex {
+                            pos: [p1.x - perp[0] * t, p1.y - perp[1] * t],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+
                         i_ptr.add(i_offset).write(base_vertex);
                         i_ptr.add(i_offset + 1).write(base_vertex + 1);
                         i_ptr.add(i_offset + 2).write(base_vertex + 2);
                         i_ptr.add(i_offset + 3).write(base_vertex);
                         i_ptr.add(i_offset + 4).write(base_vertex + 2);
                         i_ptr.add(i_offset + 5).write(base_vertex + 3);
-                        
+
                         v_offset += 4;
                         i_offset += 6;
                         current_draw_call.index_count += 6;
                     }
-                    DrawCommand::Image { rect, uv_min, uv_max, color, texture_id } => {
-                        let desc = self.user_descriptor_sets.get(*texture_id as usize).and_then(|x| *x).unwrap_or(self.white_descriptor_set);
-                        if current_draw_call.descriptor != desc && current_draw_call.index_count > 0 {
+                    DrawCommand::Image {
+                        rect,
+                        uv_min,
+                        uv_max,
+                        color,
+                        texture_id,
+                    } => {
+                        let desc = self
+                            .user_descriptor_sets
+                            .get(*texture_id as usize)
+                            .and_then(|x| *x)
+                            .unwrap_or(self.white_descriptor_set);
+                        if current_draw_call.descriptor != desc && current_draw_call.index_count > 0
+                        {
                             draw_calls.push(current_draw_call);
                             current_draw_call = DrawCall {
                                 index_count: 0,
@@ -493,32 +572,55 @@ impl UiBackend {
                             current_draw_call.descriptor = desc;
                             current_draw_call.first_index = i_offset as u32;
                         }
-                        
+
                         let base_vertex = v_offset as u32;
                         let r = color.r as f32 / 255.0;
                         let g = color.g as f32 / 255.0;
                         let b = color.b as f32 / 255.0;
                         let a = color.a as f32 / 255.0;
                         let c = [r * a, g * a, b * a, a];
-                        
-                        v_ptr.add(v_offset).write(UiVertex { pos: [rect.x, rect.y], uv: [uv_min.x, uv_min.y], color: c });
-                        v_ptr.add(v_offset + 1).write(UiVertex { pos: [rect.x + rect.w, rect.y], uv: [uv_max.x, uv_min.y], color: c });
-                        v_ptr.add(v_offset + 2).write(UiVertex { pos: [rect.x + rect.w, rect.y + rect.h], uv: [uv_max.x, uv_max.y], color: c });
-                        v_ptr.add(v_offset + 3).write(UiVertex { pos: [rect.x, rect.y + rect.h], uv: [uv_min.x, uv_max.y], color: c });
-                        
+
+                        v_ptr.add(v_offset).write(UiVertex {
+                            pos: [rect.x, rect.y],
+                            uv: [uv_min.x, uv_min.y],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 1).write(UiVertex {
+                            pos: [rect.x + rect.w, rect.y],
+                            uv: [uv_max.x, uv_min.y],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 2).write(UiVertex {
+                            pos: [rect.x + rect.w, rect.y + rect.h],
+                            uv: [uv_max.x, uv_max.y],
+                            color: c,
+                        });
+                        v_ptr.add(v_offset + 3).write(UiVertex {
+                            pos: [rect.x, rect.y + rect.h],
+                            uv: [uv_min.x, uv_max.y],
+                            color: c,
+                        });
+
                         i_ptr.add(i_offset).write(base_vertex);
                         i_ptr.add(i_offset + 1).write(base_vertex + 1);
                         i_ptr.add(i_offset + 2).write(base_vertex + 2);
                         i_ptr.add(i_offset + 3).write(base_vertex);
                         i_ptr.add(i_offset + 4).write(base_vertex + 2);
                         i_ptr.add(i_offset + 5).write(base_vertex + 3);
-                        
+
                         v_offset += 4;
                         i_offset += 6;
                         current_draw_call.index_count += 6;
                     }
-                    DrawCommand::Text { pos, text, color, font_size } => {
-                        if current_draw_call.descriptor != self.font_descriptor_set && current_draw_call.index_count > 0 {
+                    DrawCommand::Text {
+                        pos,
+                        text,
+                        color,
+                        font_size,
+                    } => {
+                        if current_draw_call.descriptor != self.font_descriptor_set
+                            && current_draw_call.index_count > 0
+                        {
                             draw_calls.push(current_draw_call);
                             current_draw_call = DrawCall {
                                 index_count: 0,
@@ -529,43 +631,63 @@ impl UiBackend {
                             current_draw_call.descriptor = self.font_descriptor_set;
                             current_draw_call.first_index = i_offset as u32;
                         }
-                        
+
                         let r = color.r as f32 / 255.0;
                         let g = color.g as f32 / 255.0;
                         let b = color.b as f32 / 255.0;
                         let a = color.a as f32 / 255.0;
                         let c = [r * a, g * a, b * a, a];
-                        
+
                         let scale = *font_size / font.line_height;
                         let mut cur_x = pos.x;
                         let cur_y = pos.y;
-                        
+
                         for ch in text.chars() {
-                            let idx = if ch as usize >= 32 && (ch as usize) < 127 { ch as usize } else { 32 };
+                            let idx = if ch as usize >= 32 && (ch as usize) < 127 {
+                                ch as usize
+                            } else {
+                                32
+                            };
                             let gi = &font.glyphs[idx];
-                            
+
                             let px = cur_x + gi.offset_x * scale;
                             let py = cur_y + gi.offset_y * scale;
                             let pw = gi.size_x * scale;
                             let ph = gi.size_y * scale;
-                            
+
                             let base_vertex = v_offset as u32;
-                            v_ptr.add(v_offset).write(UiVertex { pos: [px, py], uv: [gi.u_min, gi.v_min], color: c });
-                            v_ptr.add(v_offset + 1).write(UiVertex { pos: [px + pw, py], uv: [gi.u_max, gi.v_min], color: c });
-                            v_ptr.add(v_offset + 2).write(UiVertex { pos: [px + pw, py + ph], uv: [gi.u_max, gi.v_max], color: c });
-                            v_ptr.add(v_offset + 3).write(UiVertex { pos: [px, py + ph], uv: [gi.u_min, gi.v_max], color: c });
-                            
+                            v_ptr.add(v_offset).write(UiVertex {
+                                pos: [px, py],
+                                uv: [gi.u_min, gi.v_min],
+                                color: c,
+                            });
+                            v_ptr.add(v_offset + 1).write(UiVertex {
+                                pos: [px + pw, py],
+                                uv: [gi.u_max, gi.v_min],
+                                color: c,
+                            });
+                            v_ptr.add(v_offset + 2).write(UiVertex {
+                                pos: [px + pw, py + ph],
+                                uv: [gi.u_max, gi.v_max],
+                                color: c,
+                            });
+                            v_ptr.add(v_offset + 3).write(UiVertex {
+                                pos: [px, py + ph],
+                                uv: [gi.u_min, gi.v_max],
+                                color: c,
+                            });
+
                             i_ptr.add(i_offset).write(base_vertex);
                             i_ptr.add(i_offset + 1).write(base_vertex + 1);
                             i_ptr.add(i_offset + 2).write(base_vertex + 2);
                             i_ptr.add(i_offset + 3).write(base_vertex);
                             i_ptr.add(i_offset + 4).write(base_vertex + 2);
                             i_ptr.add(i_offset + 5).write(base_vertex + 3);
-                            
+
                             v_offset += 4;
                             i_offset += 6;
                             current_draw_call.index_count += 6;
-                            
+
                             cur_x += gi.advance * scale;
                         }
                     }
@@ -597,10 +719,8 @@ impl UiBackend {
             );
 
             let pc = [window_width as f32, window_height as f32];
-            let pc_bytes: &[u8] = std::slice::from_raw_parts(
-                pc.as_ptr() as *const u8,
-                std::mem::size_of_val(&pc),
-            );
+            let pc_bytes: &[u8] =
+                std::slice::from_raw_parts(pc.as_ptr() as *const u8, std::mem::size_of_val(&pc));
             vulkan.device.cmd_push_constants(
                 command_buffer,
                 self.pipeline_layout,
@@ -617,11 +737,16 @@ impl UiBackend {
                 min_depth: 0.0,
                 max_depth: 1.0,
             };
-            vulkan.device.cmd_set_viewport(command_buffer, 0, &[viewport]);
-            
+            vulkan
+                .device
+                .cmd_set_viewport(command_buffer, 0, &[viewport]);
+
             let scissor = vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: vk::Extent2D { width: window_width, height: window_height },
+                extent: vk::Extent2D {
+                    width: window_width,
+                    height: window_height,
+                },
             };
             vulkan.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
 
@@ -660,10 +785,16 @@ impl UiBackend {
             if let Some(mut t) = self.white_texture.take() {
                 t.shutdown(vulkan);
             }
-            vulkan.device.destroy_descriptor_pool(self.descriptor_pool, None);
-            vulkan.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             vulkan.device.destroy_pipeline(self.pipeline, None);
-            vulkan.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            vulkan
+                .device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
         }
     }
 }

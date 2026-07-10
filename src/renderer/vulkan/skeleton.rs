@@ -171,12 +171,10 @@ impl TransformTRS {
 }
 
 /// A pose of the skeleton containing a TRS for each bone.
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SkeletonPose {
     pub bones: crate::containers::FixedArray<TransformTRS, MAX_BONES>,
 }
-
 
 impl SkeletonPose {
     pub fn new(bone_count: usize) -> Self {
@@ -191,7 +189,9 @@ impl SkeletonPose {
         out_pose.bones.clear();
         for i in 0..a.bones.len() {
             if i < b.bones.len() {
-                out_pose.bones.push(TransformTRS::blend(&a.bones[i], &b.bones[i], weight));
+                out_pose
+                    .bones
+                    .push(TransformTRS::blend(&a.bones[i], &b.bones[i], weight));
             } else {
                 out_pose.bones.push(a.bones[i]); // Fallback
             }
@@ -222,12 +222,7 @@ impl AnimationClip {
     /// Sample the clip at a given time `t` (in seconds), producing a local-space
     /// TRS pose for each bone. `bone_count` is the total number of bones
     /// in the skeleton; channels without data at this bone default to identity.
-    pub fn sample_pose(
-        &self,
-        t: f32,
-        bone_count: usize,
-        out_pose: &mut SkeletonPose,
-    ) {
+    pub fn sample_pose(&self, t: f32, bone_count: usize, out_pose: &mut SkeletonPose) {
         out_pose.bones.clear();
         for _ in 0..bone_count {
             out_pose.bones.push(TransformTRS::default());
@@ -238,7 +233,11 @@ impl AnimationClip {
             let rotation = Self::sample_quat(&channel.rotation_keys, t);
             let scale = Self::sample_vec3(&channel.scale_keys, t);
 
-            out_pose.bones[channel.bone_index] = TransformTRS { translation, rotation, scale };
+            out_pose.bones[channel.bone_index] = TransformTRS {
+                translation,
+                rotation,
+                scale,
+            };
         }
     }
 

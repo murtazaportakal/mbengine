@@ -22,17 +22,19 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     uvec3 _padding;
 } ubo;
 
-layout(push_constant) uniform PushConstants {
-    mat4 world;
-    float metallic;
-    float roughness;
-    vec2 padding;
-    vec4 color;
-} pc;
+layout(location = 4) in vec4 fragColor;
+layout(location = 5) in float fragMetallic;
+layout(location = 6) in float fragRoughness;
+layout(location = 7) flat in uint fragTextureIndex;
+layout(location = 8) flat in uint fragNormalTextureIndex;
+layout(location = 9) flat in uint fragMRTextureIndex;
+layout(location = 10) flat in uint fragEmissiveTextureIndex;
 
-layout(set = 1, binding = 0) uniform sampler2D texSampler;
+#extension GL_EXT_nonuniform_qualifier : enable
+layout(set = 1, binding = 0) uniform sampler2D textures[];
 layout(set = 0, binding = 1) uniform sampler2D envSampler;
 layout(set = 0, binding = 2) uniform sampler2D shadowMap;
+layout(set = 0, binding = 4) uniform sampler2D ssaoMap;
 
 vec2 sampleEquirectangular(vec3 v) {
     vec2 uv = vec2(atan(v.z, v.x), asin(v.y));
@@ -41,25 +43,33 @@ vec2 sampleEquirectangular(vec3 v) {
     return uv;
 }
 
-// ACES tonemapping moved to post_process.frag
+mat3 computeTBN(vec3 normal, vec3 pos, vec2 uv) {
+    vec3 dp1 = dFdx(pos);
+    vec3 dp2 = dFdy(pos);
+    vec2 duv1 = dFdx(uv);
+    vec2 duv2 = dFdy(uv);
+    
+    vec3 dp2perp = cross(dp2, normal);
+    vec3 dp1perp = cross(normal, dp1);
+    
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    
+    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+    return mat3(T * invmax, B * invmax, normal);
+}
 
 float ShadowCalculation(vec4 fragPosLightSpace, vec3 N, vec3 L) {
-    // perform perspective divide
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
-    // transform to [0,1] range (Vulkan Z is already [0,1], XY is [-1,1])
     projCoords.xy = projCoords.xy * 0.5 + 0.5;
     
-    // keep the shadow at 0.0 when outside the far_plane region of the light's frustum.
     if(projCoords.z > 1.0)
         return 0.0;
         
     float closestDepth = texture(shadowMap, projCoords.xy).r; 
     float currentDepth = projCoords.z;
-    
-    // calculate bias (based on depth map resolution and slope)
     float bias = max(0.005 * (1.0 - dot(N, L)), 0.0005);
     
-    // PCF
     float shadow = 0.0;
     vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
     for(int x = -1; x <= 1; ++x) {
@@ -69,7 +79,6 @@ float ShadowCalculation(vec4 fragPosLightSpace, vec3 N, vec3 L) {
         }    
     }
     shadow /= 9.0;
-    
     return shadow;
 }
 
@@ -80,21 +89,17 @@ float DistributionGGX(vec3 N, vec3 H, float roughness) {
     float a2 = a*a;
     float NdotH = max(dot(N, H), 0.0);
     float NdotH2 = NdotH*NdotH;
-
     float num = a2;
     float denom = (NdotH2 * (a2 - 1.0) + 1.0);
     denom = PI * denom * denom;
-
     return num / max(denom, 0.0000001);
 }
 
 float GeometrySchlickGGX(float NdotV, float roughness) {
     float r = (roughness + 1.0);
     float k = (r*r) / 8.0;
-
     float num = NdotV;
     float denom = NdotV * (1.0 - k) + k;
-
     return num / denom;
 }
 
@@ -103,7 +108,6 @@ float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
     float NdotL = max(dot(N, L), 0.0);
     float ggx2 = GeometrySchlickGGX(NdotV, roughness);
     float ggx1 = GeometrySchlickGGX(NdotL, roughness);
-
     return ggx1 * ggx2;
 }
 
@@ -112,15 +116,31 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 }
 
 void main() {
-    vec4 texColor = texture(texSampler, fragUV);
-    vec3 baseColor = pow(pc.color.rgb, vec3(2.2));
+    vec4 texColor = texture(textures[nonuniformEXT(fragTextureIndex)], fragUV);
+    vec3 baseColor = pow(fragColor.rgb, vec3(2.2));
     vec3 albedo = pow(texColor.rgb, vec3(2.2)) * baseColor;
+    
+    float metallic = fragMetallic;
+    float roughness = fragRoughness;
+    if (fragMRTextureIndex != 0) {
+        vec4 mrSample = texture(textures[nonuniformEXT(fragMRTextureIndex)], fragUV);
+        // GLTF specifies: B is metallic, G is roughness
+        roughness = mrSample.g * fragRoughness;
+        metallic = mrSample.b * fragMetallic;
+    }
 
     vec3 N = normalize(fragNormal);
+    if (fragNormalTextureIndex != 0) {
+        mat3 tbn = computeTBN(N, fragPos, fragUV);
+        vec3 normalSample = texture(textures[nonuniformEXT(fragNormalTextureIndex)], fragUV).rgb;
+        normalSample = normalize(normalSample * 2.0 - 1.0);
+        N = normalize(tbn * normalSample);
+    }
+    
     vec3 V = normalize(ubo.cameraPos.xyz - fragPos);
 
     vec3 F0 = vec3(0.04); 
-    F0 = mix(F0, albedo, pc.metallic);
+    F0 = mix(F0, albedo, metallic);
     
     vec3 Lo = vec3(0.0);
     
@@ -130,8 +150,8 @@ void main() {
         vec3 H = normalize(V + L);
         vec3 radiance = ubo.lightColor.rgb;
         
-        float NDF = DistributionGGX(N, H, pc.roughness);   
-        float G   = GeometrySmith(N, V, L, pc.roughness);    
+        float NDF = DistributionGGX(N, H, roughness);   
+        float G   = GeometrySmith(N, V, L, roughness);    
         vec3 F    = fresnelSchlick(max(dot(H, V), 0.0), F0);
         
         vec3 numerator    = NDF * G * F;
@@ -140,7 +160,7 @@ void main() {
         
         vec3 kS = F;
         vec3 kD = vec3(1.0) - kS;
-        kD *= 1.0 - pc.metallic;
+        kD *= 1.0 - metallic;
         
         float NdotL = max(dot(N, L), 0.0);
         float shadow = ShadowCalculation(fragPosLightSpace, N, L);
@@ -156,8 +176,8 @@ void main() {
         float attenuation = 1.0 / (distance * distance);
         vec3 radiance = ubo.pointLights[i].color.rgb * ubo.pointLights[i].color.w * attenuation;
         
-        float NDF = DistributionGGX(N, H, pc.roughness);   
-        float G   = GeometrySmith(N, V, L, pc.roughness);    
+        float NDF = DistributionGGX(N, H, roughness);   
+        float G   = GeometrySmith(N, V, L, roughness);    
         vec3 F    = fresnelSchlick(max(dot(H, V), 0.0), F0);
         
         vec3 numerator    = NDF * G * F;
@@ -166,7 +186,7 @@ void main() {
         
         vec3 kS = F;
         vec3 kD = vec3(1.0) - kS;
-        kD *= 1.0 - pc.metallic;
+        kD *= 1.0 - metallic;
         
         float NdotL = max(dot(N, L), 0.0);
         Lo += (kD * albedo / PI + specular) * radiance * NdotL;
@@ -175,28 +195,34 @@ void main() {
     // Ambient IBL
     vec3 R = reflect(-V, N);
     
-    // Approximate Irradiance by sampling the highest LOD (most blurry)
     vec2 irradianceUV = sampleEquirectangular(N);
-    vec3 irradiance = textureLod(envSampler, irradianceUV, 10.0).rgb; // Hardcoded high LOD
-    irradiance = pow(irradiance, vec3(2.2)) * 2.0; // Convert to linear and boost
+    vec3 irradiance = textureLod(envSampler, irradianceUV, 10.0).rgb;
+    irradiance = pow(irradiance, vec3(2.2)) * 2.0;
     vec3 diffuseIBL = irradiance * albedo;
     
-    // Approximate Prefiltered Specular
     const float MAX_REFLECTION_LOD = 8.0;
     vec2 prefilteredUV = sampleEquirectangular(R);
-    vec3 prefilteredColor = textureLod(envSampler, prefilteredUV, pc.roughness * MAX_REFLECTION_LOD).rgb;
-    prefilteredColor = pow(prefilteredColor, vec3(2.2)) * 2.0; // Convert to linear and boost
+    vec3 prefilteredColor = textureLod(envSampler, prefilteredUV, roughness * MAX_REFLECTION_LOD).rgb;
+    prefilteredColor = pow(prefilteredColor, vec3(2.2)) * 2.0;
     
-    // Approximate BRDF LUT
-    vec2 brdfApprox = vec2(F0.x, 1.0 - pc.roughness); // simplistic approximation
+    vec2 brdfApprox = vec2(F0.x, 1.0 - roughness);
     vec3 specularIBL = prefilteredColor * (F0 * brdfApprox.x + brdfApprox.y);
     
     vec3 kS_ambient = fresnelSchlick(max(dot(N, V), 0.0), F0);
     vec3 kD_ambient = vec3(1.0) - kS_ambient;
-    kD_ambient *= 1.0 - pc.metallic;
+    kD_ambient *= 1.0 - metallic;
 
-    vec3 ambient = (kD_ambient * diffuseIBL) + specularIBL;
-    vec3 color = ambient + Lo;
+    vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(ssaoMap, 0));
+    float ssao = texture(ssaoMap, screenUV).r;
+
+    vec3 ambient = ((kD_ambient * diffuseIBL) + specularIBL) * ssao;
+    
+    vec3 emissive = vec3(0.0);
+    if (fragEmissiveTextureIndex != 0) {
+        emissive = pow(texture(textures[nonuniformEXT(fragEmissiveTextureIndex)], fragUV).rgb, vec3(2.2));
+    }
+    
+    vec3 color = ambient + Lo + emissive;
     
     outColor = vec4(color, texColor.a);
 }

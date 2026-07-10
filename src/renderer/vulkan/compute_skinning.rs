@@ -32,6 +32,7 @@ impl SkinningInstance {
         pipeline: &ComputeSkinningPipeline,
         descriptor_pool: vk::DescriptorPool,
         source_vertex_buffer: vk::Buffer,
+        vertex_offset: u64,
         vertex_count: u32,
     ) -> Option<Self> {
         // Bone matrix buffer (MAX_BONES * 64 bytes per Mat4)
@@ -74,7 +75,7 @@ impl SkinningInstance {
 
         let input_info = vk::DescriptorBufferInfo::default()
             .buffer(source_vertex_buffer)
-            .offset(0)
+            .offset(vertex_offset)
             .range(skinned_buffer_size);
 
         let output_info = vk::DescriptorBufferInfo::default()

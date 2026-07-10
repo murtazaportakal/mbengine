@@ -176,7 +176,7 @@ impl EntityManager {
             if count >= buffer.len() {
                 break;
             }
-            
+
             // Check if this index is in the recycle queue
             let mut is_recycled = false;
             if self.recycle_count > 0 {

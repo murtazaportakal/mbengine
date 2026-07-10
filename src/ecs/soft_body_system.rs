@@ -14,7 +14,7 @@ impl SoftBodySystem {
         vulkan: &VulkanDevice,
     ) {
         let mut colliders = Vec::new();
-        
+
         // Extract all sphere colliders from physics system
         for (_, collider) in physics.collider_set.iter() {
             if let Some(sphere) = collider.shape().as_ball() {
@@ -25,7 +25,7 @@ impl SoftBodySystem {
                 });
             }
         }
-        
+
         // Also add custom scene colliders if we want (e.g. falling cube could be approximated as a sphere for cloth).
         // Since we only handle spheres for now, we'll just approximate boxes as spheres based on their bounds.
         for (_, collider) in physics.collider_set.iter() {
@@ -45,7 +45,13 @@ impl SoftBodySystem {
             cloth_pipeline.colliders_buffer.upload(vulkan, &colliders);
         } else {
             // Upload an empty array to clear previous frame's colliders
-            cloth_pipeline.colliders_buffer.upload(vulkan, &[SphereCollider { pos: [0.0; 3], radius: 0.0 }]);
+            cloth_pipeline.colliders_buffer.upload(
+                vulkan,
+                &[SphereCollider {
+                    pos: [0.0; 3],
+                    radius: 0.0,
+                }],
+            );
         }
     }
 }

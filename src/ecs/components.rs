@@ -46,19 +46,29 @@ impl ReflectComponent for TransformComponent {
     fn name() -> &'static str {
         "Transform"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         let mut changed = false;
         changed |= ui.drag_float("Position X", &mut self.position.x);
         changed |= ui.drag_float("Position Y", &mut self.position.y);
         changed |= ui.drag_float("Position Z", &mut self.position.z);
-        
+
         changed |= ui.drag_float("Rotation X", &mut self.rotation.x);
         changed |= ui.drag_float("Rotation Y", &mut self.rotation.y);
         changed |= ui.drag_float("Rotation Z", &mut self.rotation.z);
-        
+
         changed |= ui.drag_float("Scale X", &mut self.scale.x);
         changed |= ui.drag_float("Scale Y", &mut self.scale.y);
         changed |= ui.drag_float("Scale Z", &mut self.scale.z);
@@ -97,10 +107,20 @@ impl ReflectComponent for RenderComponent {
     fn name() -> &'static str {
         "Render"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         let mut changed = false;
         changed |= ui.checkbox("Visible", &mut self.visible);
         changed |= ui.drag_float("Metallic", &mut self.metallic);
@@ -137,10 +157,20 @@ impl ReflectComponent for CameraComponent {
     fn name() -> &'static str {
         "Camera"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         let mut changed = false;
         changed |= ui.drag_float("FOV", &mut self.fov);
         changed |= ui.drag_float("Near", &mut self.near);
@@ -183,10 +213,20 @@ impl ReflectComponent for PointLightComponent {
     fn name() -> &'static str {
         "Point Light"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         let mut changed = false;
         changed |= ui.drag_float("Color R", &mut self.color.x);
         changed |= ui.drag_float("Color G", &mut self.color.y);
@@ -206,10 +246,20 @@ impl ReflectComponent for HierarchyComponent {
     fn name() -> &'static str {
         "Hierarchy"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         if let Some(parent) = self.parent {
             use core::fmt::Write;
             let mut label = crate::containers::FixedString::<128>::new();
@@ -231,12 +281,22 @@ impl ReflectComponent for RigidBodyComponent {
     fn name() -> &'static str {
         "Rigid Body"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, physics: &mut crate::physics::PhysicsSystem) {
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        physics: &mut crate::physics::PhysicsSystem,
+    ) {
         let rb = rapier3d::prelude::RigidBodyBuilder::dynamic().build();
         let handle = physics.rigid_body_set.insert(rb);
-        unsafe { world.add_component(entity, Self { handle }); }
+        unsafe {
+            world.add_component(entity, Self { handle });
+        }
     }
-    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        ui: &mut crate::ui::UiContext,
+        physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         let mut changed = false;
         if let Some(rb) = physics.rigid_body_set.get_mut(self.handle) {
             let mut lin_damp = rb.linear_damping();
@@ -263,18 +323,32 @@ impl ReflectComponent for ColliderComponent {
     fn name() -> &'static str {
         "Collider"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, physics: &mut crate::physics::PhysicsSystem) {
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        physics: &mut crate::physics::PhysicsSystem,
+    ) {
         let collider = rapier3d::prelude::ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
         let arrays = world.get_component_array::<RigidBodyComponent>();
         let handle = if arrays.has(entity) {
             let rb_comp = unsafe { arrays.get(entity) };
-            physics.collider_set.insert_with_parent(collider, rb_comp.handle, &mut physics.rigid_body_set)
+            physics.collider_set.insert_with_parent(
+                collider,
+                rb_comp.handle,
+                &mut physics.rigid_body_set,
+            )
         } else {
             physics.collider_set.insert(collider)
         };
-        unsafe { world.add_component(entity, Self { handle }); }
+        unsafe {
+            world.add_component(entity, Self { handle });
+        }
     }
-    fn draw_inspector(&mut self, ui: &mut crate::ui::UiContext, physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        ui: &mut crate::ui::UiContext,
+        physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         let mut changed = false;
         if let Some(col) = physics.collider_set.get_mut(self.handle) {
             let mut friction = col.friction();
@@ -305,10 +379,20 @@ impl ReflectComponent for AudioListenerComponent {
     fn name() -> &'static str {
         "Audio Listener"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        _ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         false
     }
 }
@@ -340,10 +424,20 @@ impl ReflectComponent for AudioEmitterComponent {
     fn name() -> &'static str {
         "Audio Emitter"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        _ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         false
     }
 }
@@ -370,10 +464,20 @@ impl ReflectComponent for SkeletonComponent {
     fn name() -> &'static str {
         "Skeleton"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        _ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         false
     }
 }
@@ -405,12 +509,12 @@ pub struct AnimatorComponent {
     pub state: AnimationState,
     /// Current playback time in seconds for the primary state.
     pub current_time: f32,
-    
+
     /// Target state if currently in a transition.
     pub target_state: Option<AnimationState>,
     /// Playback time for the target state.
     pub transition_time: f32,
-    
+
     /// Current time in the crossfade.
     pub crossfade_current: f32,
     /// Total duration of the crossfade.
@@ -460,10 +564,20 @@ impl ReflectComponent for AnimatorComponent {
     fn name() -> &'static str {
         "Animator"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        _ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         false
     }
 }
@@ -490,10 +604,20 @@ impl ReflectComponent for ScriptBehaviorComponent {
     fn name() -> &'static str {
         "Script Behavior"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        _ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         false
     }
 }
@@ -526,10 +650,20 @@ impl ReflectComponent for SoftBodyComponent {
     fn name() -> &'static str {
         "Soft Body"
     }
-    fn add_to_entity(entity: crate::ecs::EntityId, world: &mut crate::ecs::World, _physics: &mut crate::physics::PhysicsSystem) {
-        unsafe { world.add_component(entity, Self::default()); }
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe {
+            world.add_component(entity, Self::default());
+        }
     }
-    fn draw_inspector(&mut self, _ui: &mut crate::ui::UiContext, _physics: &mut crate::physics::PhysicsSystem) -> bool {
+    fn draw_inspector(
+        &mut self,
+        _ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
         false
     }
 }

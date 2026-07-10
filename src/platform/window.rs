@@ -120,8 +120,6 @@ impl Window {
                 _ => {}
             }
 
-
-
             unsafe {
                 win32::TranslateMessage(&msg);
                 win32::DispatchMessageA(&msg);

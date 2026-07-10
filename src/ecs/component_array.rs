@@ -128,7 +128,7 @@ impl<T> ComponentArray<T> {
             entity_index < MAX_ENTITIES,
             "ComponentArray::insert: entityIndex out of range."
         );
-        
+
         if *self.sparse.add(entity_index as usize) != INVALID_INDEX {
             let dense_idx = *self.sparse.add(entity_index as usize);
             *self.dense.add(dense_idx as usize) = component;

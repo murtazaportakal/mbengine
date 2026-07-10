@@ -10,10 +10,18 @@ pub struct PostProcessPipeline {
     pub bloom_downsample_pipeline: vk::Pipeline,
     pub bloom_upsample_pipeline: vk::Pipeline,
     pub bloom_descriptor_set_layout: vk::DescriptorSetLayout,
+
+    pub blur_layout: vk::PipelineLayout,
+    pub blur_pipeline: vk::Pipeline,
+    pub blur_descriptor_set_layout: vk::DescriptorSetLayout,
 }
 
 impl PostProcessPipeline {
-    pub fn new(vulkan: &VulkanDevice, surface_format: vk::Format, vfs: &crate::vfs::Vfs) -> Option<Self> {
+    pub fn new(
+        vulkan: &VulkanDevice,
+        surface_format: vk::Format,
+        vfs: &crate::vfs::Vfs,
+    ) -> Option<Self> {
         let vert_code = vfs.read_bytes("shaders/post_process_vert.spv").ok()?;
         let tonemap_frag_code = vfs.read_bytes("shaders/post_process_frag.spv").ok()?;
         let downsample_frag_code = vfs.read_bytes("shaders/bloom_downsample_frag.spv").ok()?;
@@ -244,6 +252,69 @@ impl PostProcessPipeline {
                 .ok()?[0]
         };
 
+        // --- Blur Pipeline ---
+        let blur_frag_code = vfs.read_bytes("shaders/blur_frag.spv").ok()?;
+        let blur_frag_module =
+            crate::renderer::vulkan::Pipeline::create_shader_module(vulkan, &blur_frag_code)?;
+
+        let blur_dsl_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bloom_bindings);
+        let blur_descriptor_set_layout = unsafe {
+            vulkan
+                .device
+                .create_descriptor_set_layout(&blur_dsl_info, None)
+                .ok()?
+        };
+
+        let blur_push_constant_range = vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(16);
+
+        let blur_pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(std::slice::from_ref(&blur_descriptor_set_layout))
+            .push_constant_ranges(std::slice::from_ref(&blur_push_constant_range));
+        let blur_layout = unsafe {
+            vulkan
+                .device
+                .create_pipeline_layout(&blur_pipeline_layout_info, None)
+                .ok()?
+        };
+
+        let blur_frag_stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(blur_frag_module)
+            .name(entry_name);
+        let blur_stages = [vert_stage, blur_frag_stage];
+
+        let blur_pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&blur_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .color_blend_state(&color_blending)
+            .depth_stencil_state(&depth_stencil)
+            .dynamic_state(&dynamic_state_info)
+            .layout(blur_layout)
+            .push_next(&mut bloom_rendering_info); // SDR format for the blur target
+
+        let blur_pipeline = unsafe {
+            vulkan
+                .device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&blur_pipeline_info),
+                    None,
+                )
+                .map_err(|e| e.1)
+                .ok()?[0]
+        };
+
+        unsafe {
+            vulkan.device.destroy_shader_module(blur_frag_module, None);
+        }
+
         unsafe {
             vulkan.device.destroy_shader_module(vert_module, None);
             vulkan
@@ -265,6 +336,9 @@ impl PostProcessPipeline {
             bloom_downsample_pipeline,
             bloom_upsample_pipeline,
             bloom_descriptor_set_layout,
+            blur_layout,
+            blur_pipeline,
+            blur_descriptor_set_layout,
         })
     }
 
@@ -275,9 +349,11 @@ impl PostProcessPipeline {
         vulkan: &'a VulkanDevice,
         offscreen_target: &'a crate::renderer::vulkan::OffscreenTarget,
         sdr_target: &'a crate::renderer::vulkan::OffscreenTarget,
+        _blur_target: &'a crate::renderer::vulkan::OffscreenTarget,
         bloom_target: &'a crate::renderer::vulkan::bloom::BloomTarget,
         tonemap_descriptor_set: vk::DescriptorSet,
         bloom_descriptor_sets: &'a [vk::DescriptorSet],
+        _blur_descriptor_sets: &'a [vk::DescriptorSet],
         bloom_threshold: f32,
     ) {
         #[repr(C)]
@@ -714,6 +790,14 @@ impl PostProcessPipeline {
             vulkan
                 .device
                 .destroy_pipeline_layout(self.bloom_layout, None);
+
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.blur_descriptor_set_layout, None);
+            vulkan.device.destroy_pipeline(self.blur_pipeline, None);
+            vulkan
+                .device
+                .destroy_pipeline_layout(self.blur_layout, None);
         }
     }
 }

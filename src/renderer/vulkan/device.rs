@@ -139,11 +139,21 @@ impl VulkanDevice {
         // Standard features to enable
         let features = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(true)
-            .multi_draw_indirect(true);
+            .multi_draw_indirect(true)
+            .draw_indirect_first_instance(true);
+
+        let mut vulkan12_features = vk::PhysicalDeviceVulkan12Features::default()
+            .draw_indirect_count(true)
+            .shader_sampled_image_array_non_uniform_indexing(true)
+            .descriptor_binding_partially_bound(true)
+            .descriptor_binding_variable_descriptor_count(true)
+            .runtime_descriptor_array(true)
+            .descriptor_binding_sampled_image_update_after_bind(true);
 
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features)
-            .push_next(&mut dynamic_rendering);
+            .push_next(&mut dynamic_rendering)
+            .push_next(&mut vulkan12_features);
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_info))

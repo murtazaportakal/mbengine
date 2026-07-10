@@ -1,6 +1,6 @@
-use rhai::{Engine, Scope, AST};
 use crate::ecs::components::TransformComponent;
 use crate::math::vec::Vec3;
+use rhai::{Engine, Scope, AST};
 
 /// Encapsulates the Rhai engine and provides methods for compiling and executing scripts.
 pub struct ScriptEngine {
@@ -18,17 +18,25 @@ impl ScriptEngine {
         let mut engine = Engine::new();
 
         // 1. Register Math Types
-        engine.register_type_with_name::<Vec3>("Vec3")
+        engine
+            .register_type_with_name::<Vec3>("Vec3")
             .register_fn("vec3", Vec3::new)
             .register_get_set("x", |v: &mut Vec3| v.x, |v: &mut Vec3, val| v.x = val)
             .register_get_set("y", |v: &mut Vec3| v.y, |v: &mut Vec3, val| v.y = val)
             .register_get_set("z", |v: &mut Vec3| v.z, |v: &mut Vec3, val| v.z = val)
-            .register_fn("+", |a: Vec3, b: Vec3| Vec3::new(a.x + b.x, a.y + b.y, a.z + b.z))
-            .register_fn("-", |a: Vec3, b: Vec3| Vec3::new(a.x - b.x, a.y - b.y, a.z - b.z))
-            .register_fn("*", |a: Vec3, scalar: f32| Vec3::new(a.x * scalar, a.y * scalar, a.z * scalar));
+            .register_fn("+", |a: Vec3, b: Vec3| {
+                Vec3::new(a.x + b.x, a.y + b.y, a.z + b.z)
+            })
+            .register_fn("-", |a: Vec3, b: Vec3| {
+                Vec3::new(a.x - b.x, a.y - b.y, a.z - b.z)
+            })
+            .register_fn("*", |a: Vec3, scalar: f32| {
+                Vec3::new(a.x * scalar, a.y * scalar, a.z * scalar)
+            });
 
         // 2. Register Transform Component structure for passing back and forth
-        engine.register_type_with_name::<TransformComponent>("Transform")
+        engine
+            .register_type_with_name::<TransformComponent>("Transform")
             .register_get_set(
                 "position",
                 |t: &mut TransformComponent| t.position,
@@ -62,7 +70,7 @@ impl ScriptEngine {
         let mut scope = Scope::new();
         let result: Result<rhai::Map, Box<rhai::EvalAltResult>> =
             self.engine.call_fn(&mut scope, ast, "init", ());
-        
+
         match result {
             Ok(map) => map,
             Err(e) => {
@@ -83,23 +91,19 @@ impl ScriptEngine {
         dt: f32,
     ) {
         let mut scope = Scope::new();
-        
+
         // Take ownership of the state to avoid cloning the map!
         scope.push_dynamic("state", std::mem::take(state));
         scope.push_dynamic("transform", rhai::Dynamic::from(*transform));
-        
-        let result: Result<(), Box<rhai::EvalAltResult>> = self.engine.call_fn(
-            &mut scope,
-            ast,
-            "update",
-            (dt,),
-        );
+
+        let result: Result<(), Box<rhai::EvalAltResult>> =
+            self.engine.call_fn(&mut scope, ast, "update", (dt,));
 
         // Put the state back into the component
         if let Some(state_ref) = scope.get_mut("state") {
             *state = std::mem::take(state_ref);
         }
-        
+
         // Sync back the transform
         if let Some(new_t) = scope.get_value::<TransformComponent>("transform") {
             *transform = new_t;
@@ -119,13 +123,10 @@ impl ScriptEngine {
     ) {
         let mut scope = Scope::new();
         scope.push_dynamic("state", std::mem::take(state));
-        
-        let result: Result<(), Box<rhai::EvalAltResult>> = self.engine.call_fn(
-            &mut scope,
-            ast,
-            "on_trigger_enter",
-            (other_entity as i64,),
-        );
+
+        let result: Result<(), Box<rhai::EvalAltResult>> =
+            self.engine
+                .call_fn(&mut scope, ast, "on_trigger_enter", (other_entity as i64,));
 
         if let Some(state_ref) = scope.get_mut("state") {
             *state = std::mem::take(state_ref);
@@ -146,13 +147,10 @@ impl ScriptEngine {
     ) {
         let mut scope = Scope::new();
         scope.push_dynamic("state", std::mem::take(state));
-        
-        let result: Result<(), Box<rhai::EvalAltResult>> = self.engine.call_fn(
-            &mut scope,
-            ast,
-            "on_trigger_exit",
-            (other_entity as i64,),
-        );
+
+        let result: Result<(), Box<rhai::EvalAltResult>> =
+            self.engine
+                .call_fn(&mut scope, ast, "on_trigger_exit", (other_entity as i64,));
 
         if let Some(state_ref) = scope.get_mut("state") {
             *state = std::mem::take(state_ref);

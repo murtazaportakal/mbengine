@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{Write, Read};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 fn main() -> std::io::Result<()> {
@@ -15,7 +15,7 @@ fn main() -> std::io::Result<()> {
     out_file.write_all(&1u32.to_le_bytes())?; // Version 1
 
     let dirs_to_pack = vec!["assets", "shaders"]; // Shaders that we use directly
-    
+
     // Collect files
     let mut files_to_pack = Vec::new();
     for dir in dirs_to_pack {
@@ -26,14 +26,14 @@ fn main() -> std::io::Result<()> {
     }
 
     println!("Found {} files to pack.", files_to_pack.len());
-    
+
     // Write Number of Files
     out_file.write_all(&(files_to_pack.len() as u32).to_le_bytes())?;
 
     // TOC requires computing sizes first. We will write a dummy TOC, then file data, then update TOC.
     // Or we can pre-read all files (or get metadata sizes) to compute offsets.
     // Let's compute sizes and offsets first.
-    
+
     // TOC entry size: 2 bytes (len) + string len + 8 bytes (offset) + 8 bytes (size).
     let mut current_offset = 4 + 4 + 4; // Magic + Version + NumFiles
     for (path_str, _path) in &files_to_pack {
@@ -72,7 +72,11 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn collect_files(dir: &Path, files: &mut Vec<(String, PathBuf)>, root: &Path) -> std::io::Result<()> {
+fn collect_files(
+    dir: &Path,
+    files: &mut Vec<(String, PathBuf)>,
+    root: &Path,
+) -> std::io::Result<()> {
     if dir.is_dir() {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
@@ -80,7 +84,11 @@ fn collect_files(dir: &Path, files: &mut Vec<(String, PathBuf)>, root: &Path) ->
             if path.is_dir() {
                 collect_files(&path, files, root)?;
             } else {
-                let relative_path = path.strip_prefix(root).unwrap().to_string_lossy().replace("\\", "/");
+                let relative_path = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace("\\", "/");
                 files.push((relative_path, path));
             }
         }

@@ -41,6 +41,23 @@ pub struct PushConstants {
     pub color: [f32; 4],
 }
 
+/// GPU instance data for Multi-Draw Indirect.
+///
+/// MUST be `#[repr(C, align(16))]` so the Rust layout exactly matches the
+/// GLSL `std430` storage-buffer layout used by `cull.comp`, `shader.vert`,
+/// and `prepass.vert`. Without `align(16)`, the GPU may read misaligned
+/// `mat4` columns, producing garbage transforms or Vulkan validation errors.
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InstanceData {
+    pub world: crate::math::mat4::Mat4, // 64 bytes (offset 0)
+    pub aabb_min: [f32; 4],             // 16 bytes (offset 64)
+    pub aabb_max: [f32; 4],             // 16 bytes (offset 80)
+    pub color: [f32; 4],                // 16 bytes (offset 96)  (r, g, b, albedo_idx_bitcast)
+    pub pbr: [f32; 4], // 16 bytes (offset 112) (metallic, roughness, normal_idx_bitcast, mr_idx_bitcast)
+    pub geometry: [u32; 4], // 16 bytes (offset 128) (index_count, index_offset, vertex_offset, emissive_idx)
+}
+
 pub struct Pipeline {
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
@@ -49,10 +66,16 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn new(vulkan: &VulkanDevice, color_format: vk::Format, vfs: &crate::vfs::Vfs) -> Option<Self> {
+    pub fn new(
+        vulkan: &VulkanDevice,
+        color_format: vk::Format,
+        vfs: &crate::vfs::Vfs,
+        vert_shader: &str,
+        frag_shader: &str,
+    ) -> Option<Self> {
         // Attempt to load shaders from disk. If missing, return None gracefully.
-        let vert_code = vfs.read_bytes("shaders/vert.spv").ok()?;
-        let frag_code = vfs.read_bytes("shaders/frag.spv").ok()?;
+        let vert_code = vfs.read_bytes(vert_shader).ok()?;
+        let frag_code = vfs.read_bytes(frag_shader).ok()?;
 
         let vert_module = Self::create_shader_module(vulkan, &vert_code)?;
         let frag_module = Self::create_shader_module(vulkan, &frag_code)?;
@@ -159,7 +182,7 @@ impl Pipeline {
         let sampler_layout_binding = vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
+            .descriptor_count(1024) // Maximum unbounded array for bindless texturing
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
 
         let env_map_layout_binding = vk::DescriptorSetLayoutBinding::default()
@@ -174,16 +197,28 @@ impl Pipeline {
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
 
+        let instance_layout_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(3)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
+
+        let ssao_map_layout_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(4)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
         let global_bindings = [
             ubo_layout_binding,
             env_map_layout_binding,
             shadow_map_layout_binding,
+            instance_layout_binding,
+            ssao_map_layout_binding,
         ];
-        
-        let material_bindings = [
-            sampler_layout_binding,
-        ];
-        
+
+        let material_bindings = [sampler_layout_binding];
+
         let descriptor_set_layout_info =
             vk::DescriptorSetLayoutCreateInfo::default().bindings(&global_bindings);
 
@@ -194,8 +229,17 @@ impl Pipeline {
                 .ok()?
         };
 
-        let material_descriptor_set_layout_info =
-            vk::DescriptorSetLayoutCreateInfo::default().bindings(&material_bindings);
+        let binding_flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND
+            | vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT
+            | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+
+        let mut binding_flags_info =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+
+        let material_descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .bindings(&material_bindings)
+            .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+            .push_next(&mut binding_flags_info);
 
         let material_descriptor_set_layout = unsafe {
             vulkan
@@ -278,8 +322,12 @@ impl Pipeline {
         unsafe {
             vulkan.device.destroy_pipeline(self.handle, None);
             vulkan.device.destroy_pipeline_layout(self.layout, None);
-            vulkan.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            vulkan.device.destroy_descriptor_set_layout(self.material_descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.material_descriptor_set_layout, None);
         }
     }
 }

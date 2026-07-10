@@ -12,9 +12,10 @@ pub fn process_scripts(
     physics: &crate::physics::PhysicsSystem,
     dt: f32,
 ) {
-    let script_components_mut = unsafe { &mut *world.get_component_array_mut_ptr::<ScriptBehaviorComponent>() };
+    let script_components_mut =
+        unsafe { &mut *world.get_component_array_mut_ptr::<ScriptBehaviorComponent>() };
     let transforms_mut = unsafe { &mut *world.get_component_array_mut_ptr::<TransformComponent>() };
-    
+
     let entities = script_components_mut.dense_entities();
 
     // Process physics trigger events
@@ -30,7 +31,7 @@ pub fn process_scripts(
                 }
             }
         }
-        
+
         // Fire for entity2 if it has a script
         if script_components_mut.has(event.entity2) {
             let script_comp = unsafe { script_components_mut.get_mut(event.entity2) };

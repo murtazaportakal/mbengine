@@ -16,7 +16,11 @@ pub struct Scene {
     pub entities: Vec<SerializedEntity>,
 }
 
-pub fn save_scene(world: &World, registry: &crate::ecs::reflection::ComponentRegistry, file_path: &str) {
+pub fn save_scene(
+    world: &World,
+    registry: &crate::ecs::reflection::ComponentRegistry,
+    file_path: &str,
+) {
     let mut scene = Scene {
         entities: Vec::new(),
     };
@@ -29,7 +33,7 @@ pub fn save_scene(world: &World, registry: &crate::ecs::reflection::ComponentReg
 
     for &entity_index in entities {
         let components_val = registry.serialize_entity(entity_index, world);
-        
+
         // Only save if it has components (it should)
         if let serde_json::Value::Object(ref map) = components_val {
             if !map.is_empty() {
@@ -54,7 +58,11 @@ pub fn save_scene(world: &World, registry: &crate::ecs::reflection::ComponentReg
     }
 }
 
-pub fn load_scene(world: &mut World, registry: &crate::ecs::reflection::ComponentRegistry, file_path: &str) {
+pub fn load_scene(
+    world: &mut World,
+    registry: &crate::ecs::reflection::ComponentRegistry,
+    file_path: &str,
+) {
     if let Ok(mut file) = File::open(file_path) {
         let mut json = String::new();
         if file.read_to_string(&mut json).is_ok() {

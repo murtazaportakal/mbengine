@@ -1,4 +1,3 @@
-use crate::renderer::vulkan::pipeline::GlobalUbo;
 use crate::renderer::vulkan::VulkanDevice;
 use ash::vk;
 
@@ -6,6 +5,7 @@ pub struct ComputeCullPipeline {
     pub layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
     pub descriptor_set_layout: vk::DescriptorSetLayout,
+    pub descriptor_sets: Vec<vk::DescriptorSet>,
 }
 
 impl ComputeCullPipeline {
@@ -27,15 +27,22 @@ impl ComputeCullPipeline {
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-            // MeshletBuffer
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
             // IndirectDrawBuffer
             vk::DescriptorSetLayoutBinding::default()
                 .binding(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            // InstanceBuffer
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(3)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            // DrawCountBuffer — atomic counter holding the number of visible
+            // (compacted) draw commands. Reset to 0 by the CPU each frame.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(4)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
@@ -85,10 +92,14 @@ impl ComputeCullPipeline {
             vulkan.device.destroy_shader_module(comp_module, None);
         }
 
+        // We do NOT allocate the descriptor sets here anymore.
+        // The Application will allocate them using its global descriptor pool.
+
         Some(Self {
             layout,
             pipeline,
             descriptor_set_layout,
+            descriptor_sets: Vec::new(),
         })
     }
 
@@ -96,22 +107,28 @@ impl ComputeCullPipeline {
         &self,
         vulkan: &VulkanDevice,
         ubo_buffer: vk::Buffer,
-        meshlet_buffer: vk::Buffer,
         indirect_buffer: vk::Buffer,
+        instance_buffer: vk::Buffer,
+        draw_count_buffer: vk::Buffer,
         descriptor_set: vk::DescriptorSet,
     ) {
         let ubo_info = vk::DescriptorBufferInfo::default()
             .buffer(ubo_buffer)
             .offset(0)
-            .range(std::mem::size_of::<GlobalUbo>() as vk::DeviceSize);
-
-        let meshlet_info = vk::DescriptorBufferInfo::default()
-            .buffer(meshlet_buffer)
-            .offset(0)
             .range(vk::WHOLE_SIZE);
 
         let indirect_info = vk::DescriptorBufferInfo::default()
             .buffer(indirect_buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
+
+        let instance_info = vk::DescriptorBufferInfo::default()
+            .buffer(instance_buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
+
+        let draw_count_info = vk::DescriptorBufferInfo::default()
+            .buffer(draw_count_buffer)
             .offset(0)
             .range(vk::WHOLE_SIZE);
 
@@ -122,13 +139,6 @@ impl ComputeCullPipeline {
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .buffer_info(std::slice::from_ref(&ubo_info));
 
-        let write_meshlet = vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_set)
-            .dst_binding(1)
-            .dst_array_element(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&meshlet_info));
-
         let write_indirect = vk::WriteDescriptorSet::default()
             .dst_set(descriptor_set)
             .dst_binding(2)
@@ -136,10 +146,25 @@ impl ComputeCullPipeline {
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&indirect_info));
 
+        let write_instance = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(3)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&instance_info));
+
+        let write_draw_count = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(4)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&draw_count_info));
+
         unsafe {
-            vulkan
-                .device
-                .update_descriptor_sets(&[write_ubo, write_meshlet, write_indirect], &[]);
+            vulkan.device.update_descriptor_sets(
+                &[write_ubo, write_indirect, write_instance, write_draw_count],
+                &[],
+            );
         }
     }
 

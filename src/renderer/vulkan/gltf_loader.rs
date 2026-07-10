@@ -12,10 +12,28 @@ use crate::math::vec::{Vec3, Vec4};
 use crate::renderer::vulkan::pipeline::Vertex;
 use crate::renderer::vulkan::skeleton::{AnimationClip, Bone, BoneChannel, Skeleton};
 
+pub struct GltfMaterial {
+    pub base_color_texture: Option<usize>,
+    pub normal_texture: Option<usize>,
+    pub metallic_roughness_texture: Option<usize>,
+    pub emissive_texture: Option<usize>,
+    pub base_color_factor: [f32; 4],
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+}
+
+pub struct GltfImage {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Result of loading a GLTF file.
 pub struct GltfData {
-    /// One entry per mesh primitive: (vertices, indices).
-    pub primitives: Vec<(Vec<Vertex>, Vec<u32>)>,
+    /// One entry per mesh primitive: (vertices, indices, optional_material_index).
+    pub primitives: Vec<(Vec<Vertex>, Vec<u32>, Option<usize>)>,
+    pub materials: Vec<GltfMaterial>,
+    pub images: Vec<GltfImage>,
     /// Skeleton extracted from the first skin, if any.
     pub skeleton: Option<Skeleton>,
     /// All animation clips in the file.
@@ -26,7 +44,66 @@ pub struct GltfData {
 ///
 /// Returns `None` if the file cannot be parsed or contains no mesh data.
 pub fn load_gltf(path: &str) -> Option<GltfData> {
-    let (document, buffers, _images) = gltf::import(path).ok()?;
+    let (document, buffers, gltf_images) = gltf::import(path).ok()?;
+
+    // Extract images
+    let mut images = Vec::new();
+    for img in gltf_images {
+        let mut pixels = img.pixels;
+        // Convert to RGBA8 if needed
+        if img.format == gltf::image::Format::R8G8B8 {
+            let mut rgba = Vec::with_capacity((pixels.len() / 3) * 4);
+            for i in (0..pixels.len()).step_by(3) {
+                rgba.push(pixels[i]);
+                rgba.push(pixels[i + 1]);
+                rgba.push(pixels[i + 2]);
+                rgba.push(255);
+            }
+            pixels = rgba;
+        } else if img.format == gltf::image::Format::R8G8 {
+            let mut rgba = Vec::with_capacity((pixels.len() / 2) * 4);
+            for i in (0..pixels.len()).step_by(2) {
+                rgba.push(pixels[i]);
+                rgba.push(pixels[i + 1]);
+                rgba.push(0);
+                rgba.push(255);
+            }
+            pixels = rgba;
+        } else if img.format == gltf::image::Format::R8 {
+            let mut rgba = Vec::with_capacity(pixels.len() * 4);
+            for i in 0..pixels.len() {
+                rgba.push(pixels[i]);
+                rgba.push(pixels[i]);
+                rgba.push(pixels[i]);
+                rgba.push(255);
+            }
+            pixels = rgba;
+        }
+        images.push(GltfImage {
+            pixels,
+            width: img.width,
+            height: img.height,
+        });
+    }
+
+    // Extract materials
+    let mut materials = Vec::new();
+    for mat in document.materials() {
+        let pbr = mat.pbr_metallic_roughness();
+        materials.push(GltfMaterial {
+            base_color_texture: pbr
+                .base_color_texture()
+                .map(|t| t.texture().source().index()),
+            normal_texture: mat.normal_texture().map(|t| t.texture().source().index()),
+            metallic_roughness_texture: pbr
+                .metallic_roughness_texture()
+                .map(|t| t.texture().source().index()),
+            emissive_texture: mat.emissive_texture().map(|t| t.texture().source().index()),
+            base_color_factor: pbr.base_color_factor(),
+            metallic_factor: pbr.metallic_factor(),
+            roughness_factor: pbr.roughness_factor(),
+        });
+    }
 
     // ── Extract Skeleton ────────────────────────────────────────────────
     let (skeleton, joint_node_to_bone_index) = extract_skeleton(&document, &buffers);
@@ -43,6 +120,8 @@ pub fn load_gltf(path: &str) -> Option<GltfData> {
 
     Some(GltfData {
         primitives,
+        materials,
+        images,
         skeleton,
         clips,
     })
@@ -52,7 +131,7 @@ pub fn load_gltf(path: &str) -> Option<GltfData> {
 fn extract_meshes(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
-) -> Vec<(Vec<Vertex>, Vec<u32>)> {
+) -> Vec<(Vec<Vertex>, Vec<u32>, Option<usize>)> {
     let mut primitives = Vec::new();
 
     for mesh in document.meshes() {
@@ -110,7 +189,9 @@ fn extract_meshes(
                 })
                 .collect();
 
-            primitives.push((vertices, indices));
+            let material_index = primitive.material().index();
+
+            primitives.push((vertices, indices, material_index));
         }
     }
 

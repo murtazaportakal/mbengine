@@ -6,16 +6,35 @@ use crate::ecs::{
 use crate::renderer::vulkan::skeleton::SkeletonPose;
 
 /// Get the maximum duration of a given state for looping/stopping logic.
-fn get_state_duration(state: &AnimationState, skeleton_name: &str, asset_manager: &AssetManager) -> f32 {
+fn get_state_duration(
+    state: &AnimationState,
+    skeleton_name: &str,
+    asset_manager: &AssetManager,
+) -> f32 {
     match state {
         AnimationState::Clip { clip_name } => {
-            if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_name.as_str()) {
+            if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_name.as_str())
+            {
                 clip.duration
-            } else { 0.0 }
+            } else {
+                0.0
+            }
         }
         AnimationState::Blend1D { clip_a, clip_b, .. } => {
-            let dur_a = if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_a.as_str()) { clip.duration } else { 0.0 };
-            let dur_b = if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_b.as_str()) { clip.duration } else { 0.0 };
+            let dur_a = if let Some(clip) =
+                asset_manager.get_animation_clip(skeleton_name, clip_a.as_str())
+            {
+                clip.duration
+            } else {
+                0.0
+            };
+            let dur_b = if let Some(clip) =
+                asset_manager.get_animation_clip(skeleton_name, clip_b.as_str())
+            {
+                clip.duration
+            } else {
+                0.0
+            };
             dur_a.max(dur_b)
         }
     }
@@ -32,23 +51,40 @@ fn sample_state(
 ) {
     match state {
         AnimationState::Clip { clip_name } => {
-            if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_name.as_str()) {
-                let t = if clip.duration > 0.0 { time % clip.duration } else { 0.0 };
+            if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_name.as_str())
+            {
+                let t = if clip.duration > 0.0 {
+                    time % clip.duration
+                } else {
+                    0.0
+                };
                 clip.sample_pose(t, bone_count, out_pose);
             } else {
                 *out_pose = SkeletonPose::new(bone_count);
             }
         }
-        AnimationState::Blend1D { clip_a, clip_b, weight } => {
+        AnimationState::Blend1D {
+            clip_a,
+            clip_b,
+            weight,
+        } => {
             let mut pose_a = SkeletonPose::new(bone_count);
             let mut pose_b = SkeletonPose::new(bone_count);
 
             if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_a.as_str()) {
-                let t = if clip.duration > 0.0 { time % clip.duration } else { 0.0 };
+                let t = if clip.duration > 0.0 {
+                    time % clip.duration
+                } else {
+                    0.0
+                };
                 clip.sample_pose(t, bone_count, &mut pose_a);
             }
             if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_b.as_str()) {
-                let t = if clip.duration > 0.0 { time % clip.duration } else { 0.0 };
+                let t = if clip.duration > 0.0 {
+                    time % clip.duration
+                } else {
+                    0.0
+                };
                 clip.sample_pose(t, bone_count, &mut pose_b);
             }
 
@@ -97,7 +133,7 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
             }
 
             let bone_count = skeleton.bone_count();
-            
+
             // 1. Sample current state
             let mut current_pose = SkeletonPose::new(bone_count);
             sample_state(
@@ -127,8 +163,9 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
                 );
 
                 let mut blended_pose = SkeletonPose::new(bone_count);
-                let blend_weight = (animator.crossfade_current / animator.crossfade_duration).clamp(0.0, 1.0);
-                
+                let blend_weight =
+                    (animator.crossfade_current / animator.crossfade_duration).clamp(0.0, 1.0);
+
                 SkeletonPose::blend(&final_pose, &target_pose, blend_weight, &mut blended_pose);
                 final_pose = blended_pose;
 
@@ -147,8 +184,7 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
             final_pose.to_matrices(&mut local_transforms);
 
             // Compute final bone matrices
-            skeleton
-                .compute_bone_matrices(&local_transforms, &mut skeleton_comp.computed_matrices);
+            skeleton.compute_bone_matrices(&local_transforms, &mut skeleton_comp.computed_matrices);
         }
     }
 }

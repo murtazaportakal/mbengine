@@ -1,9 +1,7 @@
 //! Mesh and Asset Loading.
 
-use crate::renderer::vulkan::buffer::Buffer;
 use crate::renderer::vulkan::pipeline::Vertex;
 use crate::renderer::vulkan::VulkanDevice;
-use ash::vk;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -16,12 +14,11 @@ pub struct MeshletData {
 }
 
 pub struct Mesh {
-    pub vertex_buffer: Buffer,
-    pub index_buffer: Buffer,
+    pub vertex_offset: u32,
+    pub index_offset: u32,
+    pub meshlet_offset: u32,
     pub index_count: u32,
-    pub meshlet_buffer: Buffer,
     pub meshlet_count: u32,
-    pub indirect_buffer: Buffer,
     pub vertex_count: u32,
     pub aabb_min: [f32; 3],
     pub aabb_max: [f32; 3],
@@ -29,11 +26,22 @@ pub struct Mesh {
     pub metallic: f32,
     pub roughness: f32,
     pub diffuse_texture: Option<String>,
+    pub normal_texture: Option<String>,
+    pub mr_texture: Option<String>,
+    pub emissive_texture: Option<String>,
+    pub diffuse_texture_idx: u32,
+    pub normal_texture_idx: u32,
+    pub mr_texture_idx: u32,
+    pub emissive_texture_idx: u32,
 }
 
 impl Mesh {
     /// Loads an .obj file, triangulates, and generates Meshlets via meshopt.
-    pub fn load_models(path: &str, vulkan: &VulkanDevice) -> Option<Vec<Self>> {
+    pub fn load_models(
+        path: &str,
+        vulkan: &VulkanDevice,
+        geometry_pool: &mut crate::renderer::vulkan::GeometryPool,
+    ) -> Option<Vec<Self>> {
         let options = tobj::LoadOptions {
             single_index: true,
             triangulate: true,
@@ -88,7 +96,7 @@ impl Mesh {
             }
 
             let mut vertices = Vec::new();
-            
+
             let mut calculated_normals = Vec::new();
             if mesh.normals.is_empty() {
                 calculated_normals.resize(mesh.positions.len(), 0.0_f32);
@@ -96,20 +104,32 @@ impl Mesh {
                     let i0 = mesh.indices[i] as usize;
                     let i1 = mesh.indices[i + 1] as usize;
                     let i2 = mesh.indices[i + 2] as usize;
-                    
-                    let v0 = [mesh.positions[i0 * 3], mesh.positions[i0 * 3 + 1], mesh.positions[i0 * 3 + 2]];
-                    let v1 = [mesh.positions[i1 * 3], mesh.positions[i1 * 3 + 1], mesh.positions[i1 * 3 + 2]];
-                    let v2 = [mesh.positions[i2 * 3], mesh.positions[i2 * 3 + 1], mesh.positions[i2 * 3 + 2]];
-                    
+
+                    let v0 = [
+                        mesh.positions[i0 * 3],
+                        mesh.positions[i0 * 3 + 1],
+                        mesh.positions[i0 * 3 + 2],
+                    ];
+                    let v1 = [
+                        mesh.positions[i1 * 3],
+                        mesh.positions[i1 * 3 + 1],
+                        mesh.positions[i1 * 3 + 2],
+                    ];
+                    let v2 = [
+                        mesh.positions[i2 * 3],
+                        mesh.positions[i2 * 3 + 1],
+                        mesh.positions[i2 * 3 + 2],
+                    ];
+
                     let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
                     let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-                    
+
                     let cross = [
                         e1[1] * e2[2] - e1[2] * e2[1],
                         e1[2] * e2[0] - e1[0] * e2[2],
                         e1[0] * e2[1] - e1[1] * e2[0],
                     ];
-                    
+
                     for &idx in &[i0, i1, i2] {
                         calculated_normals[idx * 3] += cross[0];
                         calculated_normals[idx * 3 + 1] += cross[1];
@@ -117,10 +137,12 @@ impl Mesh {
                     }
                 }
                 for i in (0..calculated_normals.len()).step_by(3) {
-                    let n = &mut calculated_normals[i..i+3];
-                    let len = (n[0]*n[0] + n[1]*n[1] + n[2]*n[2]).sqrt();
+                    let n = &mut calculated_normals[i..i + 3];
+                    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
                     if len > 0.0 {
-                        n[0] /= len; n[1] /= len; n[2] /= len;
+                        n[0] /= len;
+                        n[1] /= len;
+                        n[2] /= len;
                     } else {
                         n[1] = 1.0;
                     }
@@ -253,35 +275,16 @@ impl Mesh {
                 });
             }
 
-            // Upload to GPU
-            let vertex_buffer =
-                Buffer::new_device_local(vulkan, &vertices, vk::BufferUsageFlags::VERTEX_BUFFER)?;
-
-            let index_buffer = Buffer::new_device_local(
-                vulkan,
-                &global_indices,
-                vk::BufferUsageFlags::INDEX_BUFFER,
-            )?;
-
-            let meshlet_buffer = Buffer::new_device_local(
-                vulkan,
-                &meshlet_data_vec,
-                vk::BufferUsageFlags::STORAGE_BUFFER, // Used by Compute Shader
-            )?;
-
-            let indirect_buffer = Buffer::new_device_local(
-                vulkan,
-                &vec![0u8; meshlet_data_vec.len() * 20], // 5 u32s per command
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
-            )?;
+            // Upload to Geometry Pool
+            let offsets =
+                geometry_pool.append_mesh(vulkan, &vertices, &global_indices, &meshlet_data_vec)?;
 
             loaded_meshes.push(Self {
-                vertex_buffer,
-                index_buffer,
-                index_count: mesh.indices.len() as u32,
-                meshlet_buffer,
+                vertex_offset: offsets.0,
+                index_offset: offsets.1,
+                meshlet_offset: offsets.2,
+                index_count: global_indices.len() as u32,
                 meshlet_count: meshlet_data_vec.len() as u32,
-                indirect_buffer,
                 vertex_count: vertices.len() as u32,
                 aabb_min,
                 aabb_max,
@@ -289,6 +292,13 @@ impl Mesh {
                 metallic,
                 roughness,
                 diffuse_texture,
+                normal_texture: None,
+                mr_texture: None, // obj usually doesn't have MR
+                emissive_texture: None,
+                diffuse_texture_idx: 0,
+                normal_texture_idx: 0,
+                mr_texture_idx: 0,
+                emissive_texture_idx: 0,
             });
         }
 
@@ -299,6 +309,7 @@ impl Mesh {
     /// Skips meshlet generation for simplicity — uses a single draw call.
     pub fn from_gltf_data(
         vulkan: &VulkanDevice,
+        geometry_pool: &mut crate::renderer::vulkan::GeometryPool,
         vertices: &[Vertex],
         indices: &[u32],
     ) -> Option<Self> {
@@ -315,17 +326,8 @@ impl Mesh {
             }
         }
 
-        let vertex_buffer = Buffer::new_device_local(
-            vulkan,
-            vertices,
-            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER,
-        )?;
-
-        let index_buffer =
-            Buffer::new_device_local(vulkan, indices, vk::BufferUsageFlags::INDEX_BUFFER)?;
-
         // Single meshlet covering the entire mesh
-        let meshlet_data = vec![MeshletData {
+        let meshlet_data = vec![crate::renderer::vulkan::mesh::MeshletData {
             center: [0.0; 3],
             radius: f32::MAX,
             index_offset: 0,
@@ -333,22 +335,14 @@ impl Mesh {
             padding: [0; 2],
         }];
 
-        let meshlet_buffer =
-            Buffer::new_device_local(vulkan, &meshlet_data, vk::BufferUsageFlags::STORAGE_BUFFER)?;
-
-        let indirect_buffer = Buffer::new_device_local(
-            vulkan,
-            &[0u8; 20], // Single indirect command (5 u32s)
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
-        )?;
+        let offsets = geometry_pool.append_mesh(vulkan, vertices, indices, &meshlet_data)?;
 
         Some(Self {
-            vertex_buffer,
-            index_buffer,
+            vertex_offset: offsets.0,
+            index_offset: offsets.1,
+            meshlet_offset: offsets.2,
             index_count: indices.len() as u32,
-            meshlet_buffer,
             meshlet_count: 1,
-            indirect_buffer,
             vertex_count: vertices.len() as u32,
             aabb_min,
             aabb_max,
@@ -356,10 +350,23 @@ impl Mesh {
             metallic: 0.0,
             roughness: 0.8,
             diffuse_texture: None,
+            normal_texture: None,
+            mr_texture: None,
+            emissive_texture: None,
+            diffuse_texture_idx: 0,
+            normal_texture_idx: 0,
+            mr_texture_idx: 0,
+            emissive_texture_idx: 0,
         })
     }
 
-    pub fn create_grid(vulkan: &VulkanDevice, width: u32, height: u32, spacing: f32) -> Option<Self> {
+    pub fn create_grid(
+        vulkan: &VulkanDevice,
+        geometry_pool: &mut crate::renderer::vulkan::GeometryPool,
+        width: u32,
+        height: u32,
+        spacing: f32,
+    ) -> Option<Self> {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
 
@@ -374,7 +381,10 @@ impl Mesh {
                     (y as f32 * spacing) - offset_z,
                 ];
                 let normal = [0.0, 1.0, 0.0];
-                let uv = [x as f32 / (width - 1) as f32, y as f32 / (height - 1) as f32];
+                let uv = [
+                    x as f32 / (width - 1) as f32,
+                    y as f32 / (height - 1) as f32,
+                ];
 
                 vertices.push(Vertex {
                     pos,
@@ -412,13 +422,10 @@ impl Mesh {
             }
         }
 
-        Self::from_gltf_data(vulkan, &vertices, &indices)
+        Self::from_gltf_data(vulkan, geometry_pool, &vertices, &indices)
     }
 
-    pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
-        self.vertex_buffer.shutdown(vulkan);
-        self.index_buffer.shutdown(vulkan);
-        self.meshlet_buffer.shutdown(vulkan);
-        self.indirect_buffer.shutdown(vulkan);
+    pub fn shutdown(&mut self, _vulkan: &VulkanDevice) {
+        // Buffers are now managed globally by GeometryPool
     }
 }

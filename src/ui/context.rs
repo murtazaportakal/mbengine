@@ -9,8 +9,12 @@ pub struct UiColor {
 }
 
 impl UiColor {
-    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self { Self { r, g, b, a } }
-    pub const fn rgb(r: u8, g: u8, b: u8) -> Self { Self { r, g, b, a: 255 } }
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b, a: 255 }
+    }
     pub const WHITE: Self = Self::rgb(255, 255, 255);
     pub const BLACK: Self = Self::rgb(0, 0, 0);
 }
@@ -99,7 +103,7 @@ pub enum DrawCommand {
 
 pub struct UiContext {
     pub draw_commands: Vec<DrawCommand>,
-    
+
     // Input state
     pub mouse_pos: Vec2,
     pub last_mouse_pos: Vec2,
@@ -108,10 +112,10 @@ pub struct UiContext {
     pub mouse_pressed: bool,
     pub mouse_released: bool,
     pub mouse_scroll_y: f32,
-    
+
     pub hot_item: u64,
     pub active_item: u64,
-    
+
     // Auto-layout
     pub current_rect: UiRect,
     pub cursor: Vec2,
@@ -147,7 +151,12 @@ impl UiContext {
             mouse_scroll_y: 0.0,
             hot_item: 0,
             active_item: 0,
-            current_rect: UiRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            current_rect: UiRect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
             cursor: Vec2::new(0.0, 0.0),
             is_horizontal: false,
             row_height: 0.0,
@@ -157,7 +166,7 @@ impl UiContext {
 
     pub fn begin_frame(&mut self, mouse_pos: Vec2, mouse_down: bool, scroll_y: f32) {
         self.draw_commands.clear();
-        
+
         let was_down = self.mouse_down;
         self.last_mouse_pos = self.mouse_pos;
         self.mouse_pos = mouse_pos;
@@ -169,7 +178,7 @@ impl UiContext {
         self.mouse_pressed = !was_down && mouse_down;
         self.mouse_released = was_down && !mouse_down;
         self.mouse_scroll_y = scroll_y;
-        
+
         self.hot_item = 0;
     }
 
@@ -180,9 +189,14 @@ impl UiContext {
     }
 
     pub fn add_line(&mut self, p1: Vec2, p2: Vec2, color: UiColor, thickness: f32) {
-        self.draw_commands.push(DrawCommand::Line { p1, p2, color, thickness });
+        self.draw_commands.push(DrawCommand::Line {
+            p1,
+            p2,
+            color,
+            thickness,
+        });
     }
-    
+
     pub fn hash_id(&self, label: &str) -> u64 {
         let mut hash: u64 = 0xcbf29ce484222325;
         for b in label.bytes() {
@@ -191,7 +205,7 @@ impl UiContext {
         }
         hash
     }
-    
+
     pub fn begin_panel(&mut self, _id: u64, rect: UiRect, style: &UiStyle) {
         // Draw Border
         if style.border_width > 0.0 {
@@ -207,7 +221,7 @@ impl UiContext {
         bg_rect.y += style.border_width;
         bg_rect.w -= style.border_width * 2.0;
         bg_rect.h -= style.border_width * 2.0;
-        
+
         self.draw_commands.push(DrawCommand::Quad {
             rect: bg_rect,
             color: style.bg_color,
@@ -295,7 +309,7 @@ impl UiContext {
     pub fn label(&mut self, text: &str) {
         let width = text.len() as f32 * 7.0; // rough approximation for smaller font
         let height = 20.0;
-        
+
         self.draw_commands.push(DrawCommand::Text {
             pos: Vec2::new(self.cursor.x, self.cursor.y + 14.0),
             text: crate::containers::FixedString::<128>::try_from_str(text).unwrap_or_default(),
@@ -309,7 +323,7 @@ impl UiContext {
     pub fn label_color(&mut self, text: &str, color: UiColor) {
         let width = text.len() as f32 * 7.0; // rough approximation for smaller font
         let height = 20.0;
-        
+
         self.draw_commands.push(DrawCommand::Text {
             pos: Vec2::new(self.cursor.x, self.cursor.y + 14.0),
             text: crate::containers::FixedString::<128>::try_from_str(text).unwrap_or_default(),
@@ -352,7 +366,11 @@ impl UiContext {
         self.draw_commands.push(DrawCommand::Text {
             pos: Vec2::new(rect.x + 8.0, rect.y + 14.0),
             text: crate::containers::FixedString::<128>::try_from_str(text).unwrap_or_default(),
-            color: if is_selected { SLATE_ACCENT.text_color } else { SLATE_BASE.text_color },
+            color: if is_selected {
+                SLATE_ACCENT.text_color
+            } else {
+                SLATE_BASE.text_color
+            },
             font_size: 14.0,
         });
 
@@ -383,7 +401,11 @@ impl UiContext {
             if self.active_item == id {
                 bg_color = SLATE_ACCENT.bg_color;
             } else {
-                bg_color = UiColor::rgb(bg_color.r.saturating_add(20), bg_color.g.saturating_add(20), bg_color.b.saturating_add(20));
+                bg_color = UiColor::rgb(
+                    bg_color.r.saturating_add(20),
+                    bg_color.g.saturating_add(20),
+                    bg_color.b.saturating_add(20),
+                );
             }
         }
 
@@ -395,14 +417,14 @@ impl UiContext {
                 rounding: style.rounding,
             });
         }
-        
+
         // Draw bg
         let mut inner_rect = rect;
         inner_rect.x += style.border_width;
         inner_rect.y += style.border_width;
         inner_rect.w -= style.border_width * 2.0;
         inner_rect.h -= style.border_width * 2.0;
-        
+
         self.draw_commands.push(DrawCommand::Quad {
             rect: inner_rect,
             color: bg_color,
@@ -444,7 +466,11 @@ impl UiContext {
             *is_expanded = !*is_expanded;
         }
 
-        let bg_color = if hovered { UiColor::rgb(65, 65, 65) } else { UiColor::rgb(55, 55, 55) };
+        let bg_color = if hovered {
+            UiColor::rgb(65, 65, 65)
+        } else {
+            UiColor::rgb(55, 55, 55)
+        };
 
         self.draw_commands.push(DrawCommand::Quad {
             rect,
@@ -453,7 +479,8 @@ impl UiContext {
         });
 
         let icon = if *is_expanded { "▼" } else { "▶" };
-        let mut text = crate::containers::FixedString::<128>::try_from_str(icon).unwrap_or_default();
+        let mut text =
+            crate::containers::FixedString::<128>::try_from_str(icon).unwrap_or_default();
         text.push_str(" ");
         text.push_str(label);
 
@@ -471,7 +498,7 @@ impl UiContext {
     pub fn drag_float(&mut self, label: &str, value: &mut f32) -> bool {
         use core::fmt::Write;
         let id = self.hash_id(label);
-        
+
         let total_width = self.current_rect.w - 24.0;
         let label_width = total_width * 0.4; // 40% label
         let input_width = total_width * 0.6; // 60% input
@@ -502,12 +529,11 @@ impl UiContext {
         }
 
         let mut changed = false;
-        if self.active_item == id
-            && (self.mouse_delta.x != 0.0 || self.mouse_delta.y != 0.0) {
-                // Dragging right or up increases the value
-                *value += (self.mouse_delta.x - self.mouse_delta.y) * 0.05;
-                changed = true;
-            }
+        if self.active_item == id && (self.mouse_delta.x != 0.0 || self.mouse_delta.y != 0.0) {
+            // Dragging right or up increases the value
+            *value += (self.mouse_delta.x - self.mouse_delta.y) * 0.05;
+            changed = true;
+        }
 
         let mut bg_color = SLATE_INPUT_BG.bg_color;
         if self.hot_item == id || self.active_item == id {
@@ -536,12 +562,12 @@ impl UiContext {
 
     pub fn checkbox(&mut self, label: &str, value: &mut bool) -> bool {
         let id = self.hash_id(label);
-        
+
         let total_width = self.current_rect.w - 24.0;
         let label_width = total_width * 0.4;
         let input_width = total_width * 0.6;
         let height = 20.0;
-        
+
         // Draw left side label
         self.draw_commands.push(DrawCommand::Text {
             pos: Vec2::new(self.cursor.x, self.cursor.y + 14.0),
@@ -627,14 +653,25 @@ impl<'a> PanelBuilder<'a> {
         Self {
             ctx,
             id,
-            rect: UiRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            rect: UiRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
             style: &SLATE_BASE,
         }
     }
-    
-    pub fn rect(mut self, rect: UiRect) -> Self { self.rect = rect; self }
-    pub fn style(mut self, style: &'a UiStyle) -> Self { self.style = style; self }
-    
+
+    pub fn rect(mut self, rect: UiRect) -> Self {
+        self.rect = rect;
+        self
+    }
+    pub fn style(mut self, style: &'a UiStyle) -> Self {
+        self.style = style;
+        self
+    }
+
     pub fn begin(self) {
         self.ctx.begin_panel(self.id, self.rect, self.style);
     }
@@ -656,10 +693,16 @@ impl<'a> ButtonBuilder<'a> {
             style: &SLATE_BASE,
         }
     }
-    
-    pub fn text(mut self, text: &'a str) -> Self { self.text = text; self }
-    pub fn style(mut self, style: &'a UiStyle) -> Self { self.style = style; self }
-    
+
+    pub fn text(mut self, text: &'a str) -> Self {
+        self.text = text;
+        self
+    }
+    pub fn style(mut self, style: &'a UiStyle) -> Self {
+        self.style = style;
+        self
+    }
+
     pub fn build(self) -> bool {
         self.ctx.layout_button(self.id, self.text, self.style)
     }

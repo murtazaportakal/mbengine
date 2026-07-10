@@ -27,23 +27,45 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     uvec3 _padding;
 } ubo;
 
-layout(push_constant) uniform PushConstants {
+struct InstanceData {
     mat4 world;
-    float metallic;
-    float roughness;
-    vec2 padding;
+    vec4 aabbMin;
+    vec4 aabbMax;
     vec4 color;
-} pc;
+    vec4 pbr;
+    uvec4 geometry;
+};
+
+layout(set = 0, binding = 3) readonly buffer InstanceBuffer {
+    InstanceData instances[];
+};
+
+layout(location = 4) out vec4 fragColor;
+layout(location = 5) out float fragMetallic;
+layout(location = 6) out float fragRoughness;
+layout(location = 7) flat out uint fragTextureIndex;
+layout(location = 8) flat out uint fragNormalTextureIndex;
+layout(location = 9) flat out uint fragMRTextureIndex;
+layout(location = 10) flat out uint fragEmissiveTextureIndex;
 
 void main() {
-    vec4 worldPos = pc.world * vec4(inPosition, 1.0);
+    InstanceData inst = instances[gl_InstanceIndex];
+    vec4 worldPos = inst.world * vec4(inPosition, 1.0);
     fragPos = worldPos.xyz;
     
     // Transform normal to world space. 
-    // In a real engine, we'd use inverse(transpose(mat3(pc.world))) if scale is non-uniform.
-    fragNormal = mat3(pc.world) * inNormal;
+    // In a real engine, we'd use inverse(transpose(mat3(inst.world))) if scale is non-uniform.
+    fragNormal = mat3(inst.world) * inNormal;
     fragUV = inUV;
     fragPosLightSpace = ubo.lightSpaceMatrix * worldPos;
+
+    fragColor = vec4(inst.color.rgb, 1.0);
+    fragMetallic = inst.pbr.x;
+    fragRoughness = inst.pbr.y;
+    fragTextureIndex = floatBitsToUint(inst.color.a);
+    fragNormalTextureIndex = floatBitsToUint(inst.pbr.z);
+    fragMRTextureIndex = floatBitsToUint(inst.pbr.w);
+    fragEmissiveTextureIndex = inst.geometry.w;
 
     gl_Position = ubo.viewProj * worldPos;
 }

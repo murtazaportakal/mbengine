@@ -12,6 +12,13 @@ pub struct OffscreenTarget {
     pub depth_image: vk::Image,
     pub depth_memory: vk::DeviceMemory,
     pub depth_view: vk::ImageView,
+    pub normal_image: vk::Image,
+    pub normal_memory: vk::DeviceMemory,
+    pub normal_view: vk::ImageView,
+
+    pub ssao_image: vk::Image,
+    pub ssao_memory: vk::DeviceMemory,
+    pub ssao_view: vk::ImageView,
 
     pub framebuffer: vk::Framebuffer,
     pub sampler: vk::Sampler,
@@ -28,6 +35,10 @@ impl OffscreenTarget {
     ) -> Option<Self> {
         let (color_image, color_memory, color_view) =
             Self::create_color_resources(vulkan, width, height, color_format)?;
+        let (normal_image, normal_memory, normal_view) =
+            Self::create_color_resources(vulkan, width, height, vk::Format::R16G16B16A16_SFLOAT)?;
+        let (ssao_image, ssao_memory, ssao_view) =
+            Self::create_color_resources(vulkan, width, height, vk::Format::R8_UNORM)?;
         let (depth_image, depth_memory, depth_view) =
             Self::create_depth_resources(vulkan, width, height)?;
 
@@ -51,6 +62,12 @@ impl OffscreenTarget {
             color_image,
             color_memory,
             color_view,
+            normal_image,
+            normal_memory,
+            normal_view,
+            ssao_image,
+            ssao_memory,
+            ssao_view,
             depth_image,
             depth_memory,
             depth_view,
@@ -132,7 +149,7 @@ impl OffscreenTarget {
             .format(depth_format)
             .tiling(vk::ImageTiling::OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
             .samples(vk::SampleCountFlags::TYPE_1)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
@@ -175,6 +192,14 @@ impl OffscreenTarget {
             vulkan.device.destroy_image_view(self.color_view, None);
             vulkan.device.destroy_image(self.color_image, None);
             vulkan.device.free_memory(self.color_memory, None);
+
+            vulkan.device.destroy_image_view(self.normal_view, None);
+            vulkan.device.destroy_image(self.normal_image, None);
+            vulkan.device.free_memory(self.normal_memory, None);
+
+            vulkan.device.destroy_image_view(self.ssao_view, None);
+            vulkan.device.destroy_image(self.ssao_image, None);
+            vulkan.device.free_memory(self.ssao_memory, None);
 
             vulkan.device.destroy_image_view(self.depth_view, None);
             vulkan.device.destroy_image(self.depth_image, None);

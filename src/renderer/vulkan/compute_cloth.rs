@@ -48,7 +48,9 @@ impl ClothInstance {
         let vertex_buffer = Buffer::new(
             vulkan,
             vertex_buffer_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::VERTEX_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
@@ -62,7 +64,10 @@ impl ClothInstance {
         )?;
 
         // Allocate descriptor sets
-        let layouts = [pipeline.descriptor_set_layout, pipeline.solve_descriptor_set_layout];
+        let layouts = [
+            pipeline.descriptor_set_layout,
+            pipeline.solve_descriptor_set_layout,
+        ];
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&layouts);
@@ -176,14 +181,13 @@ impl ComputeClothPipeline {
                 .ok()?
         };
 
-        let solve_bindings = [
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        ];
-        let solve_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&solve_bindings);
+        let solve_bindings = [vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)];
+        let solve_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&solve_bindings);
         let solve_descriptor_set_layout = unsafe {
             vulkan
                 .device
@@ -195,7 +199,7 @@ impl ComputeClothPipeline {
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
             .size(std::mem::size_of::<ClothPushConstants>() as u32);
-            
+
         let solve_push_constant_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
@@ -224,8 +228,10 @@ impl ComputeClothPipeline {
         let int_code = vfs.read_bytes("shaders/cloth_integrate.spv").ok()?;
         let solve_code = vfs.read_bytes("shaders/cloth_solve.spv").ok()?;
 
-        let int_module = crate::renderer::vulkan::pipeline::Pipeline::create_shader_module(vulkan, &int_code)?;
-        let solve_module = crate::renderer::vulkan::pipeline::Pipeline::create_shader_module(vulkan, &solve_code)?;
+        let int_module =
+            crate::renderer::vulkan::pipeline::Pipeline::create_shader_module(vulkan, &int_code)?;
+        let solve_module =
+            crate::renderer::vulkan::pipeline::Pipeline::create_shader_module(vulkan, &solve_code)?;
         let entry_name = c"main";
 
         let int_stage = vk::PipelineShaderStageCreateInfo::default()
@@ -241,7 +247,7 @@ impl ComputeClothPipeline {
         let int_info = vk::ComputePipelineCreateInfo::default()
             .stage(int_stage)
             .layout(pipeline_layout);
-            
+
         let solve_info = vk::ComputePipelineCreateInfo::default()
             .stage(solve_stage)
             .layout(solve_pipeline_layout);
@@ -271,12 +277,22 @@ impl ComputeClothPipeline {
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
         unsafe {
-            vulkan.device.destroy_pipeline(self.integrate_pipeline, None);
+            vulkan
+                .device
+                .destroy_pipeline(self.integrate_pipeline, None);
             vulkan.device.destroy_pipeline(self.solve_pipeline, None);
-            vulkan.device.destroy_pipeline_layout(self.pipeline_layout, None);
-            vulkan.device.destroy_pipeline_layout(self.solve_pipeline_layout, None);
-            vulkan.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            vulkan.device.destroy_descriptor_set_layout(self.solve_descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
+            vulkan
+                .device
+                .destroy_pipeline_layout(self.solve_pipeline_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            vulkan
+                .device
+                .destroy_descriptor_set_layout(self.solve_descriptor_set_layout, None);
         }
         self.colliders_buffer.shutdown(vulkan);
     }

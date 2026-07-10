@@ -33,7 +33,7 @@ impl Texture {
             let v = y as f32 / height as f32; // 0.0 top, 1.0 bottom
             for x in 0..width {
                 let u = x as f32 / width as f32; // 0.0 left, 1.0 right
-                
+
                 // Base background gradient: mid grey top, dark grey bottom
                 let mut r = (128.0 - 64.0 * v) as u8;
                 let mut g = (128.0 - 64.0 * v) as u8;
@@ -42,11 +42,15 @@ impl Texture {
                 // Add studio lights (bright white rectangles)
                 // Light 1: Top Left
                 if u > 0.1 && u < 0.3 && v > 0.2 && v < 0.4 {
-                    r = 255; g = 255; b = 255;
+                    r = 255;
+                    g = 255;
+                    b = 255;
                 }
                 // Light 2: Top Right
                 if u > 0.7 && u < 0.9 && v > 0.2 && v < 0.4 {
-                    r = 255; g = 255; b = 255;
+                    r = 255;
+                    g = 255;
+                    b = 255;
                 }
                 // Light 3: Horizon line glow
                 if v > 0.45 && v < 0.5 {
@@ -65,7 +69,6 @@ impl Texture {
 
         Self::from_rgba8(vulkan, width as u32, height as u32, &pixels)
     }
-
 
     /// Generates a procedural 256x256 checkerboard texture.
     pub fn new_checkerboard(vulkan: &VulkanDevice) -> Option<Self> {

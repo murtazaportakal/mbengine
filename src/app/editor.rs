@@ -33,19 +33,19 @@ impl Editor {
         let mut registry = ComponentRegistry::new();
         registry.register::<crate::ecs::TransformComponent>();
         registry.register_serializable::<crate::ecs::TransformComponent>();
-        
+
         registry.register::<crate::ecs::RenderComponent>();
         registry.register_serializable::<crate::ecs::RenderComponent>();
-        
+
         registry.register::<crate::ecs::PointLightComponent>();
         registry.register_serializable::<crate::ecs::PointLightComponent>();
-        
+
         registry.register::<crate::ecs::components::CameraComponent>();
         registry.register_serializable::<crate::ecs::components::CameraComponent>();
-        
+
         registry.register::<crate::ecs::components::HierarchyComponent>();
         registry.register_serializable::<crate::ecs::components::HierarchyComponent>();
-        
+
         registry.register::<crate::ecs::components::RigidBodyComponent>();
         registry.register::<crate::ecs::components::ColliderComponent>();
         registry.register::<crate::ecs::components::AudioEmitterComponent>();
@@ -80,7 +80,12 @@ impl Editor {
         screen_h: f32,
         view: crate::math::mat4::Mat4,
         proj: crate::math::mat4::Mat4,
-    ) -> (Vec<EditorAction>, Option<(u32, u32)>, Option<(f32, f32)>, bool) {
+    ) -> (
+        Vec<EditorAction>,
+        Option<(u32, u32)>,
+        Option<(f32, f32)>,
+        bool,
+    ) {
         let mut actions = Vec::new();
         let mut raycast_request = None;
         let mut viewport_hovered = false;
@@ -92,33 +97,56 @@ impl Editor {
             }
         }
 
-        use crate::ui::context::{SLATE_BASE, SLATE_SECONDARY, UiRect, PanelBuilder, ButtonBuilder};
+        use crate::ui::context::{
+            ButtonBuilder, PanelBuilder, UiRect, SLATE_BASE, SLATE_SECONDARY,
+        };
 
         // 1. Top Bar (Godot style)
-        let top_bar_rect = UiRect { x: 0.0, y: 0.0, w: screen_w, h: 40.0 };
+        let top_bar_rect = UiRect {
+            x: 0.0,
+            y: 0.0,
+            w: screen_w,
+            h: 40.0,
+        };
         PanelBuilder::new(ui_ctx, 1)
             .rect(top_bar_rect)
             .style(&SLATE_SECONDARY)
             .begin();
-            
+
         ui_ctx.begin_horizontal_layout(top_bar_rect);
-        if ButtonBuilder::new(ui_ctx, 2).text("3D Scene").style(&SLATE_BASE).build() {}
-        if ButtonBuilder::new(ui_ctx, 3).text("Script Graph").style(&SLATE_BASE).build() {}
-        if ButtonBuilder::new(ui_ctx, 4).text("Profiler").style(&SLATE_BASE).build() {}
-        if ButtonBuilder::new(ui_ctx, 11).text("Import Model").style(&SLATE_BASE).build() {
+        if ButtonBuilder::new(ui_ctx, 2)
+            .text("3D Scene")
+            .style(&SLATE_BASE)
+            .build()
+        {}
+        if ButtonBuilder::new(ui_ctx, 3)
+            .text("Script Graph")
+            .style(&SLATE_BASE)
+            .build()
+        {}
+        if ButtonBuilder::new(ui_ctx, 4)
+            .text("Profiler")
+            .style(&SLATE_BASE)
+            .build()
+        {}
+        if ButtonBuilder::new(ui_ctx, 11)
+            .text("Import Model")
+            .style(&SLATE_BASE)
+            .build()
+        {
             if let Some(tx) = &self.file_dialog_sender {
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Models", &["obj", "gltf", "glb"])
-                        .pick_file() 
+                        .pick_file()
                     {
                         let _ = tx.send(path.to_string_lossy().to_string());
                     }
                 });
             }
         }
-        
+
         // Push play/pause to the center roughly
         let center_offset = (screen_w / 2.0) - ui_ctx.cursor.x - 40.0;
         if center_offset > 0.0 {
@@ -126,11 +154,19 @@ impl Editor {
         }
 
         if _is_playing {
-            if ButtonBuilder::new(ui_ctx, 5).text("Pause").style(&SLATE_BASE).build() {
+            if ButtonBuilder::new(ui_ctx, 5)
+                .text("Pause")
+                .style(&SLATE_BASE)
+                .build()
+            {
                 actions.push(EditorAction::Pause);
             }
         } else {
-            if ButtonBuilder::new(ui_ctx, 6).text("Play").style(&SLATE_BASE).build() {
+            if ButtonBuilder::new(ui_ctx, 6)
+                .text("Play")
+                .style(&SLATE_BASE)
+                .build()
+            {
                 actions.push(EditorAction::Play);
             }
         }
@@ -139,18 +175,27 @@ impl Editor {
 
         // 2. Left Scene Hierarchy
         let hierarchy_w = 250.0;
-        let hierarchy_rect = UiRect { x: 0.0, y: 40.0, w: hierarchy_w, h: screen_h - 40.0 };
+        let hierarchy_rect = UiRect {
+            x: 0.0,
+            y: 40.0,
+            w: hierarchy_w,
+            h: screen_h - 40.0,
+        };
         PanelBuilder::new(ui_ctx, 7)
             .rect(hierarchy_rect)
             .style(&SLATE_SECONDARY)
             .begin();
-            
+
         ui_ctx.begin_vertical_layout(hierarchy_rect);
         ui_ctx.label("Scene Hierarchy");
         ui_ctx.label_color("RED TEXT TEST", crate::ui::UiColor::rgba(255, 0, 0, 255));
         ui_ctx.label(" ");
-        
-        if ButtonBuilder::new(ui_ctx, 100).text("Create Empty Entity").style(&SLATE_BASE).build() {
+
+        if ButtonBuilder::new(ui_ctx, 100)
+            .text("Create Empty Entity")
+            .style(&SLATE_BASE)
+            .build()
+        {
             actions.push(EditorAction::SpawnEntity);
         }
         ui_ctx.label(" ");
@@ -162,12 +207,16 @@ impl Editor {
         for &entity in alive {
             let mut is_root = true;
             if world.has_component::<crate::ecs::components::HierarchyComponent>(entity) {
-                let parent = unsafe { world.get_component::<crate::ecs::components::HierarchyComponent>(entity).parent };
+                let parent = unsafe {
+                    world
+                        .get_component::<crate::ecs::components::HierarchyComponent>(entity)
+                        .parent
+                };
                 if parent.is_some() {
                     is_root = false;
                 }
             }
-            
+
             if is_root {
                 Self::draw_entity_tree(ui_ctx, entity, selected_entity, world, alive, 0);
             }
@@ -178,12 +227,17 @@ impl Editor {
 
         // 3. Right Inspector (Unity style)
         let inspector_w = 300.0;
-        let inspector_rect = UiRect { x: screen_w - inspector_w, y: 40.0, w: inspector_w, h: screen_h - 40.0 };
+        let inspector_rect = UiRect {
+            x: screen_w - inspector_w,
+            y: 40.0,
+            w: inspector_w,
+            h: screen_h - 40.0,
+        };
         PanelBuilder::new(ui_ctx, 8)
             .rect(inspector_rect)
             .style(&SLATE_SECONDARY)
             .begin();
-            
+
         ui_ctx.begin_vertical_layout(inspector_rect);
         ui_ctx.label("Inspector");
 
@@ -193,29 +247,37 @@ impl Editor {
             let mut label = crate::containers::FixedString::<128>::new();
             let _ = write!(label, "Entity ID: {}", entity_id);
             ui_ctx.label(&label);
-            
+
             ui_ctx.label(" ");
             let mut bloom_exp = true;
             if ui_ctx.collapsing_header("Post Processing", &mut bloom_exp) {
                 ui_ctx.drag_float("Bloom Threshold", _bloom_threshold);
             }
-            
+
             ui_ctx.label(" ");
-            self.registry.draw_entity(entity_id, world, ui_ctx, _physics);
-            
+            self.registry
+                .draw_entity(entity_id, world, ui_ctx, _physics);
+
             ui_ctx.label(" ");
-            if ButtonBuilder::new(ui_ctx, 101).text("Delete Entity").style(&SLATE_BASE).build() {
+            if ButtonBuilder::new(ui_ctx, 101)
+                .text("Delete Entity")
+                .style(&SLATE_BASE)
+                .build()
+            {
                 actions.push(EditorAction::DeleteEntity(entity_id));
             }
             ui_ctx.label(" ");
             ui_ctx.label("--- Add Component ---");
             for comp_name in &self.registry.component_names {
                 // simple buttons for each component
-                if ButtonBuilder::new(ui_ctx, 200 + (comp_name.as_ptr() as u64 % 1000)).text(comp_name).style(&SLATE_BASE).build() {
+                if ButtonBuilder::new(ui_ctx, 200 + (comp_name.as_ptr() as u64 % 1000))
+                    .text(comp_name)
+                    .style(&SLATE_BASE)
+                    .build()
+                {
                     actions.push(EditorAction::AddComponent(entity_id, comp_name.clone()));
                 }
             }
-
         } else {
             ui_ctx.label("No Entity Selected.");
         }
@@ -248,76 +310,141 @@ impl Editor {
 
         let new_viewport_size = Some((viewport_rect.w as u32, viewport_rect.h as u32));
 
-
         // --- 3D GIZMOS ---
         if let Some(entity) = selected_entity {
-            let transforms = world.get_component_array::<crate::ecs::components::TransformComponent>();
+            let transforms =
+                world.get_component_array::<crate::ecs::components::TransformComponent>();
             if transforms.has(*entity) {
                 let transform = unsafe { transforms.get(*entity) };
-                
+
                 // Helper to project 3D to 2D
                 let project = |pos: crate::math::vec::Vec3| -> Option<crate::math::vec::Vec2> {
                     let mut p = crate::math::vec::Vec4::new(pos.x, pos.y, pos.z, 1.0);
                     p = view * p;
                     p = proj * p;
-                    if p.w <= 0.0 { return None; }
+                    if p.w <= 0.0 {
+                        return None;
+                    }
                     let ndc_x = p.x / p.w;
                     let ndc_y = p.y / p.w;
-                    
+
                     let screen_x = viewport_rect.x + (ndc_x * 0.5 + 0.5) * viewport_rect.w;
                     let screen_y = viewport_rect.y + (ndc_y * 0.5 + 0.5) * viewport_rect.h;
                     Some(crate::math::vec::Vec2::new(screen_x, screen_y))
                 };
-                
+
                 let origin_2d = project(transform.position);
-                
+
                 if let Some(o_2d) = origin_2d {
                     // Check if origin_2d is inside the viewport rect
                     if viewport_rect.contains(o_2d) || self.active_gizmo_axis.is_some() {
                         let axis_len = 2.0;
-                        let x_pos = transform.position + crate::math::vec::Vec3::new(axis_len, 0.0, 0.0);
-                        let y_pos = transform.position + crate::math::vec::Vec3::new(0.0, axis_len, 0.0);
-                        let z_pos = transform.position + crate::math::vec::Vec3::new(0.0, 0.0, axis_len);
-                        
+                        let x_pos =
+                            transform.position + crate::math::vec::Vec3::new(axis_len, 0.0, 0.0);
+                        let y_pos =
+                            transform.position + crate::math::vec::Vec3::new(0.0, axis_len, 0.0);
+                        let z_pos =
+                            transform.position + crate::math::vec::Vec3::new(0.0, 0.0, axis_len);
+
                         let x_2d = project(x_pos);
                         let y_2d = project(y_pos);
                         let z_2d = project(z_pos);
-                        
+
                         let mut hovering_axis = None;
-                        
-                        let dist_to_line = |p: crate::math::vec::Vec2, a: crate::math::vec::Vec2, b: crate::math::vec::Vec2| -> f32 {
-                            let l2 = (b.x - a.x)*(b.x - a.x) + (b.y - a.y)*(b.y - a.y);
-                            if l2 == 0.0 { return ((p.x - a.x)*(p.x - a.x) + (p.y - a.y)*(p.y - a.y)).sqrt(); }
+
+                        let dist_to_line = |p: crate::math::vec::Vec2,
+                                            a: crate::math::vec::Vec2,
+                                            b: crate::math::vec::Vec2|
+                         -> f32 {
+                            let l2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
+                            if l2 == 0.0 {
+                                return ((p.x - a.x) * (p.x - a.x) + (p.y - a.y) * (p.y - a.y))
+                                    .sqrt();
+                            }
                             let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
                             let t = t.clamp(0.0, 1.0);
                             let proj_x = a.x + t * (b.x - a.x);
                             let proj_y = a.y + t * (b.y - a.y);
-                            ((p.x - proj_x)*(p.x - proj_x) + (p.y - proj_y)*(p.y - proj_y)).sqrt()
+                            ((p.x - proj_x) * (p.x - proj_x) + (p.y - proj_y) * (p.y - proj_y))
+                                .sqrt()
                         };
-                        
+
                         if let Some(x2) = x_2d {
-                            if dist_to_line(ui_ctx.mouse_pos, o_2d, x2) < 15.0 { hovering_axis = Some(0); }
-                            let c = if hovering_axis == Some(0) || self.active_gizmo_axis == Some(0) { crate::ui::UiColor::rgb(255, 100, 100) } else { crate::ui::UiColor::rgb(200, 50, 50) };
-                            ui_ctx.add_line(o_2d, x2, c, if hovering_axis == Some(0) || self.active_gizmo_axis == Some(0) { 4.0 } else { 2.0 });
+                            if dist_to_line(ui_ctx.mouse_pos, o_2d, x2) < 15.0 {
+                                hovering_axis = Some(0);
+                            }
+                            let c = if hovering_axis == Some(0) || self.active_gizmo_axis == Some(0)
+                            {
+                                crate::ui::UiColor::rgb(255, 100, 100)
+                            } else {
+                                crate::ui::UiColor::rgb(200, 50, 50)
+                            };
+                            ui_ctx.add_line(
+                                o_2d,
+                                x2,
+                                c,
+                                if hovering_axis == Some(0) || self.active_gizmo_axis == Some(0) {
+                                    4.0
+                                } else {
+                                    2.0
+                                },
+                            );
                         }
                         if let Some(y2) = y_2d {
-                            if dist_to_line(ui_ctx.mouse_pos, o_2d, y2) < 15.0 { hovering_axis = Some(1); }
-                            let c = if hovering_axis == Some(1) || self.active_gizmo_axis == Some(1) { crate::ui::UiColor::rgb(100, 255, 100) } else { crate::ui::UiColor::rgb(50, 200, 50) };
-                            ui_ctx.add_line(o_2d, y2, c, if hovering_axis == Some(1) || self.active_gizmo_axis == Some(1) { 4.0 } else { 2.0 });
+                            if dist_to_line(ui_ctx.mouse_pos, o_2d, y2) < 15.0 {
+                                hovering_axis = Some(1);
+                            }
+                            let c = if hovering_axis == Some(1) || self.active_gizmo_axis == Some(1)
+                            {
+                                crate::ui::UiColor::rgb(100, 255, 100)
+                            } else {
+                                crate::ui::UiColor::rgb(50, 200, 50)
+                            };
+                            ui_ctx.add_line(
+                                o_2d,
+                                y2,
+                                c,
+                                if hovering_axis == Some(1) || self.active_gizmo_axis == Some(1) {
+                                    4.0
+                                } else {
+                                    2.0
+                                },
+                            );
                         }
                         if let Some(z2) = z_2d {
-                            if dist_to_line(ui_ctx.mouse_pos, o_2d, z2) < 15.0 { hovering_axis = Some(2); }
-                            let c = if hovering_axis == Some(2) || self.active_gizmo_axis == Some(2) { crate::ui::UiColor::rgb(100, 100, 255) } else { crate::ui::UiColor::rgb(50, 50, 200) };
-                            ui_ctx.add_line(o_2d, z2, c, if hovering_axis == Some(2) || self.active_gizmo_axis == Some(2) { 4.0 } else { 2.0 });
+                            if dist_to_line(ui_ctx.mouse_pos, o_2d, z2) < 15.0 {
+                                hovering_axis = Some(2);
+                            }
+                            let c = if hovering_axis == Some(2) || self.active_gizmo_axis == Some(2)
+                            {
+                                crate::ui::UiColor::rgb(100, 100, 255)
+                            } else {
+                                crate::ui::UiColor::rgb(50, 50, 200)
+                            };
+                            ui_ctx.add_line(
+                                o_2d,
+                                z2,
+                                c,
+                                if hovering_axis == Some(2) || self.active_gizmo_axis == Some(2) {
+                                    4.0
+                                } else {
+                                    2.0
+                                },
+                            );
                         }
-                        
+
                         // Center dot
                         ui_ctx.draw_commands.push(crate::ui::DrawCommand::Quad {
-                            rect: crate::ui::UiRect { x: o_2d.x - 4.0, y: o_2d.y - 4.0, w: 8.0, h: 8.0 },
+                            rect: crate::ui::UiRect {
+                                x: o_2d.x - 4.0,
+                                y: o_2d.y - 4.0,
+                                w: 8.0,
+                                h: 8.0,
+                            },
                             color: crate::ui::UiColor::WHITE,
                             rounding: 4.0,
                         });
-                        
+
                         // Interaction
                         if ui_ctx.mouse_pressed && hovering_axis.is_some() {
                             self.active_gizmo_axis = hovering_axis;
@@ -325,40 +452,79 @@ impl Editor {
                             self.gizmo_drag_start_pos = transform.position;
                             raycast_request = None; // block raycast selection
                         }
-                        
+
                         if !ui_ctx.mouse_down {
                             self.active_gizmo_axis = None;
                         }
-                        
+
                         if let Some(axis) = self.active_gizmo_axis {
                             let delta = crate::math::vec::Vec2::new(
                                 ui_ctx.mouse_pos.x - self.gizmo_drag_start_mouse.x,
                                 ui_ctx.mouse_pos.y - self.gizmo_drag_start_mouse.y,
                             );
-                            
+
                             let sensitivity = 0.02;
                             let mut t_delta = crate::math::vec::Vec3::new(0.0, 0.0, 0.0);
-                            
+
                             if axis == 0 {
-                                let projected_dir = if let Some(x2) = x_2d { crate::math::vec::Vec2::new(x2.x - o_2d.x, x2.y - o_2d.y) } else { crate::math::vec::Vec2::new(1.0, 0.0) };
-                                let len = (projected_dir.x*projected_dir.x + projected_dir.y*projected_dir.y).sqrt();
-                                let norm = if len > 0.0 { crate::math::vec::Vec2::new(projected_dir.x/len, projected_dir.y/len) } else { crate::math::vec::Vec2::new(1.0, 0.0) };
+                                let projected_dir = if let Some(x2) = x_2d {
+                                    crate::math::vec::Vec2::new(x2.x - o_2d.x, x2.y - o_2d.y)
+                                } else {
+                                    crate::math::vec::Vec2::new(1.0, 0.0)
+                                };
+                                let len = (projected_dir.x * projected_dir.x
+                                    + projected_dir.y * projected_dir.y)
+                                    .sqrt();
+                                let norm = if len > 0.0 {
+                                    crate::math::vec::Vec2::new(
+                                        projected_dir.x / len,
+                                        projected_dir.y / len,
+                                    )
+                                } else {
+                                    crate::math::vec::Vec2::new(1.0, 0.0)
+                                };
                                 let move_amt = (delta.x * norm.x + delta.y * norm.y) * sensitivity;
                                 t_delta.x = move_amt;
                             } else if axis == 1 {
-                                let projected_dir = if let Some(y2) = y_2d { crate::math::vec::Vec2::new(y2.x - o_2d.x, y2.y - o_2d.y) } else { crate::math::vec::Vec2::new(0.0, -1.0) };
-                                let len = (projected_dir.x*projected_dir.x + projected_dir.y*projected_dir.y).sqrt();
-                                let norm = if len > 0.0 { crate::math::vec::Vec2::new(projected_dir.x/len, projected_dir.y/len) } else { crate::math::vec::Vec2::new(0.0, -1.0) };
+                                let projected_dir = if let Some(y2) = y_2d {
+                                    crate::math::vec::Vec2::new(y2.x - o_2d.x, y2.y - o_2d.y)
+                                } else {
+                                    crate::math::vec::Vec2::new(0.0, -1.0)
+                                };
+                                let len = (projected_dir.x * projected_dir.x
+                                    + projected_dir.y * projected_dir.y)
+                                    .sqrt();
+                                let norm = if len > 0.0 {
+                                    crate::math::vec::Vec2::new(
+                                        projected_dir.x / len,
+                                        projected_dir.y / len,
+                                    )
+                                } else {
+                                    crate::math::vec::Vec2::new(0.0, -1.0)
+                                };
                                 let move_amt = (delta.x * norm.x + delta.y * norm.y) * sensitivity;
                                 t_delta.y = move_amt;
                             } else if axis == 2 {
-                                let projected_dir = if let Some(z2) = z_2d { crate::math::vec::Vec2::new(z2.x - o_2d.x, z2.y - o_2d.y) } else { crate::math::vec::Vec2::new(1.0, 1.0) };
-                                let len = (projected_dir.x*projected_dir.x + projected_dir.y*projected_dir.y).sqrt();
-                                let norm = if len > 0.0 { crate::math::vec::Vec2::new(projected_dir.x/len, projected_dir.y/len) } else { crate::math::vec::Vec2::new(1.0, 1.0) };
+                                let projected_dir = if let Some(z2) = z_2d {
+                                    crate::math::vec::Vec2::new(z2.x - o_2d.x, z2.y - o_2d.y)
+                                } else {
+                                    crate::math::vec::Vec2::new(1.0, 1.0)
+                                };
+                                let len = (projected_dir.x * projected_dir.x
+                                    + projected_dir.y * projected_dir.y)
+                                    .sqrt();
+                                let norm = if len > 0.0 {
+                                    crate::math::vec::Vec2::new(
+                                        projected_dir.x / len,
+                                        projected_dir.y / len,
+                                    )
+                                } else {
+                                    crate::math::vec::Vec2::new(1.0, 1.0)
+                                };
                                 let move_amt = (delta.x * norm.x + delta.y * norm.y) * sensitivity;
                                 t_delta.z = move_amt;
                             }
-                            
+
                             let new_pos = self.gizmo_drag_start_pos + t_delta;
                             actions.push(EditorAction::TranslateSelected(new_pos));
                             raycast_request = None; // block raycast when dragging
@@ -368,7 +534,12 @@ impl Editor {
             }
         }
 
-        (actions, new_viewport_size, raycast_request, viewport_hovered)
+        (
+            actions,
+            new_viewport_size,
+            raycast_request,
+            viewport_hovered,
+        )
     }
 
     fn draw_entity_tree(
@@ -382,7 +553,7 @@ impl Editor {
         use core::fmt::Write;
 
         let mut label = crate::containers::FixedString::<128>::new();
-        
+
         let mut icon = "[O]";
         if world.has_component::<crate::ecs::components::CameraComponent>(entity) {
             icon = "[C]";
@@ -406,9 +577,20 @@ impl Editor {
 
         for &child in all_alive {
             if world.has_component::<crate::ecs::components::HierarchyComponent>(child) {
-                let child_parent = unsafe { world.get_component::<crate::ecs::components::HierarchyComponent>(child).parent };
+                let child_parent = unsafe {
+                    world
+                        .get_component::<crate::ecs::components::HierarchyComponent>(child)
+                        .parent
+                };
                 if child_parent == Some(entity) {
-                    Self::draw_entity_tree(ui_ctx, child, selected_entity, world, all_alive, depth + 1);
+                    Self::draw_entity_tree(
+                        ui_ctx,
+                        child,
+                        selected_entity,
+                        world,
+                        all_alive,
+                        depth + 1,
+                    );
                 }
             }
         }

@@ -44,17 +44,25 @@ impl Vfs {
 
                     for _ in 0..num_files {
                         let mut u16_buf = [0u8; 2];
-                        if f.read_exact(&mut u16_buf).is_err() { break; }
+                        if f.read_exact(&mut u16_buf).is_err() {
+                            break;
+                        }
                         let path_len = u16::from_le_bytes(u16_buf) as usize;
 
                         let mut path_bytes = vec![0u8; path_len];
-                        if f.read_exact(&mut path_bytes).is_err() { break; }
+                        if f.read_exact(&mut path_bytes).is_err() {
+                            break;
+                        }
                         let path_str = String::from_utf8(path_bytes).unwrap_or_default();
 
                         let mut u64_buf = [0u8; 8];
-                        if f.read_exact(&mut u64_buf).is_err() { break; }
+                        if f.read_exact(&mut u64_buf).is_err() {
+                            break;
+                        }
                         let offset = u64::from_le_bytes(u64_buf);
-                        if f.read_exact(&mut u64_buf).is_err() { break; }
+                        if f.read_exact(&mut u64_buf).is_err() {
+                            break;
+                        }
                         let size = u64::from_le_bytes(u64_buf);
 
                         // Normalize path to use forward slashes so it matches queries
@@ -99,7 +107,8 @@ impl Vfs {
     /// Read an entire file into a string.
     pub fn read_to_string(&self, path: impl AsRef<Path>) -> std::io::Result<String> {
         let bytes = self.read_bytes(path)?;
-        String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        String::from_utf8(bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     /// Resolves a virtual path into a physical path.

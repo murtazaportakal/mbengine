@@ -64,15 +64,23 @@ impl EventHandler for PhysicsEventCollector {
         if let Ok(mut events) = self.raw_events.lock() {
             match event {
                 CollisionEvent::Started(handle1, handle2, _) => {
-                    events.push(RawTriggerEvent { handle1, handle2, started: true });
+                    events.push(RawTriggerEvent {
+                        handle1,
+                        handle2,
+                        started: true,
+                    });
                 }
                 CollisionEvent::Stopped(handle1, handle2, _) => {
-                    events.push(RawTriggerEvent { handle1, handle2, started: false });
+                    events.push(RawTriggerEvent {
+                        handle1,
+                        handle2,
+                        started: false,
+                    });
                 }
             }
         }
     }
-    
+
     fn handle_contact_force_event(
         &self,
         _dt: f32,
@@ -80,7 +88,8 @@ impl EventHandler for PhysicsEventCollector {
         _colliders: &ColliderSet,
         _contact_pair: &ContactPair,
         _total_force_magnitude: f32,
-    ) {}
+    ) {
+    }
 }
 
 pub struct PhysicsSystem {
@@ -154,7 +163,11 @@ impl PhysicsSystem {
             Some(RayCastResult {
                 entity,
                 hit_point: crate::math::vec::Vec3::new(hit_point.x, hit_point.y, hit_point.z),
-                normal: crate::math::vec::Vec3::new(intersection.normal.x, intersection.normal.y, intersection.normal.z),
+                normal: crate::math::vec::Vec3::new(
+                    intersection.normal.x,
+                    intersection.normal.y,
+                    intersection.normal.z,
+                ),
                 toi: intersection.toi,
             })
         } else {
@@ -192,8 +205,16 @@ impl PhysicsSystem {
             Some(SweepTestResult {
                 entity,
                 toi: hit.toi,
-                witness1: crate::math::vec::Vec3::new(hit.witness1.x, hit.witness1.y, hit.witness1.z),
-                witness2: crate::math::vec::Vec3::new(hit.witness2.x, hit.witness2.y, hit.witness2.z),
+                witness1: crate::math::vec::Vec3::new(
+                    hit.witness1.x,
+                    hit.witness1.y,
+                    hit.witness1.z,
+                ),
+                witness2: crate::math::vec::Vec3::new(
+                    hit.witness2.x,
+                    hit.witness2.y,
+                    hit.witness2.z,
+                ),
                 normal1: crate::math::vec::Vec3::new(hit.normal1.x, hit.normal1.y, hit.normal1.z),
                 normal2: crate::math::vec::Vec3::new(hit.normal2.x, hit.normal2.y, hit.normal2.z),
             })
@@ -201,7 +222,6 @@ impl PhysicsSystem {
             None
         }
     }
-
 }
 
 impl System for PhysicsSystem {
@@ -229,7 +249,10 @@ impl System for PhysicsSystem {
         self.trigger_events.clear();
         if let Ok(mut raw_events) = self.event_collector.raw_events.lock() {
             for raw in raw_events.drain(..) {
-                if let (Some(c1), Some(c2)) = (self.collider_set.get(raw.handle1), self.collider_set.get(raw.handle2)) {
+                if let (Some(c1), Some(c2)) = (
+                    self.collider_set.get(raw.handle1),
+                    self.collider_set.get(raw.handle2),
+                ) {
                     self.trigger_events.push(TriggerEvent {
                         entity1: c1.user_data as crate::ecs::EntityId,
                         entity2: c2.user_data as crate::ecs::EntityId,

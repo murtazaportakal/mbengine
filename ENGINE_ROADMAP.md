@@ -1,6 +1,6 @@
 # Custom Game Engine — Architecture & Roadmap
 
-> **Last updated:** 2026-07-06 — P0/P1 Zero-Heap Violations Resolved
+> **Last updated:** 2026-07-10 — V4 GPU-Driven Stabilization & 5-Phase Feature Plan Added
 
 ---
 
@@ -30,6 +30,13 @@ The engine has reached full maturity for its baseline requirements. All V1 and V
 - **Editor UX**: Revamped Egui theme (light gray, sharp corners, distinct dropdown shadows).
 - **Vulkan Fixes**: Corrected Swapchain format selection to strictly prioritize `B8G8R8A8_UNORM` to prevent red/blue channel swaps, and fixed font texture descriptor tracking.
 - **Asynchronous IO**: Offloaded blocking native file dialogs (`rfd`) to background threads to prevent OS 'ghosting' overlays and thread deadlocks.
+
+
+### Post-Processing & Optimization (July 9, 2026)
+- **Gaussian Blur Pipeline**: Implemented a 5-tap linear sampling Gaussian blur utilizing horizontal and vertical ping-pong targets directly integrated into the RenderGraph.
+- **Zero-Heap Geometry Rendering**: Swapped per-frame map_memory on the Instance Buffer to persistent mapping (instance_mapped_ptr) for instant data pushes.
+- **Data-Oriented Texture Lookups**: Eliminated runtime HashMap usage. Texture handles (Albedo, Normal, MR, Emissive) are now directly cached into the flat Mesh ECS component at load time.
+- **Prepass & MDI Restoration**: Restored the Multi-Draw Indirect (MDI) system, combining it seamlessly with a dedicated Depth/Normal Prepass pipeline.
 
 ### Zero-Heap Audit & Philosophy Fixes (July 4, 2026)
 - **Component Type IDs**: Replaced fragile `type_name().contains()` string matching with `TypeId`-based lookup table. Core types (0–11) resolved via compile-time table, immune to module path changes and substring collisions. Published constants (`TRANSFORM_TYPE_ID`, etc.) for direct use.
@@ -152,3 +159,116 @@ Run tests via `cargo test`. Contains 40 tests covering:
 - Mutability safety across the Multithreaded Job System execution graph.
 - Application boot-up, initialization, and hot-reload DLL teardown loops. 
 *(Note: A minor known Vulkan validation leak occurs during teardown in `test_app` solely due to OS `libloading` unload order, not affecting actual runtime).*
+
+---
+
+## V4 Master Plan — GPU-Driven Rendering & Asset Pipeline
+
+> **Status:** Phase 0 in progress (2026-07-10). Do not advance phases until each gate criterion is met.
+
+### Architectural Constraints for V4
+
+These supplement the core constraints above:
+- **No runtime glTF parsing.** All models are pre-cooked offline by `cooker.exe`. Hot path sees only binary blobs.
+- **No CPU readbacks on the hot path.** Counter resets and buffer clears use `vkCmdFillBuffer` (GPU timeline). Zero CPU stalls.
+- **Single cull dispatch per frame.** One GPU `vkCmdDispatch` over all instances, not per-mesh loops.
+
+---
+
+### Phase 0: Stabilize the GPU-Driven Foundation
+
+**Gate:** 10,000 cubes, camera at 200+ FPS (debug), correct frustum culling verified by vanishing draws when turning away.
+
+| Priority | Bug | Fix |
+|---|---|---|
+| **🔴 CRITICAL** | `draw_count_buffer` missing from `Application` struct — compile error | Add `pub draw_count_buffer: Buffer` field; allocate 4-byte `STORAGE_BUFFER \| TRANSFER_DST \| HOST_VISIBLE \| HOST_COHERENT` buffer, initialize to `0u32` |
+| **🔴 CRITICAL** | Atomic draw counter never zeroed each frame — overflow after frame 1 | Insert `cmd_fill_buffer(draw_count_buffer, 0, 4, 0)` + `TRANSFER_WRITE → SHADER_READ_WRITE` barrier before cull dispatch |
+| **🟡 HIGH** | Cull dispatch per-mesh (meshlet_count groups) vs. per-instance intent | Unify into one `dispatch(total_instances.div_ceil(64), 1, 1)` after building InstanceData SSBO |
+| **✅ Done** | `#[repr(C, align(16))]` on `InstanceData` | Already applied in `pipeline.rs:50` |
+| **✅ Done** | Per-frame `map_memory` stall on instance buffer | Already replaced with `instance_mapped` persistent pointer (July 9) |
+
+---
+
+### Phase 1: CLI Asset Cooker (`cooker.exe`)
+
+**Gate:** `cooker.exe asset.gltf` outputs valid `.mesh` + `.mat` binary blobs loadable by the engine.
+
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | `cooker` binary (`src/bin/cooker.rs`) | New standalone Rust binary registered as `[[bin]] name = "cooker"` in Cargo.toml |
+| **P1** | glTF parsing | Use the `gltf` crate (already a dep) — extract positions, normals, UVs, joint IDs, weights, PBR material params |
+| **P1** | `.mesh` binary format | Header + `Vertex[]` + `u32 indices[]` + `MeshletData[]` — layout matches engine structs exactly for zero-copy load |
+| **P1** | `.mat` binary format | Header + PBR scalars + texture file references |
+| **P2** | Meshlet generation | Run `meshopt::build_meshlets` in the cooker, not at runtime |
+| **P2** | Texture compression | Convert PNGs to BC7 block-compressed format for 75% VRAM savings |
+| **P2** | Format versioning | Magic bytes + version u32 in every header so stale files are detected at load time |
+
+---
+
+### Phase 2: Engine VFS Hooks & Prefab System
+
+**Gate:** Drag a `.mesh` file into the editor viewport → entity spawns with correct geometry and material.
+
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | VFS hot-reload for `.mesh`/`.mat` | Update `notify` watcher to watch cooked files instead of raw `.obj` |
+| **P1** | Zero-copy load path | `vfs.read_raw_into_staging()` streams bytes directly into a pre-allocated staging buffer pointer — no intermediate Vec |
+| **P1** | `load_cooked_mesh()` / `load_cooked_material()` | `AssetManager` methods that parse `.mesh`/`.mat` headers and upload to `GeometryPool` |
+| **P1** | Prefab descriptor (`src/ecs/prefab.rs`) | `PrefabAsset { mesh_path, material_path, default_transform }` — serde-serializable scene descriptor |
+| **P2** | Editor file browser | Custom IMGUI panel listing `.mesh`/`.mat`/`.prefab` files from the VFS watch directory |
+| **P2** | Drag-and-drop instantiation | Dragging a cooked asset into the 3D viewport spawns an entity in `component_array.rs` |
+
+---
+
+### Phase 3: Data-Oriented Skeletal Animation (Cooker Path)
+
+**Gate:** Animated glTF character cooked to `.anim`, loaded and skinned entirely on GPU with no CPU bone transforms.
+
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | `.anim` format in cooker | Extract bone weights, inverse bind matrices, keyframe tracks from glTF; output `[AnimHeader][BoneCount][InvBindMat4[]][KeyframeTrack[]]` |
+| **P1** | Cooker-side skeleton baking | Pre-multiply bind matrices, validate bone counts ≤ `MAX_BONES` |
+| **P2** | `AnimationClipHandle` registry | Flat array of loaded clips (no HashMap); index stored in `AnimatorComponent` |
+| **P2** | GPU-only bone update | Keyframe lerp runs in a compute shader; CPU never touches bone matrices per-frame |
+
+*(Core ECS components `SkeletonComponent` + `AnimatorComponent` and `skinning.comp` already exist from V3)*
+
+---
+
+### Phase 4: Logic, Scripting & Lighting
+
+**Gate:** A game script can spawn, query, and destroy entities created in the editor; scene supports 8+ dynamic point lights.
+
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | Script entity name/ID bridge | Entity names registered in a VFS-like flat string table; exposed to Rhai context |
+| **P1** | DLL hot-reload entity persistence | Verify ECS entity IDs survive `game.dll` unload/reload across scenes loaded in editor |
+| **P2** | Forward+ cluster grid | Divide frustum into 3D tiles in compute; assign point lights per tile; sample in `shader.frag` — supports 256+ dynamic lights with O(1) per-fragment cost |
+| **P3** | Deferred lighting (optional) | GBuffer MRT (albedo/normal/PBR) + separate lighting pass — heavier but enables screen-space effects |
+
+---
+
+### Phase 5: Packager & Release Builds
+
+**Gate:** `cargo build --release --features standalone` produces a single `engine.exe` + `data.pak` with no editor code and no loose files.
+
+| Priority | Feature | Description |
+|---|---|---|
+| **P1** | `packer.rs` update | Concatenate `.mesh`, `.mat`, `.anim`, `.spv` files into a single `data.pak` with an offset table |
+| **P1** | `VfsMode::Pak` | VFS reads assets from `data.pak` using the offset table instead of the filesystem |
+| **P1** | Editor feature gate | `#[cfg(feature = "editor")]` wraps all IMGUI, file browser, and hot-reload code |
+| **P2** | `standalone` Cargo feature | `cargo build --release --features standalone` links `game.dll` statically, strips editor, outputs release bundle |
+| **P2** | Cross-compilation configs | `.cargo/config.toml` targets for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` |
+
+---
+
+### V4 Build Commands (Future)
+
+```bash
+cargo build                              # Dev build with editor (engine.exe + game.dll)
+cargo run --bin cooker -- model.gltf     # Cook a glTF model → .mesh + .mat
+cargo run --bin packer                   # Bundle all cooked assets → data.pak
+cargo build --release --features standalone  # Strip editor, produce release bundle
+```
+
+

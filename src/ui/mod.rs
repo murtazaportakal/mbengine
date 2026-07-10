@@ -1,5 +1,5 @@
 pub mod context;
-pub mod layout;
 pub mod font;
+pub mod layout;
 
-pub use context::{UiContext, DrawCommand, UiColor, UiRect};
+pub use context::{DrawCommand, UiColor, UiContext, UiRect};

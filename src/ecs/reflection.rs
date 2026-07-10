@@ -7,7 +7,9 @@ use crate::ui::UiContext;
 pub trait ReflectComponent: 'static {
     fn name() -> &'static str;
     fn draw_inspector(&mut self, ui: &mut UiContext, physics: &mut PhysicsSystem) -> bool;
-    fn add_to_entity(entity: EntityId, world: &mut World, physics: &mut PhysicsSystem) where Self: Sized;
+    fn add_to_entity(entity: EntityId, world: &mut World, physics: &mut PhysicsSystem)
+    where
+        Self: Sized;
 }
 
 type EditorDrawFn = Box<dyn Fn(EntityId, &mut World, &mut UiContext, &mut PhysicsSystem)>;
@@ -46,9 +48,9 @@ impl ComponentRegistry {
         let expanded = std::cell::Cell::new(true);
         let draw_fn = Box::new(
             move |entity: EntityId,
-             world: &mut World,
-             ui: &mut UiContext,
-             physics: &mut PhysicsSystem| {
+                  world: &mut World,
+                  ui: &mut UiContext,
+                  physics: &mut PhysicsSystem| {
                 let mut changed = false;
                 let mut new_pos = crate::math::vec::Vec3::default();
                 let mut new_rot = crate::math::vec::Vec3::default();
@@ -62,7 +64,8 @@ impl ComponentRegistry {
                             changed = comp.draw_inspector(ui, physics);
 
                             if changed
-                                && TypeId::of::<T>() == TypeId::of::<crate::ecs::TransformComponent>()
+                                && TypeId::of::<T>()
+                                    == TypeId::of::<crate::ecs::TransformComponent>()
                             {
                                 let ptr = comp as *const T as *const crate::ecs::TransformComponent;
                                 unsafe {
@@ -75,16 +78,20 @@ impl ComponentRegistry {
                 }
                 expanded.set(is_expanded);
 
-                if changed && TypeId::of::<T>() == TypeId::of::<crate::ecs::components::RenderComponent>() {
+                if changed
+                    && TypeId::of::<T>() == TypeId::of::<crate::ecs::components::RenderComponent>()
+                {
                     let mut render_copy = None;
                     {
-                        let renders = world.get_component_array::<crate::ecs::components::RenderComponent>();
+                        let renders =
+                            world.get_component_array::<crate::ecs::components::RenderComponent>();
                         if renders.has(entity) {
                             render_copy = Some(unsafe { *renders.get(entity) });
                         }
                     }
                     if let Some(r_copy) = render_copy {
-                        let hierarchies = world.get_component_array::<crate::ecs::components::HierarchyComponent>();
+                        let hierarchies = world
+                            .get_component_array::<crate::ecs::components::HierarchyComponent>();
                         let mut target_parent = None;
                         if hierarchies.has(entity) {
                             let hier = unsafe { hierarchies.get(entity) };
@@ -92,7 +99,7 @@ impl ComponentRegistry {
                             // If it doesn't have a parent, it might be the parent itself! So use `entity`.
                             target_parent = Some(hier.parent.unwrap_or(entity));
                         }
-                        
+
                         if let Some(parent) = target_parent {
                             let mut related_to_update = Vec::new();
                             let dense_hier = hierarchies.as_slice();
@@ -102,8 +109,10 @@ impl ComponentRegistry {
                                     related_to_update.push(entities[i]);
                                 }
                             }
-                            
-                            let renders = world.get_component_array_mut::<crate::ecs::components::RenderComponent>();
+
+                            let renders = world
+                                .get_component_array_mut::<crate::ecs::components::RenderComponent>(
+                                );
                             for child in related_to_update {
                                 if child != entity && renders.has(child) {
                                     let child_r = unsafe { renders.get_mut(child) };
@@ -140,15 +149,24 @@ impl ComponentRegistry {
         );
 
         self.draw_fns.insert(type_id, draw_fn);
-        
-        self.add_fns.insert(T::name().to_string(), Box::new(|entity, world, physics| {
-            T::add_to_entity(entity, world, physics);
-        }));
+
+        self.add_fns.insert(
+            T::name().to_string(),
+            Box::new(|entity, world, physics| {
+                T::add_to_entity(entity, world, physics);
+            }),
+        );
         self.component_names.push(T::name().to_string());
         self.component_names.sort();
     }
 
-    pub fn add_component(&self, name: &str, entity: EntityId, world: &mut World, physics: &mut PhysicsSystem) {
+    pub fn add_component(
+        &self,
+        name: &str,
+        entity: EntityId,
+        world: &mut World,
+        physics: &mut PhysicsSystem,
+    ) {
         if let Some(add_fn) = self.add_fns.get(name) {
             add_fn(entity, world, physics);
         }
@@ -166,26 +184,38 @@ impl ComponentRegistry {
         }
     }
 
-    pub fn register_serializable<T: ReflectComponent + serde::Serialize + serde::de::DeserializeOwned>(&mut self) {
+    pub fn register_serializable<
+        T: ReflectComponent + serde::Serialize + serde::de::DeserializeOwned,
+    >(
+        &mut self,
+    ) {
         let type_id = get_component_type_id::<T>();
-        
-        let serialize_fn = Box::new(|entity: EntityId, world: &World, map: &mut serde_json::Map<String, serde_json::Value>| {
-            let arrays = world.get_component_array::<T>();
-            if arrays.has(entity) {
-                let comp = unsafe { arrays.get(entity) };
-                if let Ok(val) = serde_json::to_value(comp) {
-                    map.insert(T::name().to_string(), val);
-                }
-            }
-        });
 
-        let deserialize_fn = Box::new(|entity: EntityId, world: &mut World, val: &serde_json::Value| {
-            if let Some(comp_val) = val.get(T::name()) {
-                if let Ok(comp) = serde_json::from_value::<T>(comp_val.clone()) {
-                    unsafe { world.add_component(entity, comp); }
+        let serialize_fn = Box::new(
+            |entity: EntityId,
+             world: &World,
+             map: &mut serde_json::Map<String, serde_json::Value>| {
+                let arrays = world.get_component_array::<T>();
+                if arrays.has(entity) {
+                    let comp = unsafe { arrays.get(entity) };
+                    if let Ok(val) = serde_json::to_value(comp) {
+                        map.insert(T::name().to_string(), val);
+                    }
                 }
-            }
-        });
+            },
+        );
+
+        let deserialize_fn = Box::new(
+            |entity: EntityId, world: &mut World, val: &serde_json::Value| {
+                if let Some(comp_val) = val.get(T::name()) {
+                    if let Ok(comp) = serde_json::from_value::<T>(comp_val.clone()) {
+                        unsafe {
+                            world.add_component(entity, comp);
+                        }
+                    }
+                }
+            },
+        );
 
         self.serialize_fns.insert(type_id, serialize_fn);
         self.deserialize_fns.insert(type_id, deserialize_fn);

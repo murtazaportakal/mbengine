@@ -13,6 +13,7 @@ fn main() {
     println!("cargo:rerun-if-changed=shaders/skinning.comp");
     println!("cargo:rerun-if-changed=shaders/cloth_integrate.comp");
     println!("cargo:rerun-if-changed=shaders/cloth_solve.comp");
+    println!("cargo:rerun-if-changed=shaders/cull.comp");
     // First try local glslangValidator
     let local_compiler = PathBuf::from("glslang")
         .join("bin")
@@ -153,7 +154,11 @@ fn main() {
 
     // Compile Cloth Integrate Compute Shader
     let mut cloth_int_args = args.clone();
-    cloth_int_args.extend(vec!["shaders/cloth_integrate.comp", "-o", "shaders/cloth_integrate.spv"]);
+    cloth_int_args.extend(vec![
+        "shaders/cloth_integrate.comp",
+        "-o",
+        "shaders/cloth_integrate.spv",
+    ]);
     let cloth_int_status = Command::new(&compiler)
         .args(&cloth_int_args)
         .status()
@@ -165,7 +170,11 @@ fn main() {
 
     // Compile Cloth Solve Compute Shader
     let mut cloth_solve_args = args.clone();
-    cloth_solve_args.extend(vec!["shaders/cloth_solve.comp", "-o", "shaders/cloth_solve.spv"]);
+    cloth_solve_args.extend(vec![
+        "shaders/cloth_solve.comp",
+        "-o",
+        "shaders/cloth_solve.spv",
+    ]);
     let cloth_solve_status = Command::new(&compiler)
         .args(&cloth_solve_args)
         .status()
@@ -173,5 +182,17 @@ fn main() {
 
     if !cloth_solve_status.success() {
         panic!("Failed to compile cloth_solve.comp");
+    }
+
+    // Compile Cull Compute Shader
+    let mut cull_args = args.clone();
+    cull_args.extend(vec!["shaders/cull.comp", "-o", "shaders/cull.spv"]);
+    let cull_status = Command::new(&compiler)
+        .args(&cull_args)
+        .status()
+        .expect("Failed to execute shader compiler for cull.comp");
+
+    if !cull_status.success() {
+        panic!("Failed to compile cull.comp");
     }
 }
