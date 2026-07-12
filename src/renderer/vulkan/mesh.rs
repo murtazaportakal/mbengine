@@ -49,7 +49,13 @@ impl Mesh {
             ignore_lines: true,
         };
 
-        let (models, materials_result) = tobj::load_obj(path, &options).ok()?;
+        let (models, materials_result) = match tobj::load_obj(path, &options) {
+            Ok(result) => result,
+            Err(e) => {
+                crate::log_info!("[OBJ] tobj::load_obj failed for '{}': {:?}", path, e);
+                return None;
+            }
+        };
         let materials = match materials_result {
             Ok(m) => m,
             Err(e) => {
@@ -276,8 +282,13 @@ impl Mesh {
             }
 
             // Upload to Geometry Pool
-            let offsets =
-                geometry_pool.append_mesh(vulkan, &vertices, &global_indices, &meshlet_data_vec)?;
+            let offsets = match geometry_pool.append_mesh(vulkan, &vertices, &global_indices, &meshlet_data_vec) {
+                Some(o) => o,
+                None => {
+                    crate::log_info!("[OBJ] geometry_pool.append_mesh failed (out of space?) for '{}'", path);
+                    return None;
+                }
+            };
 
             loaded_meshes.push(Self {
                 vertex_offset: offsets.0,
@@ -326,10 +337,27 @@ impl Mesh {
             }
         }
 
-        // Single meshlet covering the entire mesh
+        // Single meshlet covering the entire mesh.
+        // Compute a proper bounding sphere from the AABB so the GPU culling
+        // shader can perform correct frustum checks.
+        let meshlet_center = [
+            (aabb_min[0] + aabb_max[0]) * 0.5,
+            (aabb_min[1] + aabb_max[1]) * 0.5,
+            (aabb_min[2] + aabb_max[2]) * 0.5,
+        ];
+        let mut meshlet_radius_sq = 0.0f32;
+        for v in vertices {
+            let dx = v.pos[0] - meshlet_center[0];
+            let dy = v.pos[1] - meshlet_center[1];
+            let dz = v.pos[2] - meshlet_center[2];
+            let dist_sq = dx * dx + dy * dy + dz * dz;
+            if dist_sq > meshlet_radius_sq {
+                meshlet_radius_sq = dist_sq;
+            }
+        }
         let meshlet_data = vec![crate::renderer::vulkan::mesh::MeshletData {
-            center: [0.0; 3],
-            radius: f32::MAX,
+            center: meshlet_center,
+            radius: meshlet_radius_sq.sqrt().max(0.001),
             index_offset: 0,
             triangle_count: indices.len() as u32 / 3,
             padding: [0; 2],

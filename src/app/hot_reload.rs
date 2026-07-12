@@ -68,6 +68,8 @@ impl HotReloader {
                     }
                     Err(e) => eprintln!("[HotReload] Failed to load DLL: {:?}", e),
                 }
+                // Clean up temp file: loaded library holds the handle, the copy can be removed
+                let _ = std::fs::remove_file(&temp_path);
             },
             Err(e) => eprintln!(
                 "[HotReload] Failed to copy DLL from {} to {}: {:?}",

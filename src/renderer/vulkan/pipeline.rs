@@ -203,18 +203,11 @@ impl Pipeline {
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
 
-        let ssao_map_layout_binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(4)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
-
         let global_bindings = [
             ubo_layout_binding,
             env_map_layout_binding,
             shadow_map_layout_binding,
             instance_layout_binding,
-            ssao_map_layout_binding,
         ];
 
         let material_bindings = [sampler_layout_binding];

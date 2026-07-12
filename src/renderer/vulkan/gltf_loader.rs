@@ -71,10 +71,10 @@ pub fn load_gltf(path: &str) -> Option<GltfData> {
             pixels = rgba;
         } else if img.format == gltf::image::Format::R8 {
             let mut rgba = Vec::with_capacity(pixels.len() * 4);
-            for i in 0..pixels.len() {
-                rgba.push(pixels[i]);
-                rgba.push(pixels[i]);
-                rgba.push(pixels[i]);
+            for &p in &pixels {
+                rgba.push(p);
+                rgba.push(p);
+                rgba.push(p);
                 rgba.push(255);
             }
             pixels = rgba;

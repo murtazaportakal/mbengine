@@ -124,13 +124,20 @@ impl System for AudioSystem {
                         let path_str = emitter.asset_path.as_str();
                         if let Ok(bytes) = self.vfs.read_bytes(path_str) {
                             let cursor = std::io::Cursor::new(bytes);
-                            if let Ok(source) = rodio::Decoder::new(cursor) {
-                                if emitter.loop_audio {
-                                    s.append(rodio::Source::repeat_infinite(source));
-                                } else {
-                                    s.append(source);
+                            match rodio::Decoder::new(cursor) {
+                                Ok(source) => {
+                                    if emitter.loop_audio {
+                                        s.append(rodio::Source::repeat_infinite(source));
+                                    } else {
+                                        s.append(source);
+                                    }
+                                }
+                                Err(e) => {
+                                    crate::log_info!("Failed to decode audio '{}': {}", path_str, e);
                                 }
                             }
+                        } else {
+                            crate::log_info!("Failed to read audio file '{}'", path_str);
                         }
 
                         if !emitter.is_playing {

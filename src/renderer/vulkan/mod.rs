@@ -1,3 +1,4 @@
+pub mod backend;
 pub mod bloom;
 pub mod buffer;
 pub mod compute_cloth;
@@ -19,6 +20,7 @@ pub mod swapchain;
 pub mod texture;
 pub mod ui_backend;
 
+pub use backend::RenderBackend;
 pub use bloom::BloomTarget;
 pub use buffer::Buffer;
 pub use device::VulkanDevice;

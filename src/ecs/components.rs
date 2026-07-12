@@ -23,22 +23,49 @@ impl Default for TransformComponent {
 }
 
 impl TransformComponent {
+    /// Builds the full world matrix: T × Rz × Ry × Rx × S
+    ///
+    /// Rotation is applied in extrinsic XYZ order: first around X (pitch),
+    /// then around Y (yaw), then around Z (roll).
     pub fn update_matrix(&mut self) {
-        // Build a translation matrix
+        // Scale matrix
+        let mut sc = Mat4::identity();
+        sc.cols[0].x = self.scale.x;
+        sc.cols[1].y = self.scale.y;
+        sc.cols[2].z = self.scale.z;
+
+        // Rotation around X axis (pitch)
+        let rx = self.rotation.x;
+        let mut rot_x = Mat4::identity();
+        rot_x.cols[1].y = rx.cos();
+        rot_x.cols[1].z = rx.sin();
+        rot_x.cols[2].y = -rx.sin();
+        rot_x.cols[2].z = rx.cos();
+
+        // Rotation around Y axis (yaw)
+        let ry = self.rotation.y;
+        let mut rot_y = Mat4::identity();
+        rot_y.cols[0].x = ry.cos();
+        rot_y.cols[0].z = -ry.sin();
+        rot_y.cols[2].x = ry.sin();
+        rot_y.cols[2].z = ry.cos();
+
+        // Rotation around Z axis (roll)
+        let rz = self.rotation.z;
+        let mut rot_z = Mat4::identity();
+        rot_z.cols[0].x = rz.cos();
+        rot_z.cols[0].y = rz.sin();
+        rot_z.cols[1].x = -rz.sin();
+        rot_z.cols[1].y = rz.cos();
+
+        // Translation matrix
         let mut t = Mat4::identity();
         t.cols[3].x = self.position.x;
         t.cols[3].y = self.position.y;
         t.cols[3].z = self.position.z;
 
-        // Build scale matrix
-        let mut s = Mat4::identity();
-        s.cols[0].x = self.scale.x;
-        s.cols[1].y = self.scale.y;
-        s.cols[2].z = self.scale.z;
-
-        // Skip rotation for now to keep it simple, or implement basic XYZ rotation.
-        // For our test, T * S is enough.
-        self.matrix = t * s;
+        // T × Rz × Ry × Rx × S
+        self.matrix = t * rot_z * rot_y * rot_x * sc;
     }
 }
 
@@ -385,7 +412,7 @@ impl ReflectComponent for AudioListenerComponent {
         _physics: &mut crate::physics::PhysicsSystem,
     ) {
         unsafe {
-            world.add_component(entity, Self::default());
+            world.add_component(entity, Self);
         }
     }
     fn draw_inspector(

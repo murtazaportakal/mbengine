@@ -57,8 +57,8 @@ impl ComponentRegistry {
                 let mut is_expanded = expanded.get();
                 {
                     let arrays = world.get_component_array_mut::<T>();
-                    if arrays.has(entity) {
-                        if ui.collapsing_header(T::name(), &mut is_expanded) {
+                    if arrays.has(entity)
+                        && ui.collapsing_header(T::name(), &mut is_expanded) {
                             let comp = unsafe { arrays.get_mut(entity) };
                             // Simplified inspector
                             changed = comp.draw_inspector(ui, physics);
@@ -74,7 +74,6 @@ impl ComponentRegistry {
                                 }
                             }
                         }
-                    }
                 }
                 expanded.set(is_expanded);
 

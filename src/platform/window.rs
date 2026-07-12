@@ -21,7 +21,7 @@ impl Window {
         unsafe {
             let hinstance = win32::GetModuleHandleA(ptr::null());
 
-            let class_name = b"EngineWindowClass\0".as_ptr();
+            let class_name = c"EngineWindowClass".as_ptr() as *const u8;
             let window_name = format!("{}\0", title);
 
             // Set up the window class

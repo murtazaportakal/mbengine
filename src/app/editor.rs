@@ -114,21 +114,18 @@ impl Editor {
             .begin();
 
         ui_ctx.begin_horizontal_layout(top_bar_rect);
-        if ButtonBuilder::new(ui_ctx, 2)
+        ButtonBuilder::new(ui_ctx, 2)
             .text("3D Scene")
             .style(&SLATE_BASE)
-            .build()
-        {}
-        if ButtonBuilder::new(ui_ctx, 3)
+            .build();
+        ButtonBuilder::new(ui_ctx, 3)
             .text("Script Graph")
             .style(&SLATE_BASE)
-            .build()
-        {}
-        if ButtonBuilder::new(ui_ctx, 4)
+            .build();
+        ButtonBuilder::new(ui_ctx, 4)
             .text("Profiler")
             .style(&SLATE_BASE)
-            .build()
-        {}
+            .build();
         if ButtonBuilder::new(ui_ctx, 11)
             .text("Import Model")
             .style(&SLATE_BASE)

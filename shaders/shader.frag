@@ -34,7 +34,6 @@ layout(location = 10) flat in uint fragEmissiveTextureIndex;
 layout(set = 1, binding = 0) uniform sampler2D textures[];
 layout(set = 0, binding = 1) uniform sampler2D envSampler;
 layout(set = 0, binding = 2) uniform sampler2D shadowMap;
-layout(set = 0, binding = 4) uniform sampler2D ssaoMap;
 
 vec2 sampleEquirectangular(vec3 v) {
     vec2 uv = vec2(atan(v.z, v.x), asin(v.y));
@@ -212,10 +211,8 @@ void main() {
     vec3 kD_ambient = vec3(1.0) - kS_ambient;
     kD_ambient *= 1.0 - metallic;
 
-    vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(ssaoMap, 0));
-    float ssao = texture(ssaoMap, screenUV).r;
-
-    vec3 ambient = ((kD_ambient * diffuseIBL) + specularIBL) * ssao;
+    // SSAO pass not yet implemented — use full ambient
+    vec3 ambient = (kD_ambient * diffuseIBL) + specularIBL;
     
     vec3 emissive = vec3(0.0);
     if (fragEmissiveTextureIndex != 0) {

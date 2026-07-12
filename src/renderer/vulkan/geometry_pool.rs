@@ -4,10 +4,28 @@ use crate::renderer::vulkan::pipeline::Vertex;
 use crate::renderer::vulkan::VulkanDevice;
 use ash::vk;
 
+/// Maximum upload size for a single mesh (256 MB each for vertex/index data
+/// and 64 MB for meshlets).  If a single model exceeds this, it won't fit
+/// in the persistent staging buffers — but at that point you'd need to
+/// rethink the asset pipeline anyway.
+const STAGING_VERTEX_SIZE: u64 = 256 * 1024 * 1024; // 256 MB
+const STAGING_INDEX_SIZE: u64 = 256 * 1024 * 1024; // 256 MB
+const STAGING_MESHLET_SIZE: u64 = 64 * 1024 * 1024; // 64 MB
+
 pub struct GeometryPool {
     pub vertex_buffer: Buffer,
     pub index_buffer: Buffer,
     pub meshlet_buffer: Buffer,
+
+    /// Persistent host-visible staging buffers that live for the pool's
+    /// entire lifetime.  We map/unmap them each time we need to upload,
+    /// but we never destroy them until shutdown().  This completely
+    /// eliminates VUID-vkDestroyBuffer-buffer-00922 validation errors
+    /// because no staging buffer is ever destroyed while a frame command
+    /// buffer might still reference the pool's device-local buffers.
+    pub staging_vertex: Buffer,
+    pub staging_index: Buffer,
+    pub staging_meshlet: Buffer,
 
     pub current_vertex_count: u32,
     pub current_index_count: u32,
@@ -50,10 +68,36 @@ impl GeometryPool {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
+        // Persistent staging buffers — allocated once, never destroyed during
+        // operation.  Mapped/unmapped per upload.
+        let staging_vertex = Buffer::new(
+            vulkan,
+            STAGING_VERTEX_SIZE,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+
+        let staging_index = Buffer::new(
+            vulkan,
+            STAGING_INDEX_SIZE,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+
+        let staging_meshlet = Buffer::new(
+            vulkan,
+            STAGING_MESHLET_SIZE,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+
         Some(Self {
             vertex_buffer,
             index_buffer,
             meshlet_buffer,
+            staging_vertex,
+            staging_index,
+            staging_meshlet,
             current_vertex_count: 0,
             current_index_count: 0,
             current_meshlet_count: 0,
@@ -63,6 +107,11 @@ impl GeometryPool {
         })
     }
 
+    /// Append a mesh to the geometry pool.
+    ///
+    /// Uses persistent staging buffers (mapped/unmapped per call) to
+    /// eliminate vkDestroyBuffer validation errors.  Only a single
+    /// temporary command buffer is allocated/freed from the transfer pool.
     pub fn append_mesh(
         &mut self,
         vulkan: &VulkanDevice,
@@ -82,86 +131,147 @@ impl GeometryPool {
             return None;
         }
 
+        let v_byte_size = (v_count as usize * std::mem::size_of::<Vertex>()) as u64;
+        let i_byte_size = (i_count as usize * std::mem::size_of::<u32>()) as u64;
+        let m_byte_size = (m_count as usize * std::mem::size_of::<MeshletData>()) as u64;
+
+        assert!(
+            v_byte_size <= STAGING_VERTEX_SIZE
+                && i_byte_size <= STAGING_INDEX_SIZE
+                && m_byte_size <= STAGING_MESHLET_SIZE,
+            "Mesh exceeds persistent staging buffer capacity"
+        );
+
         let v_offset = self.current_vertex_count;
         let i_offset = self.current_index_count;
         let m_offset = self.current_meshlet_count;
 
-        // Stage and copy Vertices
+        // --- Upload to persistent staging buffers via map/memcpy/unmap ---
+        // HOST_COHERENT ensures the GPU sees the writes without an explicit
+        // flush.  No staging buffer is ever destroyed here.
+
+        // Vertex staging
         if v_count > 0 {
-            let size = (v_count as usize * std::mem::size_of::<Vertex>()) as u64;
-            if let Some(staging) = Buffer::new(
-                vulkan,
-                size,
-                vk::BufferUsageFlags::TRANSFER_SRC,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ) {
-                staging.upload(vulkan, vertices);
-                self.copy_buffer(
-                    vulkan,
-                    &staging,
-                    &self.vertex_buffer,
-                    size,
-                    0,
-                    (v_offset as usize * std::mem::size_of::<Vertex>()) as u64,
+            let data_size = v_byte_size;
+            let data_ptr = unsafe {
+                vulkan
+                    .device
+                    .map_memory(
+                        self.staging_vertex.memory,
+                        0,
+                        data_size,
+                        vk::MemoryMapFlags::empty(),
+                    )
+                    .unwrap()
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    vertices.as_ptr() as *const u8,
+                    data_ptr as *mut u8,
+                    data_size as usize,
                 );
-                let mut st = staging;
-                st.shutdown(vulkan);
-            } else {
-                crate::log_info!("Failed to create vertex staging buffer!");
-                return None;
+                vulkan.device.unmap_memory(self.staging_vertex.memory);
             }
         }
 
-        // Stage and copy Indices
+        // Index staging
         if i_count > 0 {
-            let size = (i_count as usize * std::mem::size_of::<u32>()) as u64;
-            if let Some(staging) = Buffer::new(
-                vulkan,
-                size,
-                vk::BufferUsageFlags::TRANSFER_SRC,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ) {
-                staging.upload(vulkan, indices);
-                self.copy_buffer(
-                    vulkan,
-                    &staging,
-                    &self.index_buffer,
-                    size,
-                    0,
-                    (i_offset as usize * std::mem::size_of::<u32>()) as u64,
+            let data_size = i_byte_size;
+            let data_ptr = unsafe {
+                vulkan
+                    .device
+                    .map_memory(
+                        self.staging_index.memory,
+                        0,
+                        data_size,
+                        vk::MemoryMapFlags::empty(),
+                    )
+                    .unwrap()
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    indices.as_ptr() as *const u8,
+                    data_ptr as *mut u8,
+                    data_size as usize,
                 );
-                let mut st = staging;
-                st.shutdown(vulkan);
-            } else {
-                crate::log_info!("Failed to create index staging buffer!");
-                return None;
+                vulkan.device.unmap_memory(self.staging_index.memory);
             }
         }
 
-        // Stage and copy Meshlets
+        // Meshlet staging
         if m_count > 0 {
-            let size = (m_count as usize * std::mem::size_of::<MeshletData>()) as u64;
-            if let Some(staging) = Buffer::new(
-                vulkan,
-                size,
-                vk::BufferUsageFlags::TRANSFER_SRC,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ) {
-                staging.upload(vulkan, meshlets);
-                self.copy_buffer(
-                    vulkan,
-                    &staging,
-                    &self.meshlet_buffer,
-                    size,
-                    0,
-                    (m_offset as usize * std::mem::size_of::<MeshletData>()) as u64,
+            let data_size = m_byte_size;
+            let data_ptr = unsafe {
+                vulkan
+                    .device
+                    .map_memory(
+                        self.staging_meshlet.memory,
+                        0,
+                        data_size,
+                        vk::MemoryMapFlags::empty(),
+                    )
+                    .unwrap()
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    meshlets.as_ptr() as *const u8,
+                    data_ptr as *mut u8,
+                    data_size as usize,
                 );
-                let mut st = staging;
-                st.shutdown(vulkan);
-            } else {
-                crate::log_info!("Failed to create meshlet staging buffer!");
-                return None;
+                vulkan.device.unmap_memory(self.staging_meshlet.memory);
             }
+        }
+
+        // --- Single transfer command buffer copies all three ---
+        if let Some(cmd) = vulkan.begin_single_time_commands() {
+            if v_count > 0 {
+                let copy_region = vk::BufferCopy::default()
+                    .src_offset(0)
+                    .dst_offset((v_offset as usize * std::mem::size_of::<Vertex>()) as u64)
+                    .size(v_byte_size);
+                unsafe {
+                    vulkan.device.cmd_copy_buffer(
+                        cmd,
+                        self.staging_vertex.handle,
+                        self.vertex_buffer.handle,
+                        std::slice::from_ref(&copy_region),
+                    );
+                }
+            }
+
+            if i_count > 0 {
+                let copy_region = vk::BufferCopy::default()
+                    .src_offset(0)
+                    .dst_offset((i_offset as usize * std::mem::size_of::<u32>()) as u64)
+                    .size(i_byte_size);
+                unsafe {
+                    vulkan.device.cmd_copy_buffer(
+                        cmd,
+                        self.staging_index.handle,
+                        self.index_buffer.handle,
+                        std::slice::from_ref(&copy_region),
+                    );
+                }
+            }
+
+            if m_count > 0 {
+                let copy_region = vk::BufferCopy::default()
+                    .src_offset(0)
+                    .dst_offset(
+                        (m_offset as usize * std::mem::size_of::<MeshletData>()) as u64,
+                    )
+                    .size(m_byte_size);
+                unsafe {
+                    vulkan.device.cmd_copy_buffer(
+                        cmd,
+                        self.staging_meshlet.handle,
+                        self.meshlet_buffer.handle,
+                        std::slice::from_ref(&copy_region),
+                    );
+                }
+            }
+
+            vulkan.end_single_time_commands(cmd);
         }
 
         self.current_vertex_count += v_count;
@@ -171,35 +281,12 @@ impl GeometryPool {
         Some((v_offset, i_offset, m_offset))
     }
 
-    fn copy_buffer(
-        &self,
-        vulkan: &VulkanDevice,
-        src: &Buffer,
-        dst: &Buffer,
-        size: u64,
-        src_offset: u64,
-        dst_offset: u64,
-    ) {
-        if let Some(cmd) = vulkan.begin_single_time_commands() {
-            let copy_region = vk::BufferCopy::default()
-                .src_offset(src_offset)
-                .dst_offset(dst_offset)
-                .size(size);
-            unsafe {
-                vulkan.device.cmd_copy_buffer(
-                    cmd,
-                    src.handle,
-                    dst.handle,
-                    std::slice::from_ref(&copy_region),
-                );
-            }
-            vulkan.end_single_time_commands(cmd);
-        }
-    }
-
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
         self.vertex_buffer.shutdown(vulkan);
         self.index_buffer.shutdown(vulkan);
         self.meshlet_buffer.shutdown(vulkan);
+        self.staging_vertex.shutdown(vulkan);
+        self.staging_index.shutdown(vulkan);
+        self.staging_meshlet.shutdown(vulkan);
     }
 }

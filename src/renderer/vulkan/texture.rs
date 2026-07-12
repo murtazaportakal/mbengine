@@ -1,6 +1,5 @@
 //! Vulkan Texture and Sampler abstractions.
 
-use crate::renderer::vulkan::buffer::Buffer;
 use crate::renderer::vulkan::VulkanDevice;
 use ash::vk;
 
@@ -122,20 +121,32 @@ impl Texture {
         pixels: &[u8],
         format: vk::Format,
     ) -> Option<Self> {
-        // 1. Create Staging Buffer
         let buffer_size = pixels.len() as u64;
-        let staging_buffer = Buffer::new(
-            vulkan,
-            buffer_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        staging_buffer.upload(vulkan, pixels);
+
+        // Upload pixel data into the shared persistent staging buffer
+        // (allocated once in VulkanDevice, never destroyed during runtime).
+        // This eliminates vkDestroyBuffer validation errors that would
+        // occur with transient staging buffers.
+        let data_ptr = unsafe {
+            vulkan
+                .device
+                .map_memory(
+                    vulkan.staging_memory,
+                    0,
+                    buffer_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap()
+        };
+        unsafe {
+            std::ptr::copy_nonoverlapping(pixels.as_ptr(), data_ptr as *mut u8, buffer_size as usize);
+            vulkan.device.unmap_memory(vulkan.staging_memory);
+        }
 
         // Calculate mip levels
         let mip_levels = (std::cmp::max(width, height) as f32).log2().floor() as u32 + 1;
 
-        // 2. Create Image
+        // Create Image
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D {
@@ -171,7 +182,7 @@ impl Texture {
         let memory = unsafe { vulkan.device.allocate_memory(&alloc_info, None).ok()? };
         unsafe { vulkan.device.bind_image_memory(image, memory, 0).ok()? };
 
-        // 3. Transition to TRANSFER_DST and Copy
+        // Transition to TRANSFER_DST and Copy
         let cmd = vulkan.begin_single_time_commands()?;
 
         Self::transition_image_layout(
@@ -204,7 +215,7 @@ impl Texture {
         unsafe {
             vulkan.device.cmd_copy_buffer_to_image(
                 cmd,
-                staging_buffer.handle,
+                vulkan.staging_buffer,
                 image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 std::slice::from_ref(&region),
@@ -216,6 +227,7 @@ impl Texture {
         let mut mip_height = height as i32;
 
         for i in 1..mip_levels {
+            // Transition source mip (i-1) to TRANSFER_SRC_OPTIMAL
             let barrier = vk::ImageMemoryBarrier::default()
                 .image(image)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -242,6 +254,38 @@ impl Texture {
                     &[],
                     &[],
                     std::slice::from_ref(&barrier),
+                );
+            }
+
+            // Transition destination mip (i) from UNDEFINED to TRANSFER_DST_OPTIMAL
+            // so the blit can write to it.  This is required because higher mips
+            // were never initialised by the initial layout transition.
+            let dst_init_barrier = vk::ImageMemoryBarrier::default()
+                .image(image)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(i)
+                        .level_count(1)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                )
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_access_mask(vk::AccessFlags::NONE)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+
+            unsafe {
+                vulkan.device.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    std::slice::from_ref(&dst_init_barrier),
                 );
             }
 
@@ -357,10 +401,10 @@ impl Texture {
 
         vulkan.end_single_time_commands(cmd);
 
-        let mut staging = staging_buffer;
-        staging.shutdown(vulkan);
+        // Note: no staging buffer shutdown — the shared staging buffer
+        // lives in VulkanDevice and is cleaned up at shutdown.
 
-        // 4. Create Image View
+        // Create Image View
         let view_info = vk::ImageViewCreateInfo::default()
             .image(image)
             .view_type(vk::ImageViewType::TYPE_2D)
@@ -375,7 +419,7 @@ impl Texture {
             );
         let view = unsafe { vulkan.device.create_image_view(&view_info, None).ok()? };
 
-        // 5. Create Sampler
+        // Create Sampler
         let sampler_info = vk::SamplerCreateInfo::default()
             .mag_filter(vk::Filter::LINEAR)
             .min_filter(vk::Filter::LINEAR)
@@ -403,159 +447,6 @@ impl Texture {
         })
     }
 
-    pub fn create_depth_texture(vulkan: &VulkanDevice, width: u32, height: u32) -> Option<Self> {
-        let format = vk::Format::D32_SFLOAT;
-
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .format(format)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let image = unsafe { vulkan.device.create_image(&image_info, None).ok()? };
-
-        let mem_reqs = unsafe { vulkan.device.get_image_memory_requirements(image) };
-        let memory_type_index = vulkan.find_memory_type(
-            mem_reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_reqs.size)
-            .memory_type_index(memory_type_index);
-
-        let memory = unsafe { vulkan.device.allocate_memory(&alloc_info, None).ok()? };
-        unsafe { vulkan.device.bind_image_memory(image, memory, 0).ok()? };
-
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(format)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::DEPTH)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-        let view = unsafe { vulkan.device.create_image_view(&view_info, None).ok()? };
-
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .anisotropy_enable(false)
-            .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE)
-            .unnormalized_coordinates(false)
-            .compare_enable(true)
-            .compare_op(vk::CompareOp::LESS_OR_EQUAL)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
-
-        let sampler = unsafe { vulkan.device.create_sampler(&sampler_info, None).ok()? };
-
-        Some(Self {
-            image,
-            memory,
-            view,
-            sampler,
-        })
-    }
-
-    pub fn create_color_texture(
-        vulkan: &VulkanDevice,
-        width: u32,
-        height: u32,
-        format: vk::Format,
-    ) -> Option<Self> {
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .format(format)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let image = unsafe { vulkan.device.create_image(&image_info, None).ok()? };
-
-        let mem_reqs = unsafe { vulkan.device.get_image_memory_requirements(image) };
-        let memory_type_index = vulkan.find_memory_type(
-            mem_reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_reqs.size)
-            .memory_type_index(memory_type_index);
-
-        let memory = unsafe { vulkan.device.allocate_memory(&alloc_info, None).ok()? };
-        unsafe { vulkan.device.bind_image_memory(image, memory, 0).ok()? };
-
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(format)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-        let view = unsafe { vulkan.device.create_image_view(&view_info, None).ok()? };
-
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .anisotropy_enable(false)
-            .unnormalized_coordinates(false)
-            .compare_enable(false)
-            .compare_op(vk::CompareOp::ALWAYS)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
-
-        let sampler = unsafe { vulkan.device.create_sampler(&sampler_info, None).ok()? };
-
-        Some(Self {
-            image,
-            memory,
-            view,
-            sampler,
-        })
-    }
-
-    pub fn destroy(&self, vulkan: &VulkanDevice) {
-        unsafe {
-            vulkan.device.destroy_sampler(self.sampler, None);
-            vulkan.device.destroy_image_view(self.view, None);
-            vulkan.device.destroy_image(self.image, None);
-            vulkan.device.free_memory(self.memory, None);
-        }
-    }
-
     fn transition_image_layout(
         vulkan: &VulkanDevice,
         cmd: vk::CommandBuffer,
@@ -564,7 +455,62 @@ impl Texture {
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
     ) {
-        let mut barrier = vk::ImageMemoryBarrier::default()
+        let (src_access_mask, dst_access_mask, src_stage, dst_stage) = match (old_layout, new_layout) {
+            (vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL) => (
+                vk::AccessFlags::NONE,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+            ),
+            (vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL) => (
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            ),
+            (vk::ImageLayout::UNDEFINED, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL) => (
+                vk::AccessFlags::NONE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            ),
+            (vk::ImageLayout::TRANSFER_SRC_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL) => (
+                vk::AccessFlags::TRANSFER_READ,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            ),
+            (vk::ImageLayout::UNDEFINED, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL) => (
+                vk::AccessFlags::NONE,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            ),
+            (vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL) => (
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            ),
+            (vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::ImageLayout::TRANSFER_DST_OPTIMAL) => (
+                vk::AccessFlags::SHADER_READ,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::PipelineStageFlags::TRANSFER,
+            ),
+            (vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL) => (
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            ),
+            _ => panic!(
+                "Unsupported layout transition: {:?} -> {:?}",
+                old_layout, new_layout
+            ),
+        };
+
+        let barrier = vk::ImageMemoryBarrier::default()
             .old_layout(old_layout)
             .new_layout(new_layout)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -574,126 +520,24 @@ impl Texture {
                 vk::ImageSubresourceRange::default()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
                     .base_mip_level(0)
-                    .level_count(vk::REMAINING_MIP_LEVELS)
+                    .level_count(1)
                     .base_array_layer(0)
                     .layer_count(1),
-            );
-
-        let source_stage;
-        let destination_stage;
-
-        if old_layout == vk::ImageLayout::UNDEFINED
-            && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
-        {
-            barrier.src_access_mask = vk::AccessFlags::empty();
-            barrier.dst_access_mask = vk::AccessFlags::TRANSFER_WRITE;
-            source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
-            destination_stage = vk::PipelineStageFlags::TRANSFER;
-        } else if old_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
-            && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-        {
-            barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
-            barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
-            source_stage = vk::PipelineStageFlags::TRANSFER;
-            destination_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
-        } else if old_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-            && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
-        {
-            barrier.src_access_mask = vk::AccessFlags::SHADER_READ;
-            barrier.dst_access_mask = vk::AccessFlags::TRANSFER_WRITE;
-            source_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
-            destination_stage = vk::PipelineStageFlags::TRANSFER;
-        } else {
-            panic!("Unsupported layout transition!");
-        }
+            )
+            .src_access_mask(src_access_mask)
+            .dst_access_mask(dst_access_mask);
 
         unsafe {
             vulkan.device.cmd_pipeline_barrier(
                 cmd,
-                source_stage,
-                destination_stage,
+                src_stage,
+                dst_stage,
                 vk::DependencyFlags::empty(),
                 &[],
                 &[],
                 std::slice::from_ref(&barrier),
             );
         }
-    }
-
-    pub fn update_region(
-        &self,
-        vulkan: &VulkanDevice,
-        x: u32,
-        y: u32,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
-    ) -> Option<()> {
-        let buffer_size = pixels.len() as u64;
-        let mut staging_buffer = Buffer::new(
-            vulkan,
-            buffer_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        staging_buffer.upload(vulkan, pixels);
-
-        let cmd = vulkan.begin_single_time_commands()?;
-
-        Self::transition_image_layout(
-            vulkan,
-            cmd,
-            self.image,
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        );
-
-        let region = vk::BufferImageCopy::default()
-            .buffer_offset(0)
-            .buffer_row_length(0)
-            .buffer_image_height(0)
-            .image_subresource(
-                vk::ImageSubresourceLayers::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .mip_level(0)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            )
-            .image_offset(vk::Offset3D {
-                x: x as i32,
-                y: y as i32,
-                z: 0,
-            })
-            .image_extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            });
-
-        unsafe {
-            vulkan.device.cmd_copy_buffer_to_image(
-                cmd,
-                staging_buffer.handle,
-                self.image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&region),
-            );
-        }
-
-        Self::transition_image_layout(
-            vulkan,
-            cmd,
-            self.image,
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
-
-        vulkan.end_single_time_commands(cmd);
-        staging_buffer.shutdown(vulkan);
-
-        Some(())
     }
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {

@@ -197,9 +197,15 @@ impl AssetManager {
         path: &str,
     ) -> Option<&[usize]> {
         if !self.model_map.contains_key(path) {
+            crate::log_info!("[AssetMgr] Loading model: {}", path);
             if let Some(loaded_meshes) = Mesh::load_models(path, vulkan, geometry_pool) {
+                crate::log_info!("[AssetMgr] Model {} loaded {} meshes", path, loaded_meshes.len());
                 let mut indices = Vec::with_capacity(loaded_meshes.len());
-                for mut mesh in loaded_meshes {
+                for (mi, mut mesh) in loaded_meshes.into_iter().enumerate() {
+                    crate::log_info!("[AssetMgr]   mesh[{}]: {} verts, {} indices, AABB [{:.1},{:.1},{:.1}]..[{:.1},{:.1},{:.1}]",
+                        mi, mesh.vertex_count, mesh.index_count,
+                        mesh.aabb_min[0], mesh.aabb_min[1], mesh.aabb_min[2],
+                        mesh.aabb_max[0], mesh.aabb_max[1], mesh.aabb_max[2]);
                     if let Some(tex_name) = &mesh.diffuse_texture {
                         let tex_path = if std::path::Path::new(tex_name).is_absolute() {
                             tex_name.clone()
@@ -226,7 +232,7 @@ impl AssetManager {
                 self.model_map.insert(path.to_string(), indices);
                 self.model_paths.insert(path.to_string(), path.to_string());
             } else {
-                crate::log_info!("Failed to load model: {}", path);
+                crate::log_info!("[AssetMgr] Failed to load model: {}", path);
                 return None;
             }
         }
@@ -432,36 +438,10 @@ impl AssetManager {
                                     }
                                 }
                                 if let Some(_p) = matched_path {
-                                    // Currently disable hot-reloading for models until GeometryPool handles reallocation cleanly
-                                    /*
-                                    crate::log_info!("Hot-reloading model: {}", p);
-                                    if let Some(mut loaded_meshes) = Mesh::load_models(&p, vulkan, /* geometry_pool not easily accessible here yet */) {
-                                        if let Some(indices) = self.model_map.get(&p) {
-                                            unsafe { vulkan.device.device_wait_idle().unwrap() };
-                                            for (i, _idx) in indices.iter().enumerate() {
-                                                if i < loaded_meshes.len() {
-                                                    // We extract the new mesh out of the loaded_meshes array
-                                                    // by swapping with a dummy or using Option, but Mesh has no Default.
-                                                    // But we can pop from loaded_meshes since we just created it.
-                                                    // Since we iterate forward, let's reverse loaded_meshes so we can pop.
-                                                }
-                                            }
-
-                                            // Simplest way: reverse loaded_meshes and pop
-                                            loaded_meshes.reverse();
-                                            for idx in indices.iter() {
-                                                if let Some(new_mesh) = loaded_meshes.pop() {
-                                                    let mut old_mesh = std::mem::replace(
-                                                        &mut self.meshes[*idx],
-                                                        new_mesh,
-                                                    );
-                                                    old_mesh.shutdown(vulkan);
-                                                }
-                                            }
-                                            events.push(AssetEvent::ModelChanged(p));
-                                        }
-                                    }
-                                    */
+                                    // Model hot-reload is disabled — GeometryPool does not
+                                    // support hole-punching/reallocation for individual meshes.
+                                    // Models must be reloaded via the editor SpawnModel action
+                                    // which waits for device idle before appending.
                                 }
                             } else if ext == "rhai" {
                                 let mut matched_name = None;

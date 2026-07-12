@@ -12,7 +12,15 @@ pub struct VulkanDevice {
     pub graphics_queue: vk::Queue,
     pub graphics_queue_family_index: u32,
     pub command_pool: vk::CommandPool,
+    pub transfer_command_pool: vk::CommandPool,
     pub frame_command_buffers: [vk::CommandBuffer; 2],
+
+    /// Shared persistent staging buffer for texture/model uploads.
+    /// Created with raw Vulkan API to avoid circular dependency with
+    /// Buffer::new which requires a VulkanDevice reference.  Allocated
+    /// once, reused via map/unmap, destroyed at shutdown.
+    pub staging_buffer: vk::Buffer,
+    pub staging_memory: vk::DeviceMemory,
 
     // Sync primitives for a single frame
     pub image_available_semaphores: [vk::Semaphore; 2],
@@ -173,6 +181,17 @@ impl VulkanDevice {
             .queue_family_index(queue_family_index);
 
         let command_pool = unsafe { device.create_command_pool(&pool_create_info, None).ok()? };
+
+        // Dedicated transfer command pool for single-time uploads (staging,
+        // texture copies, etc.).  Using a separate pool with the TRANSIENT
+        // flag avoids interference with the per-frame command buffers and
+        // eliminates VUID-vkDestroyBuffer-buffer-00922 validation errors.
+        let transfer_pool_info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+            .queue_family_index(queue_family_index);
+        let transfer_command_pool =
+            unsafe { device.create_command_pool(&transfer_pool_info, None).ok()? };
+
         let command_buffer_alloc_info = vk::CommandBufferAllocateInfo::default()
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_pool(command_pool)
@@ -183,6 +202,47 @@ impl VulkanDevice {
                 .ok()?
         };
         let frame_command_buffers = [allocated_command_buffers[0], allocated_command_buffers[1]];
+
+        // Persistent staging buffer for texture uploads — raw API to avoid
+        // circular dependency with Buffer::new(VulkanDevice).
+        let staging_size: u64 = 256 * 1024 * 1024; // 256 MB
+        let staging_buffer = unsafe {
+            device
+                .create_buffer(
+                    &vk::BufferCreateInfo::default()
+                        .size(staging_size)
+                        .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+                        .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                    None,
+                )
+                .ok()?
+        };
+        let staging_mem_reqs = unsafe { device.get_buffer_memory_requirements(staging_buffer) };
+        let staging_mem_type = (0..memory_properties.memory_type_count)
+            .find(|&i| {
+                (staging_mem_reqs.memory_type_bits & (1 << i)) != 0
+                    && memory_properties.memory_types[i as usize]
+                        .property_flags
+                        .contains(
+                            vk::MemoryPropertyFlags::HOST_VISIBLE
+                                | vk::MemoryPropertyFlags::HOST_COHERENT,
+                        )
+            })?;
+        let staging_memory = unsafe {
+            device
+                .allocate_memory(
+                    &vk::MemoryAllocateInfo::default()
+                        .allocation_size(staging_mem_reqs.size)
+                        .memory_type_index(staging_mem_type),
+                    None,
+                )
+                .ok()?
+        };
+        unsafe {
+            device
+                .bind_buffer_memory(staging_buffer, staging_memory, 0)
+                .ok()?;
+        }
 
         let semaphore_info = vk::SemaphoreCreateInfo::default();
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
@@ -196,9 +256,8 @@ impl VulkanDevice {
                 unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
             in_flight_fences[i] = unsafe { device.create_fence(&fence_info, None).unwrap() };
         }
-        for i in 0..8 {
-            render_finished_semaphores[i] =
-                unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
+        for sem in &mut render_finished_semaphores {
+            *sem = unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
         }
 
         Some(Self {
@@ -210,7 +269,10 @@ impl VulkanDevice {
             graphics_queue,
             graphics_queue_family_index: queue_family_index,
             command_pool,
+            transfer_command_pool,
             frame_command_buffers,
+            staging_buffer,
+            staging_memory,
             image_available_semaphores,
             render_finished_semaphores,
             in_flight_fences,
@@ -225,22 +287,18 @@ impl VulkanDevice {
         type_filter: u32,
         properties: vk::MemoryPropertyFlags,
     ) -> Option<u32> {
-        for i in 0..self.memory_properties.memory_type_count {
-            if (type_filter & (1 << i)) != 0
+        (0..self.memory_properties.memory_type_count).find(|&i| {
+            (type_filter & (1 << i)) != 0
                 && self.memory_properties.memory_types[i as usize]
                     .property_flags
                     .contains(properties)
-            {
-                return Some(i);
-            }
-        }
-        None
+        })
     }
 
     pub fn begin_single_time_commands(&self) -> Option<vk::CommandBuffer> {
         let alloc_info = vk::CommandBufferAllocateInfo::default()
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_pool(self.command_pool)
+            .command_pool(self.transfer_command_pool)
             .command_buffer_count(1);
 
         let command_buffer = unsafe { self.device.allocate_command_buffers(&alloc_info).ok()?[0] };
@@ -261,6 +319,12 @@ impl VulkanDevice {
         unsafe {
             self.device.end_command_buffer(command_buffer).unwrap();
 
+            // Use an explicit fence instead of queue_wait_idle so that the
+            // validation layer can accurately track the command buffer's
+            // lifetime relative to the staging buffers it references.
+            let fence_info = vk::FenceCreateInfo::default();
+            let fence = self.device.create_fence(&fence_info, None).unwrap();
+
             let command_buffers = [command_buffer];
             let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
@@ -268,13 +332,50 @@ impl VulkanDevice {
                 .queue_submit(
                     self.graphics_queue,
                     std::slice::from_ref(&submit_info),
-                    vk::Fence::null(),
+                    fence,
                 )
                 .unwrap();
 
-            self.device.queue_wait_idle(self.graphics_queue).unwrap();
             self.device
-                .free_command_buffers(self.command_pool, &command_buffers);
+                .wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX)
+                .unwrap();
+            self.device.destroy_fence(fence, None);
+            self.device
+                .free_command_buffers(self.transfer_command_pool, &command_buffers);
+        }
+    }
+
+    /// Destroy the existing command pool and recreate frame command
+    /// buffers from a fresh pool.  This is the only approach that
+    /// guarantees validation-layer buffer-reference tracking is
+    /// completely cleared.
+    ///
+    /// # Safety
+    /// The caller must ensure the GPU is idle (via `device_wait_idle`)
+    /// before calling this.
+    pub fn recreate_frame_buffers(&mut self) {
+        unsafe {
+            self.device
+                .destroy_command_pool(self.command_pool, None);
+
+            let new_pool = self
+                .device
+                .create_command_pool(
+                    &vk::CommandPoolCreateInfo::default()
+                        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+                        .queue_family_index(self.graphics_queue_family_index),
+                    None,
+                )
+                .unwrap();
+
+            let cb_alloc = vk::CommandBufferAllocateInfo::default()
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_pool(new_pool)
+                .command_buffer_count(2);
+
+            let new_cbs = self.device.allocate_command_buffers(&cb_alloc).unwrap();
+            self.command_pool = new_pool;
+            self.frame_command_buffers = [new_cbs[0], new_cbs[1]];
         }
     }
 }
@@ -298,6 +399,10 @@ impl RenderDevice for VulkanDevice {
                 self.device.destroy_fence(fence, None);
             }
             self.device.destroy_command_pool(self.command_pool, None);
+            self.device
+                .destroy_command_pool(self.transfer_command_pool, None);
+            self.device.destroy_buffer(self.staging_buffer, None);
+            self.device.free_memory(self.staging_memory, None);
             self.device.destroy_device(None);
 
             if let Some(loader) = &self.debug_utils_loader {

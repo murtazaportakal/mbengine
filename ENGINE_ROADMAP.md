@@ -164,7 +164,7 @@ Run tests via `cargo test`. Contains 40 tests covering:
 
 ## V4 Master Plan — GPU-Driven Rendering & Asset Pipeline
 
-> **Status:** Phase 0 in progress (2026-07-10). Do not advance phases until each gate criterion is met.
+> **Status:** Phase 0 complete (2026-07-11). Phases 1–5 pending.
 
 ### Architectural Constraints for V4
 

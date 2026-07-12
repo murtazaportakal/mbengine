@@ -112,6 +112,10 @@ impl ComputeCullPipeline {
         draw_count_buffer: vk::Buffer,
         descriptor_set: vk::DescriptorSet,
     ) {
+        if ubo_buffer == vk::Buffer::null() || descriptor_set == vk::DescriptorSet::null() {
+            return;
+        }
+
         let ubo_info = vk::DescriptorBufferInfo::default()
             .buffer(ubo_buffer)
             .offset(0)

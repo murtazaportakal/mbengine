@@ -87,8 +87,8 @@ impl Skeleton {
 
         // Final: global * inverse_bind
         out_matrices.clear();
-        for i in 0..count {
-            out_matrices.push(global_transforms[i] * self.bones[i].inverse_bind_matrix);
+        for (global, bone) in global_transforms.iter().take(count).zip(self.bones.iter()) {
+            out_matrices.push(*global * bone.inverse_bind_matrix);
         }
     }
 }
