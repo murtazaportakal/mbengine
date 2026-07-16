@@ -26,7 +26,6 @@ use crate::renderer::vulkan::{
     GeometryPool, OffscreenTarget, Pipeline, PostProcessPipeline, Swapchain, UiBackend,
     VulkanDevice,
 };
-use crate::renderer::RenderDevice;
 use crate::renderer::vulkan::render_graph::{RenderGraph, ResourceTracker, ResourceHandle, ResourceState};
 use crate::ecs::{
     CameraComponent, LightComponent, RenderComponent, TransformComponent,
@@ -90,6 +89,13 @@ pub struct RenderBackend {
     pub current_frame: usize,
     pub bloom_threshold: f32,
     pub resource_tracker: ResourceTracker,
+
+    // === Lifetime 12: pre-allocated CPU scratch buffers ===
+    /// Pre-allocated buffer for instance data built each frame.
+    /// Sized to `max_instances` (100_000) at construction.  `clear()`
+    /// + `push()` reuses the capacity every frame — zero heap allocations
+    /// on the hot render path.
+    pub instance_data_buffer: Vec<crate::renderer::vulkan::pipeline::InstanceData>,
 }
 
 impl RenderBackend {
@@ -372,8 +378,8 @@ impl RenderBackend {
         ));
         let bindless_set = ubo_data.1;
 
-        let mut geometry_pool =
-            GeometryPool::new(&vulkan, 1_000_000, 3_000_000, 100_000)
+        let geometry_pool =
+            GeometryPool::new(&vulkan, 4_000_000, 12_000_000, 400_000)
                 .expect("Failed to create GeometryPool");
 
         let mut ui_backend = UiBackend::new(&vulkan, swapchain.format.format, &asset_manager.vfs);
@@ -505,6 +511,7 @@ impl RenderBackend {
             current_frame: 0,
             bloom_threshold: 1.0,
             resource_tracker: ResourceTracker::new(),
+            instance_data_buffer: Vec::with_capacity(max_instances),
         };
         backend.update_post_process_descriptors();
         backend.ui_backend.update_user_texture(
@@ -514,6 +521,47 @@ impl RenderBackend {
             backend.sdr_target.sampler,
         );
         Some(backend)
+    }
+
+    /// Update bindless texture descriptor array with all loaded textures.
+    pub fn update_texture_descriptors(&self, asset_manager: &crate::asset_manager::AssetManager) {
+        if asset_manager.next_texture_index == 0 { return; }
+
+        let mut image_infos = Vec::new();
+        let fallback = asset_manager.get_texture("fallback").unwrap();
+        let fallback_info = vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(fallback.view)
+            .sampler(fallback.sampler);
+
+        for i in 0..asset_manager.next_texture_index {
+            let tex_name = asset_manager.texture_indices.iter().find(|(_, &idx)| idx == i).map(|(name, _)| name);
+            if let Some(name) = tex_name {
+                if let Some(tex) = asset_manager.get_texture(name) {
+                    image_infos.push(vk::DescriptorImageInfo::default()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(tex.view)
+                        .sampler(tex.sampler));
+                } else {
+                    image_infos.push(fallback_info);
+                }
+            } else {
+                image_infos.push(fallback_info);
+            }
+        }
+        
+        if image_infos.is_empty() { return; }
+
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.global_texture_descriptor_sets[0])
+            .dst_binding(0)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_infos);
+
+        unsafe {
+            self.vulkan.device.update_descriptor_sets(&[write], &[]);
+        }
     }
 
     /// Update post-process descriptor bindings to point at current render targets.
@@ -677,6 +725,14 @@ impl RenderBackend {
             }
         }
 
+        unsafe {
+            self.vulkan.device.wait_for_fences(
+                &[self.vulkan.in_flight_fences[self.current_frame]],
+                true,
+                u64::MAX,
+            ).expect("wait_for_fences failed — possible device loss");
+        }
+
         let ubo = crate::renderer::vulkan::pipeline::GlobalUbo {
             view_proj,
             camera_pos,
@@ -695,14 +751,6 @@ impl RenderBackend {
                     std::mem::size_of::<crate::renderer::vulkan::pipeline::GlobalUbo>(),
                 );
             }
-        }
-
-        unsafe {
-            self.vulkan.device.wait_for_fences(
-                &[self.vulkan.in_flight_fences[self.current_frame]],
-                true,
-                u64::MAX,
-            ).expect("wait_for_fences failed — possible device loss");
         }
 
         // Swapchain out-of-date detection — runs before any CB recording.
@@ -741,7 +789,8 @@ impl RenderBackend {
         }
 
         // --- Instance Data ---
-        let mut instance_data: Vec<crate::renderer::vulkan::pipeline::InstanceData> = Vec::new();
+        // Reuse the pre-allocated buffer — zero heap allocations on the hot path.
+        self.instance_data_buffer.clear();
         {
             let renders = world.get_component_array::<RenderComponent>();
             let transforms = world.get_component_array::<TransformComponent>();
@@ -755,7 +804,7 @@ impl RenderBackend {
                 let t = unsafe { transforms.get(entity) };
                 let wm = world_matrices.iter().find(|(e, _)| *e == entity).map(|(_, m)| *m).unwrap_or(t.matrix);
                 if let Some(mesh) = asset_manager.get_mesh(r.mesh_index) {
-                    instance_data.push(crate::renderer::vulkan::pipeline::InstanceData {
+                    self.instance_data_buffer.push(crate::renderer::vulkan::pipeline::InstanceData {
                         world: wm,
                         aabb_min: [mesh.aabb_min[0], mesh.aabb_min[1], mesh.aabb_min[2], 1.0],
                         aabb_max: [mesh.aabb_max[0], mesh.aabb_max[1], mesh.aabb_max[2], 1.0],
@@ -767,12 +816,22 @@ impl RenderBackend {
             }
         }
 
-        let draw_count = instance_data.len() as u32;
+        let draw_count = self.instance_data_buffer.len() as u32;
+        if draw_count > 1 && self.current_frame % 60 == 0 {
+            crate::log_info!("[Backend Debug] draw_count: {}", draw_count);
+            for i in 0..self.instance_data_buffer.len() {
+                let inst = &self.instance_data_buffer[i];
+                crate::log_info!("  Inst {}: geom [count={}, idx_off={}, v_off={}], world pos: ({:.1}, {:.1}, {:.1})",
+                    i, inst.geometry[0], inst.geometry[1], inst.geometry[2],
+                    inst.world.cols[3].x, inst.world.cols[3].y, inst.world.cols[3].z);
+            }
+        }
+
         unsafe {
             std::ptr::copy_nonoverlapping(
-                instance_data.as_ptr(),
+                self.instance_data_buffer.as_ptr(),
                 self.instance_mapped[self.current_frame] as *mut _,
-                instance_data.len(),
+                self.instance_data_buffer.len(),
             );
         }
 
@@ -890,11 +949,22 @@ impl RenderBackend {
                 .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: self.swapchain.extent })
                 .layer_count(1).color_attachments(std::slice::from_ref(&ui_att));
             self.vulkan.device.cmd_begin_rendering(cb, &ui_ri);
-            self.ui_backend.draw(&self.vulkan, cb, self.swapchain.extent.width, self.swapchain.extent.height, ui_ctx, ui_font);
+            self.ui_backend.draw(&self.vulkan, cb, self.swapchain.extent.width, self.swapchain.extent.height, ui_ctx, ui_font, self.current_frame);
             self.vulkan.device.cmd_end_rendering(cb);
         });
 
         self.resource_tracker.clear();
+        // Register swapchain image as UNDEFINED so the render graph knows to
+        // emit a proper initial layout transition into COLOR_ATTACHMENT_OPTIMAL.
+        self.resource_tracker.insert(
+            ResourceHandle(swapchain_image),
+            ResourceState {
+                layout: vk::ImageLayout::UNDEFINED,
+                stage_mask: vk::PipelineStageFlags::TOP_OF_PIPE,
+                access_mask: vk::AccessFlags::NONE,
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+            },
+        );
         graph.execute(&self.vulkan, cmd, &mut self.resource_tracker);
 
         // Present barrier

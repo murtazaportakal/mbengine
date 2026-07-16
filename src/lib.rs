@@ -8,7 +8,9 @@ pub mod math;
 pub mod memory;
 pub mod physics;
 pub mod platform;
-pub mod renderer;
+pub mod renderer {
+    pub mod vulkan;
+}
 pub mod scripting;
 pub mod ui;
 pub mod utils;

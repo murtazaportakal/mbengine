@@ -53,7 +53,6 @@ impl Editor {
         registry.register::<crate::ecs::components::SkeletonComponent>();
         registry.register::<crate::ecs::components::ScriptBehaviorComponent>();
         registry.register::<crate::ecs::components::AnimatorComponent>();
-        registry.register::<crate::ecs::components::SoftBodyComponent>();
 
         let (tx, rx) = std::sync::mpsc::channel();
         Self {

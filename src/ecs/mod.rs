@@ -6,7 +6,6 @@ pub mod reflection;
 pub mod scheduler;
 pub mod scripting_system;
 pub mod serialization;
-pub mod soft_body_system;
 pub mod system;
 pub mod types;
 pub mod world;

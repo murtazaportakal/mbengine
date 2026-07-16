@@ -8,7 +8,6 @@ use crate::math::vec::Vec3;
 use crate::memory::{MemoryConfig, MemorySubsystem};
 use crate::platform::{win32, Timer, Window};
 use crate::renderer::vulkan::RenderBackend;
-use crate::renderer::RenderDevice;
 use ash::vk;
 
 /// High-level engine coordinator.
@@ -114,7 +113,6 @@ impl Application {
             world.register_component::<crate::ecs::components::SkeletonComponent>(100);
             world.register_component::<crate::ecs::components::AnimatorComponent>(100);
             world.register_component::<crate::ecs::components::ScriptBehaviorComponent>(100);
-            world.register_component::<crate::ecs::components::SoftBodyComponent>(100);
         }
 
         let physics = crate::physics::PhysicsSystem::new();
@@ -190,7 +188,7 @@ impl Application {
             crate::audio::AudioSystem::new(audio_subsystem.as_ref(), &asset_manager.vfs);
         let script_engine = crate::scripting::engine::ScriptEngine::new();
 
-        let mut app = Self {
+        let app = Self {
             world,
             render,
             window,
@@ -355,7 +353,20 @@ impl Application {
                         self.editor.registry.add_component(&name, e, &mut self.world, &mut self.physics);
                     }
                     crate::app::editor::EditorAction::SpawnModel(path) => {
-                        crate::log_info!("[SpawnModel] Loading: {}", path);
+                        let path_obj = std::path::Path::new(&path);
+                        let mut mesh_indices = None;
+                        let name = path_obj.file_stem().unwrap().to_string_lossy().to_string();
+                        let path_str = path_obj.to_str().unwrap();
+
+                        if path_obj.extension().map_or(false, |ext| ext == "gltf" || ext == "glb") {
+                            crate::log_info!("[SpawnModel] Loading GLTF: {}", path_obj.display());
+                            mesh_indices = Some(self.asset_manager.load_gltf(&self.render.vulkan, &mut self.render.geometry_pool, &name, path_str).unwrap_or(&[]).to_vec());
+                        } else if path_obj.extension().map_or(false, |ext| ext == "obj") {
+                            crate::log_info!("[SpawnModel] Loading OBJ: {}", path_obj.display());
+                            mesh_indices = Some(self.asset_manager.load_model(&self.render.vulkan, &mut self.render.geometry_pool, path_str).unwrap_or(&[]).to_vec());
+                        }
+
+                        crate::log_info!("[SpawnModel] mesh_indices={:?}", mesh_indices);
                         unsafe { self.render.vulkan.device.device_wait_idle().unwrap(); }
                         // We must NOT call recreate_frame_buffers() here.
                         // Destroying the command pool mid-loop corrupts the
@@ -366,13 +377,6 @@ impl Application {
                         // while we append new meshes.
                         let textures_before = self.asset_manager.texture_indices.len();
                         let new_entity = self.world.create_entity();
-
-                        let lower = path.to_lowercase();
-                        let mesh_indices = if lower.ends_with(".obj") {
-                            self.asset_manager.load_model(&self.render.vulkan, &mut self.render.geometry_pool, &path).map(|m| m.to_vec())
-                        } else if lower.ends_with(".gltf") || lower.ends_with(".glb") {
-                            self.asset_manager.load_gltf(&self.render.vulkan, &mut self.render.geometry_pool, &path, &path).map(|m| m.to_vec())
-                        } else { None };
 
                         crate::log_info!("[SpawnModel] mesh_indices={:?}", mesh_indices);
 
@@ -417,6 +421,9 @@ impl Application {
                         }
 
                         if let Some(indices) = mesh_indices {
+                            if indices.is_empty() {
+                                crate::log_info!("[SpawnModel] ERROR: Mesh indices was EMPTY for {}", path);
+                            }
                             for &mesh_index in &indices {
                                 let child = self.world.create_entity();
                                 unsafe {
@@ -457,7 +464,13 @@ impl Application {
                 }
             }
 
+            // Handle asset manager events (e.g. new textures loaded)
             let asset_events = self.asset_manager.poll_changes(&self.render.vulkan);
+            if !self.asset_manager.new_textures_since_last_frame.is_empty() {
+                unsafe { self.render.vulkan.device.device_wait_idle().unwrap(); }
+                self.render.update_texture_descriptors(&self.asset_manager);
+                self.asset_manager.new_textures_since_last_frame.clear();
+            }
             let mut shader_changed = false;
             for event in asset_events {
                 if matches!(event, crate::asset_manager::AssetEvent::ShaderChanged) { shader_changed = true; }
@@ -653,6 +666,7 @@ impl Application {
                 self.world_matrices.push((entity, t.matrix));
             }
             let hierarchies = self.world.get_component_array::<HierarchyComponent>();
+
             for (i, hier) in hierarchies.as_slice().iter().enumerate() {
                 let entity = hierarchies.dense_entities_slice()[i];
                 if let Some(parent) = hier.parent {
@@ -672,10 +686,14 @@ impl Application {
             );
             self.render.current_frame = (self.render.current_frame + 1) % 2;
             self.memory.frame_arena().reset(false);
+            
+        // Removed spammy debug
+
         }
 
         crate::log_info!("Application shutting down.");
         self.render.vulkan.wait_idle();
+        self.asset_manager.shutdown(&self.render.vulkan);
         // RenderBackend::drop handles all Vulkan resource cleanup in correct order
     }
 }

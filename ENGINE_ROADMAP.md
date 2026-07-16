@@ -88,6 +88,9 @@ The engine has reached full maturity for its baseline requirements. All V1 and V
 - **P1 — Audio sinks flat map** (`src/audio.rs`): Replaced `HashMap<u32, SpatialSink>` with `Vec<Option<SpatialSink>>` indexed by entity index. Pre-allocated to 128 slots at construction. Growth only occurs at entity creation time, never during the frame loop.
 - **P2 — Skeleton computed matrices** (`src/ecs/components.rs`): Replaced `Vec<Mat4>` with `FixedArray<Mat4, MAX_BONES>` to eliminate heap allocations inside `SkeletonComponent`.
 
+### Resolved (July 16, 2026)
+- **P0 — Per-frame instance data Vec** (`src/renderer/vulkan/backend.rs`): Replaced per-frame `Vec::with_capacity(0)` allocation in `render_frame()` with a pre-allocated `instance_data_buffer` field on `RenderBackend`, sized to `max_instances` (100_000) at construction. `clear()` + `push()` reuses capacity every frame — zero heap allocations on the hot render path.
+
 ### Remaining Violations
 
 *None! The engine is now 100% Zero-Heap compliant on the hot path.*

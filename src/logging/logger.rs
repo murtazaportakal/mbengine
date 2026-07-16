@@ -95,8 +95,10 @@ pub fn global_logger() -> Option<&'static Logger> {
 #[macro_export]
 macro_rules! log_info {
     ($($arg:tt)*) => {
+        let msg = format!($($arg)*);
+        println!("{}", msg);
         if let Some(logger) = $crate::logging::global_logger() {
-            logger.log($crate::logging::Severity::Info, &format!($($arg)*));
+            logger.log($crate::logging::Severity::Info, &msg);
         }
     };
 }

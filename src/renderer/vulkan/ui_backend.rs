@@ -24,8 +24,10 @@ pub struct UiBackend {
     font_texture: Option<Texture>,
     pub font_descriptor_set: vk::DescriptorSet,
 
-    vertex_buffer: Option<Buffer>,
-    index_buffer: Option<Buffer>,
+    /// Double-buffered vertex buffers (one per in-flight frame).
+    vertex_buffers: [Option<Buffer>; 2],
+    /// Double-buffered index buffers (one per in-flight frame).
+    index_buffers: [Option<Buffer>; 2],
 
     vertex_capacity: usize,
     index_capacity: usize,
@@ -229,6 +231,34 @@ impl UiBackend {
                 .image_info(std::slice::from_ref(&image_info));
             vulkan.device.update_descriptor_sets(&[write], &[]);
 
+            // Pre-allocate UI geometry buffers for both in-flight frames.
+            // 64K vertices + 64K indices per frame covers full editor UI +
+            // gizmos without growing on the hot path.
+            let ui_vertex_capacity = 64 * 1024;
+            let ui_index_capacity = 64 * 1024;
+
+            let mut vertex_buffers: [Option<Buffer>; 2] = [None::<Buffer>, None::<Buffer>].map(|_| None);
+            let mut index_buffers: [Option<Buffer>; 2] = [None::<Buffer>, None::<Buffer>].map(|_| None);
+
+            for frame_idx in 0..2 {
+                let vb = Buffer::new(
+                    vulkan,
+                    (ui_vertex_capacity * std::mem::size_of::<UiVertex>()) as u64,
+                    vk::BufferUsageFlags::VERTEX_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+                .unwrap();
+                let ib = Buffer::new(
+                    vulkan,
+                    (ui_index_capacity * std::mem::size_of::<u32>()) as u64,
+                    vk::BufferUsageFlags::INDEX_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+                .unwrap();
+                vertex_buffers[frame_idx] = Some(vb);
+                index_buffers[frame_idx] = Some(ib);
+            }
+
             Self {
                 pipeline_layout,
                 pipeline,
@@ -236,10 +266,10 @@ impl UiBackend {
                 descriptor_pool,
                 font_texture: None,
                 font_descriptor_set: vk::DescriptorSet::null(),
-                vertex_buffer: None,
-                index_buffer: None,
-                vertex_capacity: 0,
-                index_capacity: 0,
+                vertex_buffers,
+                index_buffers,
+                vertex_capacity: ui_vertex_capacity,
+                index_capacity: ui_index_capacity,
                 white_texture: Some(white_texture),
                 white_descriptor_set,
                 user_descriptor_sets: [None; 4],
@@ -320,6 +350,11 @@ impl UiBackend {
         }
     }
 
+    /// Draw the UI overlay.
+    ///
+    /// `frame_index` selects the double-buffered geometry slot (0 or 1).
+    /// Must match the in-flight frame index so the CPU writes into a
+    /// buffer the GPU is guaranteed not to be reading from.
     pub fn draw(
         &mut self,
         vulkan: &VulkanDevice,
@@ -328,6 +363,7 @@ impl UiBackend {
         window_height: u32,
         ui_ctx: &UiContext,
         font: &Font,
+        frame_index: usize,
     ) {
         if ui_ctx.draw_commands.is_empty() {
             return;
@@ -361,48 +397,33 @@ impl UiBackend {
             return;
         }
 
+        // Pre-allocated buffers are sized for full editor UI + gizmos.
+        // overflowing means the initial capacity was too low — increase it.
+        assert!(
+            num_vertices <= self.vertex_capacity,
+            "UI vertex buffer overflow: {} > {}",
+            num_vertices,
+            self.vertex_capacity,
+        );
+        assert!(
+            num_indices <= self.index_capacity,
+            "UI index buffer overflow: {} > {}",
+            num_indices,
+            self.index_capacity,
+        );
+
+        let frame = frame_index % 2;
+        let vertex_buffer = self.vertex_buffers[frame].as_ref().unwrap();
+        let index_buffer = self.index_buffers[frame].as_ref().unwrap();
+
         unsafe {
-            if self.vertex_capacity < num_vertices {
-                self.vertex_capacity = (num_vertices * 2).max(1024);
-                if let Some(mut b) = self.vertex_buffer.take() {
-                    b.shutdown(vulkan);
-                }
-                self.vertex_buffer = Some(
-                    Buffer::new(
-                        vulkan,
-                        (self.vertex_capacity * std::mem::size_of::<UiVertex>()) as u64,
-                        vk::BufferUsageFlags::VERTEX_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )
-                    .unwrap(),
-                );
-            }
-
-            if self.index_capacity < num_indices {
-                self.index_capacity = (num_indices * 2).max(2048);
-                if let Some(mut b) = self.index_buffer.take() {
-                    b.shutdown(vulkan);
-                }
-                self.index_buffer = Some(
-                    Buffer::new(
-                        vulkan,
-                        (self.index_capacity * std::mem::size_of::<u32>()) as u64,
-                        vk::BufferUsageFlags::INDEX_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )
-                    .unwrap(),
-                );
-            }
-
             // Build vertices and indices
-            let v_mem = self.vertex_buffer.as_ref().unwrap().memory;
+            let v_mem = vertex_buffer.memory;
             let v_ptr = vulkan
                 .device
                 .map_memory(v_mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
                 .unwrap() as *mut UiVertex;
-            let i_mem = self.index_buffer.as_ref().unwrap().memory;
+            let i_mem = index_buffer.memory;
             let i_ptr = vulkan
                 .device
                 .map_memory(i_mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
@@ -708,12 +729,12 @@ impl UiBackend {
             vulkan.device.cmd_bind_vertex_buffers(
                 command_buffer,
                 0,
-                &[self.vertex_buffer.as_ref().unwrap().handle],
+                &[vertex_buffer.handle],
                 &[0],
             );
             vulkan.device.cmd_bind_index_buffer(
                 command_buffer,
-                self.index_buffer.as_ref().unwrap().handle,
+                index_buffer.handle,
                 0,
                 vk::IndexType::UINT32,
             );
@@ -773,11 +794,13 @@ impl UiBackend {
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
         unsafe {
-            if let Some(mut b) = self.vertex_buffer.take() {
-                b.shutdown(vulkan);
-            }
-            if let Some(mut b) = self.index_buffer.take() {
-                b.shutdown(vulkan);
+            for frame_idx in 0..2 {
+                if let Some(mut b) = self.vertex_buffers[frame_idx].take() {
+                    b.shutdown(vulkan);
+                }
+                if let Some(mut b) = self.index_buffers[frame_idx].take() {
+                    b.shutdown(vulkan);
+                }
             }
             if let Some(mut t) = self.font_texture.take() {
                 t.shutdown(vulkan);

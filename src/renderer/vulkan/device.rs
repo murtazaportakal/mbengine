@@ -1,6 +1,5 @@
 //! Vulkan logical device and instance initialization.
 
-use crate::renderer::RenderDevice;
 use ash::vk;
 
 pub struct VulkanDevice {
@@ -56,9 +55,9 @@ impl VulkanDevice {
         // Add debug utils
         extension_names.push(ash::ext::debug_utils::NAME.as_ptr());
 
-        let layer_names = [c"VK_LAYER_KHRONOS_validation"];
-        let layer_names_raw: Vec<*const std::ffi::c_char> =
-            layer_names.iter().map(|name| name.as_ptr()).collect();
+        // Disable validation layers to rule out debug overlay text
+        // artifacts ("keyboard symbols" flickering).
+        let layer_names_raw: Vec<*const std::ffi::c_char> = Vec::new();
 
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info)
@@ -378,16 +377,16 @@ impl VulkanDevice {
             self.frame_command_buffers = [new_cbs[0], new_cbs[1]];
         }
     }
-}
 
-impl RenderDevice for VulkanDevice {
-    fn wait_idle(&self) {
+    /// Wait for the device to finish all operations.
+    pub fn wait_idle(&self) {
         unsafe {
             let _ = self.device.device_wait_idle();
         }
     }
 
-    fn shutdown(&mut self) {
+    /// Shut down and clean up device resources.
+    pub fn shutdown(&mut self) {
         unsafe {
             for semaphore in self.render_finished_semaphores {
                 self.device.destroy_semaphore(semaphore, None);

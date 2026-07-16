@@ -365,6 +365,9 @@ impl Mesh {
 
         let offsets = geometry_pool.append_mesh(vulkan, vertices, indices, &meshlet_data)?;
 
+        crate::log_info!("[GLTF Mesh] AABB: [{:.3}, {:.3}, {:.3}] .. [{:.3}, {:.3}, {:.3}]", 
+            aabb_min[0], aabb_min[1], aabb_min[2], aabb_max[0], aabb_max[1], aabb_max[2]);
+
         Some(Self {
             vertex_offset: offsets.0,
             index_offset: offsets.1,

@@ -44,7 +44,14 @@ pub struct GltfData {
 ///
 /// Returns `None` if the file cannot be parsed or contains no mesh data.
 pub fn load_gltf(path: &str) -> Option<GltfData> {
-    let (document, buffers, gltf_images) = gltf::import(path).ok()?;
+    crate::log_info!("[GLTF] Importing file: {}", path);
+    let (document, buffers, gltf_images) = match gltf::import(path) {
+        Ok(res) => res,
+        Err(e) => {
+            crate::log_info!("[GLTF] Failed to import: {}", e);
+            return None;
+        }
+    };
 
     // Extract images
     let mut images = Vec::new();
@@ -115,6 +122,7 @@ pub fn load_gltf(path: &str) -> Option<GltfData> {
     let clips = extract_animations(&document, &buffers, &joint_node_to_bone_index);
 
     if primitives.is_empty() {
+        crate::log_info!("[GLTF] No primitives found in: {}", path);
         return None;
     }
 
