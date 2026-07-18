@@ -25,6 +25,12 @@ These rules are **non-negotiable** across all future sessions and govern the eng
 
 The engine has reached full maturity for its baseline requirements. All V1 and V2 epics are 100% complete and actively functional in the repository.
 
+### Engine Stabilization & Stress Testing (July 18, 2026)
+- **ECS Capacity Limits**: Massively increased internal sparse-set Component Array capacities from 1,000 to 20,000 to cleanly support the 10,000 Object Stress Test.
+- **UI Buffer Scalability**: Increased Vulkan Immediate-Mode GUI vertex/index buffers from 64K to 1,024K (4MB) to prevent buffer overflows when visualizing extreme entity counts in the Scene Hierarchy.
+- **Drop-Order Audio Safety**: Reordered `Application` subsystem drop sequencing so `AudioSystem` (sink tracker) drops strictly before `AudioSubsystem` (cpal stream), completely eliminating dangling thread memory violations on exit.
+- **Clean Headless Teardown**: Deleted the redundant `test_app` harness to synchronize CI purely around `cargo run`, stabilizing the build pipeline.
+
 ### Recent Polish (July 3, 2026)
 - **ECS Parallelization**: Upgraded component iteration to use `rayon`'s `par_iter_chunks` for massively improved data-oriented traversal.
 - **Editor UX**: Revamped Egui theme (light gray, sharp corners, distinct dropdown shadows).
