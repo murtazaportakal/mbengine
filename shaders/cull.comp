@@ -184,7 +184,7 @@ void main() {
         }
 
         // Phase F - HZB Occlusion Test
-        if (pc.hzbEnabled > 0.5) {
+        if (false && pc.hzbEnabled > 0.5) { // [DEBUG] Disabled HZB culling to see if it is the cause
             // Map NDC to UV [0,1]
             vec2 screenUV = ndcCenter.xy * 0.5 + 0.5;
 
