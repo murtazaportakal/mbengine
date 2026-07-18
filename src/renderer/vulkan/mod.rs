@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod bloom;
 pub mod buffer;
+pub mod compute_cloth;
 pub mod compute_cull;
 pub mod compute_skinning;
 pub mod device;
@@ -11,6 +12,7 @@ pub mod offscreen;
 pub mod pipeline;
 pub mod post_process_pipeline;
 pub mod render_graph;
+pub mod shadow_pass;
 pub mod skeleton;
 pub mod swapchain;
 pub mod texture;

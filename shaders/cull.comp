@@ -37,7 +37,7 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     uint pad2;
 } ubo;
 
-layout(set = 0, binding = 3) readonly buffer InstanceBuffer {
+layout(set = 0, binding = 3) buffer InstanceBuffer {
     InstanceData instances[];
 };
 
@@ -95,6 +95,7 @@ void main() {
     // Extract frustum planes from View-Projection matrix
     mat4 vp = ubo.viewProj;
     vec4 planes[6];
+    // Left, Right, Bottom, Top, Near, Far
     planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]);
     planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]);
     planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]);
@@ -102,12 +103,17 @@ void main() {
     planes[4] = vec4(vp[0][3] + vp[0][2], vp[1][3] + vp[1][2], vp[2][3] + vp[2][2], vp[3][3] + vp[3][2]);
     planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]);
 
+    // Normalize planes
+    for (int p = 0; p < 6; p++) {
+        float len = length(planes[p].xyz);
+        planes[p] /= len;
+    }
+
     // ---- Frustum Culling ----
     bool visible = true;
-    /*
     for (int p = 0; p < 6; p++) {
-        vec3 pNormal = ubo.frustumPlanes[p].xyz;
-        float pDist = ubo.frustumPlanes[p].w;
+        vec3 pNormal = planes[p].xyz;
+        float pDist = planes[p].w;
         
         // Compute effective radius of AABB projected onto plane normal
         float r = dot(worldExtents, abs(pNormal));
@@ -118,11 +124,20 @@ void main() {
             break;
         }
     }
-    */
+
+    // Debug Culling Visualization (pc.pad0 as debug flag)
+    if (pc.pad0 == 1) {
+        if (!visible) {
+            // Paint culled instances RED and render them anyway
+            instances[gID].color = vec4(1.0, 0.0, 0.0, 1.0);
+            visible = true;
+        } else {
+            // Paint visible instances GREEN
+            instances[gID].color = vec4(0.0, 1.0, 0.0, 1.0);
+        }
+    }
 
     // Cull invisible instances: skip the draw command entirely.
-    // Visible instances are compacted into the front of the command buffer
-    // via an atomic counter so vkCmdDrawIndexedIndirect only issues real draws.
     if (!visible) {
         return;
     }
@@ -135,7 +150,5 @@ void main() {
     commands[slot].instanceCount = 1;
     commands[slot].firstIndex = inst.extra.y;
     commands[slot].vertexOffset = int(inst.extra.z);
-    // firstInstance must point back to the original instance index so the
-    // vertex shader can fetch the correct InstanceData via gl_InstanceIndex.
     commands[slot].firstInstance = gID;
 }

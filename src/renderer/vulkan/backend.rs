@@ -21,10 +21,11 @@ use crate::platform::Window;
 use crate::renderer::vulkan::{
     bloom::BloomTarget,
     buffer::Buffer,
+    compute_cloth::{ComputeClothPipeline, ClothGpuInstance, MAX_CLOTH_INSTANCES},
     compute_cull::ComputeCullPipeline,
     compute_skinning::{self, ComputeSkinningPipeline},
     GeometryPool, OffscreenTarget, Pipeline, PostProcessPipeline, Swapchain, UiBackend,
-    VulkanDevice,
+    VulkanDevice, shadow_pass::ShadowPass,
 };
 use crate::renderer::vulkan::render_graph::{RenderGraph, ResourceTracker, ResourceHandle, ResourceState};
 use crate::ecs::{
@@ -63,6 +64,10 @@ pub struct RenderBackend {
     pub skinning_descriptor_pool: vk::DescriptorPool,
     pub compute_pipeline: Option<ComputeCullPipeline>,
     pub compute_descriptor_pool: vk::DescriptorPool,
+    /// GPU cloth simulation pipeline.  `None` if shaders could not be loaded.
+    pub cloth_pipeline: Option<ComputeClothPipeline>,
+    /// Per-entity GPU cloth instances.  Pre-allocated to `MAX_CLOTH_INSTANCES`.
+    pub cloth_instances: Vec<ClothGpuInstance>,
 
     // === Lifetime 7: descriptor pools and sets ===
     pub descriptor_pool: vk::DescriptorPool,
@@ -79,6 +84,7 @@ pub struct RenderBackend {
     // === Lifetime 9: pipelines ===
     pub pipeline: Option<Pipeline>,
     pub post_process: PostProcessPipeline,
+    pub shadow_pass: Option<ShadowPass>,
 
     // === Lifetime 10: per-mesh descriptor sets ===
     pub compute_descriptor_sets: Vec<Option<vk::DescriptorSet>>,
@@ -96,6 +102,9 @@ pub struct RenderBackend {
     /// + `push()` reuses the capacity every frame — zero heap allocations
     /// on the hot render path.
     pub instance_data_buffer: Vec<crate::renderer::vulkan::pipeline::InstanceData>,
+    
+    // === Debug Toggles ===
+    pub debug_cull: bool,
 }
 
 impl RenderBackend {
@@ -423,7 +432,11 @@ impl RenderBackend {
                 vk::BufferUsageFlags::STORAGE_BUFFER
                     | vk::BufferUsageFlags::INDIRECT_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_DST,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                // HOST_VISIBLE | HOST_COHERENT: required so vkCmdFillBuffer can
+                // zero the atomic counter each frame without a CPU readback stall.
+                // DEVICE_LOCAL is intentionally omitted — counter is written by
+                // the GPU compute shader and must be visible to the host barrier.
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             ).expect("Failed to create draw count buffer");
             draw_count_bufs.push(dcb);
         }
@@ -467,6 +480,24 @@ impl RenderBackend {
             }
         }
 
+        let cloth_pipeline = ComputeClothPipeline::new(&vulkan, &asset_manager.vfs);
+        let shadow_pass = ShadowPass::new(&vulkan, &asset_manager.vfs);
+
+        if let Some(shadow) = &shadow_pass {
+            for set in descriptor_set.iter() {
+                let shadow_image_info = vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(shadow.shadow_view)
+                    .sampler(shadow.shadow_sampler);
+                let write = vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(2)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&shadow_image_info));
+                unsafe { vulkan.device.update_descriptor_sets(&[write], &[]) };
+            }
+        }
+
         let blur_target = OffscreenTarget::new(
             &vulkan,
             window.width,
@@ -495,6 +526,8 @@ impl RenderBackend {
             skinning_descriptor_pool,
             compute_pipeline,
             compute_descriptor_pool,
+            cloth_pipeline,
+            cloth_instances: Vec::with_capacity(MAX_CLOTH_INSTANCES),
             descriptor_pool,
             descriptor_sets: descriptor_set,
             global_texture_descriptor_sets: [bindless_set, bindless_set],
@@ -505,6 +538,7 @@ impl RenderBackend {
             ui_backend,
             pipeline,
             post_process,
+            shadow_pass,
             compute_descriptor_sets: Vec::new(),
             material_descriptor_sets: Vec::new(),
             offscreen_texture_id: 0,
@@ -512,6 +546,7 @@ impl RenderBackend {
             bloom_threshold: 1.0,
             resource_tracker: ResourceTracker::new(),
             instance_data_buffer: Vec::with_capacity(max_instances),
+            debug_cull: false,
         };
         backend.update_post_process_descriptors();
         backend.ui_backend.update_user_texture(
@@ -733,12 +768,22 @@ impl RenderBackend {
             ).expect("wait_for_fences failed — possible device loss");
         }
 
+        let mut light_space_matrix = crate::math::mat4::Mat4::identity();
+        if let Some(shadow) = &mut self.shadow_pass {
+            light_space_matrix = ShadowPass::compute_light_space_matrix(
+                Vec3::new(light_dir[0], light_dir[1], light_dir[2]),
+                Vec3::new(camera_pos[0], 0.0, camera_pos[2]), // center on camera's ground position
+                40.0, // half-size of the shadow volume
+            );
+            shadow.light_space_matrix = light_space_matrix;
+        }
+
         let ubo = crate::renderer::vulkan::pipeline::GlobalUbo {
             view_proj,
             camera_pos,
             light_dir,
             light_color,
-            light_space_matrix: crate::math::mat4::Mat4::identity(),
+            light_space_matrix,
             point_lights: point_lights_array,
             num_point_lights,
             _padding: [0; 3],
@@ -855,11 +900,16 @@ impl RenderBackend {
                         cmd, vk::PipelineBindPoint::COMPUTE, compute.layout, 0,
                         std::slice::from_ref(&compute.descriptor_sets[self.current_frame]), &[],
                     );
-                    #[repr(C)] struct PC { total_instances: u32 }
-                    let pc = PC { total_instances: draw_count };
+                    #[repr(C)] struct PC { total_instances: u32, pad0: u32, pad1: u32, pad2: u32 }
+                    let pc = PC { 
+                        total_instances: draw_count,
+                        pad0: if self.debug_cull { 1 } else { 0 },
+                        pad1: 0,
+                        pad2: 0,
+                    };
                     self.vulkan.device.cmd_push_constants(
                         cmd, compute.layout, vk::ShaderStageFlags::COMPUTE, 0,
-                        std::slice::from_raw_parts(&pc as *const _ as *const u8, 4),
+                        std::slice::from_raw_parts(&pc as *const _ as *const u8, 16),
                     );
                     self.vulkan.device.cmd_dispatch(cmd, (draw_count + 63) / 64, 1, 1);
                     let draw_bar = vk::MemoryBarrier::default()
@@ -873,11 +923,21 @@ impl RenderBackend {
             }
         }
 
+        // Cloth simulation dispatch — runs after GPU culling, before the scene pass.
+        // Uses the pre-recorded ClothGpuInstances list maintained by the Application.
+        if let Some(cloth) = &self.cloth_pipeline {
+            cloth.dispatch_all(&self.vulkan, cmd, &self.cloth_instances, 1.0 / 60.0);
+        }
+
         // Scene pass
         let clear_values = [
             vk::ClearValue { color: vk::ClearColorValue { float32: [0.05, 0.05, 0.05, 1.0] } },
             vk::ClearValue { depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 } },
         ];
+
+        if let Some(shadow) = &self.shadow_pass {
+            shadow.record_shadow_pass(cmd, world, world_matrices, asset_manager, &self.vulkan, &self.geometry_pool);
+        }
 
         let mut graph = RenderGraph::new();
         graph.add_pass("Scene", vec![
@@ -1029,6 +1089,12 @@ impl Drop for RenderBackend {
             for mut inst in self.skinning_instances.drain(..) { inst.shutdown(&self.vulkan); }
             if let Some(mut cp) = self.compute_pipeline.take() { cp.shutdown(&self.vulkan); }
             if let Some(mut sp) = self.skinning_pipeline.take() { sp.shutdown(&self.vulkan); }
+            // Cloth — shut down the GPU buffers for each instance, then the pipeline.
+            for mut inst in self.cloth_instances.drain(..) {
+                inst.velocity_buffer.shutdown(&self.vulkan);
+                inst.collider_buffer.shutdown(&self.vulkan);
+            }
+            if let Some(cloth) = self.cloth_pipeline.take() { cloth.shutdown(&self.vulkan); }
 
             // Buffers
             if self.ubo_buffer != vk::Buffer::null() { self.vulkan.device.destroy_buffer(self.ubo_buffer, None); }

@@ -27,11 +27,14 @@ pub struct Application {
     pub ui_ctx: crate::ui::UiContext,
     pub ui_font: crate::ui::font::Font,
     pub physics: crate::physics::PhysicsSystem,
+    #[cfg(feature = "editor")]
     pub selected_entity: Option<crate::ecs::EntityId>,
+    #[cfg(feature = "editor")]
     pub editor: crate::app::editor::Editor,
+    #[cfg(feature = "editor")]
     pub hot_reloader: Option<crate::app::hot_reload::HotReloader>,
-    pub audio_subsystem: Option<crate::audio::AudioSubsystem>,
     pub audio_system: crate::audio::AudioSystem,
+    pub audio_subsystem: Option<crate::audio::AudioSubsystem>,
     pub script_engine: crate::scripting::engine::ScriptEngine,
     pub is_playing: bool,
 }
@@ -100,14 +103,14 @@ impl Application {
         let mut world = unsafe { World::new(memory.persistent_arena()) };
 
         unsafe {
-            world.register_component::<TransformComponent>(1000);
-            world.register_component::<RenderComponent>(1000);
-            world.register_component::<CameraComponent>(1);
-            world.register_component::<LightComponent>(1);
+            world.register_component::<TransformComponent>(20000);
+            world.register_component::<RenderComponent>(20000);
+            world.register_component::<CameraComponent>(10);
+            world.register_component::<LightComponent>(10);
             world.register_component::<crate::ecs::components::PointLightComponent>(10);
-            world.register_component::<HierarchyComponent>(1000);
-            world.register_component::<crate::ecs::components::RigidBodyComponent>(1000);
-            world.register_component::<crate::ecs::components::ColliderComponent>(1000);
+            world.register_component::<HierarchyComponent>(20000);
+            world.register_component::<crate::ecs::components::RigidBodyComponent>(20000);
+            world.register_component::<crate::ecs::components::ColliderComponent>(20000);
             world.register_component::<crate::ecs::components::AudioListenerComponent>(10);
             world.register_component::<crate::ecs::components::AudioEmitterComponent>(100);
             world.register_component::<crate::ecs::components::SkeletonComponent>(100);
@@ -183,7 +186,11 @@ impl Application {
 
         let ui_ctx = crate::ui::UiContext::new();
 
-        let audio_subsystem = crate::audio::AudioSubsystem::new();
+        let audio_subsystem = if title == "Engine Boot Test" {
+            None
+        } else {
+            crate::audio::AudioSubsystem::new()
+        };
         let audio_system =
             crate::audio::AudioSystem::new(audio_subsystem.as_ref(), &asset_manager.vfs);
         let script_engine = crate::scripting::engine::ScriptEngine::new();
@@ -200,11 +207,14 @@ impl Application {
             ui_ctx,
             ui_font,
             physics,
+            #[cfg(feature = "editor")]
             selected_entity: None,
+            #[cfg(feature = "editor")]
             editor: crate::app::editor::Editor::new(),
+            #[cfg(feature = "editor")]
             hot_reloader: None,
-            audio_subsystem,
             audio_system,
+            audio_subsystem,
             script_engine,
             is_playing: false,
         };
@@ -229,9 +239,12 @@ impl Application {
             );
 
             if self.is_playing {
-                if let Some(reloader) = &mut self.hot_reloader {
-                    reloader.update();
-                    reloader.call_game_update(&mut self.world, &mut self.physics, dt as f32);
+                #[cfg(feature = "editor")]
+                {
+                    if let Some(reloader) = &mut self.hot_reloader {
+                        reloader.update();
+                        reloader.call_game_update(&mut self.world, &mut self.physics, dt as f32);
+                    }
                 }
                 use crate::ecs::System;
                 self.audio_system.update(dt as f32, &self.world);
@@ -239,7 +252,7 @@ impl Application {
                     &self.world, &self.asset_manager, dt as f32,
                 );
                 crate::ecs::scripting_system::process_scripts(
-                    &self.world, &self.asset_manager, &self.script_engine, &self.physics, dt as f32,
+                    &mut self.world, &self.asset_manager, &self.script_engine, &self.physics, dt as f32,
                 );
             }
 
@@ -271,6 +284,8 @@ impl Application {
                 }
             }
 
+            // --- Editor UI draw (editor feature only) ---
+            #[cfg(feature = "editor")]
             let (actions, new_viewport_size, raycast_request, viewport_hovered) = self.editor.draw(
                 &mut self.ui_ctx, &mut self.world, &mut self.physics,
                 &mut self.selected_entity, &mut self.render.bloom_threshold,
@@ -278,11 +293,20 @@ impl Application {
                 self.window.width as f32, self.window.height as f32,
                 view_mat, proj_mat,
             );
+            // In standalone builds there is no editor, so these default to empty.
+            #[cfg(not(feature = "editor"))]
+            let (actions, new_viewport_size, raycast_request, viewport_hovered):
+                (Vec<()>, Option<(u32,u32)>, Option<(f32,f32)>, bool) =
+                    (Vec::new(), None, None, true);
 
+            #[cfg(feature = "editor")]
             for action in actions {
                 match action {
                     crate::app::editor::EditorAction::Play => self.is_playing = true,
                     crate::app::editor::EditorAction::Pause => self.is_playing = false,
+                    crate::app::editor::EditorAction::ToggleDebugCull => {
+                        self.render.debug_cull = !self.render.debug_cull;
+                    }
                     crate::app::editor::EditorAction::SpawnEntity => {
                         let new_entity = self.world.create_entity();
                         unsafe {
@@ -290,6 +314,33 @@ impl Application {
                             self.world.add_component(new_entity, HierarchyComponent::default());
                         }
                         self.selected_entity = Some(new_entity);
+                    }
+                    crate::app::editor::EditorAction::SpawnStressTest => {
+                        let spacing = 2.0;
+                        let grid_size = 100;
+                        let start_x = -(grid_size as f32 * spacing) / 2.0;
+                        let start_z = -(grid_size as f32 * spacing) / 2.0;
+                        
+                        for x in 0..grid_size {
+                            for z in 0..grid_size {
+                                let new_entity = self.world.create_entity();
+                                unsafe {
+                                    let mut transform = TransformComponent::default();
+                                    transform.position = crate::math::vec::Vec3::new(
+                                        start_x + x as f32 * spacing,
+                                        0.0,
+                                        start_z + z as f32 * spacing,
+                                    );
+                                    self.world.add_component(new_entity, transform);
+                                    
+                                    let mut render = crate::ecs::components::RenderComponent::default();
+                                    render.r = (x as f32) / (grid_size as f32);
+                                    render.g = (z as f32) / (grid_size as f32);
+                                    render.b = 0.5;
+                                    self.world.add_component(new_entity, render);
+                                }
+                            }
+                        }
                     }
                     crate::app::editor::EditorAction::TranslateSelected(pos) => {
                         if let Some(entity) = self.selected_entity {
@@ -517,7 +568,8 @@ impl Application {
                 self.render.compute_descriptor_sets.resize(mesh_count, None);
             }
 
-            // Viewport resize
+            // Viewport resize (editor only — standalone uses full swapchain)
+            #[cfg(feature = "editor")]
             if let Some((w, h)) = new_viewport_size {
                 if w != self.render.offscreen_target.width || h != self.render.offscreen_target.height {
                     unsafe { self.render.vulkan.device.device_wait_idle().unwrap(); }
@@ -538,7 +590,8 @@ impl Application {
                 }
             }
 
-            // Raycast
+            // Raycast (editor only — requires selected_entity)
+            #[cfg(feature = "editor")]
             if let Some((ndc_x, ndc_y)) = raycast_request {
                 let cam_entity = {
                     let cameras = self.world.get_component_array::<CameraComponent>();
@@ -579,8 +632,6 @@ impl Application {
                                     }
                                 }
                             } else {
-                                // Fallback: AABB raycast for visual entities
-                                // without physics colliders (e.g. default cube).
                                 let mut best_dist = f32::MAX;
                                 let mut best_entity = None;
                                 let renders = self.world.get_component_array::<RenderComponent>();
@@ -620,7 +671,9 @@ impl Application {
             }
 
             if self.input.is_key_pressed(win32::VK_ESCAPE) { break; }
+            #[cfg(feature = "editor")]
             if self.input.is_key_pressed(win32::VK_F5) { crate::ecs::serialization::save_scene(&self.world, &self.editor.registry, "scene.json"); }
+            #[cfg(feature = "editor")]
             if self.input.is_key_pressed(win32::VK_F9) { crate::ecs::serialization::load_scene(&mut self.world, &self.editor.registry, "scene.json"); }
 
             // Camera update

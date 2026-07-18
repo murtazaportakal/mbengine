@@ -390,6 +390,7 @@ impl UiBackend {
                     num_vertices += text.len() * 4;
                     num_indices += text.len() * 6;
                 }
+                DrawCommand::SetScissor { .. } => {}
             }
         }
 
@@ -432,16 +433,19 @@ impl UiBackend {
             let mut v_offset = 0;
             let mut i_offset = 0;
 
+            #[derive(Clone, Copy)]
             struct DrawCall {
                 index_count: u32,
                 first_index: u32,
                 descriptor: vk::DescriptorSet,
+                scissor: Option<crate::ui::context::UiRect>,
             }
             let mut draw_calls = Vec::new();
             let mut current_draw_call = DrawCall {
                 index_count: 0,
                 first_index: 0,
                 descriptor: self.white_descriptor_set,
+                scissor: None,
             };
 
             for cmd in &ui_ctx.draw_commands {
@@ -455,6 +459,7 @@ impl UiBackend {
                                 index_count: 0,
                                 first_index: i_offset as u32,
                                 descriptor: self.white_descriptor_set,
+                                scissor: current_draw_call.scissor,
                             };
                         } else if current_draw_call.index_count == 0 {
                             current_draw_call.descriptor = self.white_descriptor_set;
@@ -514,6 +519,7 @@ impl UiBackend {
                                 index_count: 0,
                                 first_index: i_offset as u32,
                                 descriptor: self.white_descriptor_set,
+                                scissor: current_draw_call.scissor,
                             };
                         } else if current_draw_call.index_count == 0 {
                             current_draw_call.descriptor = self.white_descriptor_set;
@@ -588,6 +594,7 @@ impl UiBackend {
                                 index_count: 0,
                                 first_index: i_offset as u32,
                                 descriptor: desc,
+                                scissor: current_draw_call.scissor,
                             };
                         } else if current_draw_call.index_count == 0 {
                             current_draw_call.descriptor = desc;
@@ -647,6 +654,7 @@ impl UiBackend {
                                 index_count: 0,
                                 first_index: i_offset as u32,
                                 descriptor: self.font_descriptor_set,
+                                scissor: current_draw_call.scissor,
                             };
                         } else if current_draw_call.index_count == 0 {
                             current_draw_call.descriptor = self.font_descriptor_set;
@@ -712,6 +720,19 @@ impl UiBackend {
                             cur_x += gi.advance * scale;
                         }
                     }
+                    DrawCommand::SetScissor { rect } => {
+                        if current_draw_call.index_count > 0 {
+                            draw_calls.push(current_draw_call);
+                            current_draw_call = DrawCall {
+                                index_count: 0,
+                                first_index: i_offset as u32,
+                                descriptor: current_draw_call.descriptor,
+                                scissor: *rect,
+                            };
+                        } else {
+                            current_draw_call.scissor = *rect;
+                        }
+                    }
                 }
             }
             if current_draw_call.index_count > 0 {
@@ -762,16 +783,23 @@ impl UiBackend {
                 .device
                 .cmd_set_viewport(command_buffer, 0, &[viewport]);
 
-            let scissor = vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: vk::Extent2D {
-                    width: window_width,
-                    height: window_height,
-                },
-            };
-            vulkan.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
-
             for call in draw_calls {
+                let scissor = if let Some(rect) = call.scissor {
+                    vk::Rect2D {
+                        offset: vk::Offset2D { x: rect.x as i32, y: rect.y as i32 },
+                        extent: vk::Extent2D { width: rect.w as u32, height: rect.h as u32 },
+                    }
+                } else {
+                    vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: vk::Extent2D {
+                            width: window_width,
+                            height: window_height,
+                        },
+                    }
+                };
+                vulkan.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+
                 vulkan.device.cmd_bind_descriptor_sets(
                     command_buffer,
                     vk::PipelineBindPoint::GRAPHICS,

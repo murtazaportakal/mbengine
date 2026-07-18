@@ -3,7 +3,7 @@
 use ash::vk;
 
 pub struct VulkanDevice {
-    pub entry: ash::Entry,
+    pub entry: std::mem::ManuallyDrop<ash::Entry>,
     pub instance: ash::Instance,
     pub physical_device: vk::PhysicalDevice,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -35,7 +35,7 @@ impl VulkanDevice {
     /// Attempt to initialize the Vulkan backend.
     /// Returns None if no suitable GPU or driver is found.
     pub fn new() -> Option<Self> {
-        let entry = unsafe { ash::Entry::load().ok()? };
+        let entry = std::mem::ManuallyDrop::new(unsafe { ash::Entry::load().ok()? });
 
         let app_name = c"MBEngine";
         let engine_name = c"MBEngine Core";

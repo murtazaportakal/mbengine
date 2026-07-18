@@ -99,6 +99,9 @@ pub enum DrawCommand {
         color: UiColor,
         font_size: f32,
     },
+    SetScissor {
+        rect: Option<UiRect>,
+    },
 }
 
 pub struct UiContext {

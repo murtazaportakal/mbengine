@@ -511,13 +511,31 @@ impl ReflectComponent for SkeletonComponent {
 
 #[derive(Clone, Debug)]
 pub enum AnimationState {
+    /// Single clip playback.
     Clip {
         clip_name: crate::containers::FixedString<64>,
     },
+    /// 1D linear blend between two clips using `weight` ∈ [0, 1].
     Blend1D {
-        clip_a: crate::containers::FixedString<64>,
-        clip_b: crate::containers::FixedString<64>,
-        weight: f32, // 0.0 = clip_a, 1.0 = clip_b
+        clip_a:  crate::containers::FixedString<64>,
+        clip_b:  crate::containers::FixedString<64>,
+        weight:  f32, // 0.0 = clip_a, 1.0 = clip_b
+    },
+    /// 2D bilinear blend between four clips arranged on a unit-square grid.
+    ///
+    /// ```text
+    ///   param_y=1  clip_tl ──── clip_tr
+    ///              │              │
+    ///   param_y=0  clip_bl ──── clip_br
+    ///              param_x=0   param_x=1
+    /// ```
+    Blend2D {
+        clip_bl: crate::containers::FixedString<64>, // bottom-left  (0, 0)
+        clip_br: crate::containers::FixedString<64>, // bottom-right (1, 0)
+        clip_tl: crate::containers::FixedString<64>, // top-left     (0, 1)
+        clip_tr: crate::containers::FixedString<64>, // top-right    (1, 1)
+        param_x: f32, // horizontal blend param [0, 1]
+        param_y: f32, // vertical   blend param [0, 1]
     },
 }
 
@@ -529,10 +547,145 @@ impl Default for AnimationState {
     }
 }
 
-/// Drives skeletal animation playback for entities with a SkeletonComponent.
+/// A single named transition between two state-machine states.
+#[derive(Clone, Debug)]
+pub struct StateMachineTransition {
+    /// Source state name.  Empty string matches any state.
+    pub from: crate::containers::FixedString<32>,
+    /// Destination state name.
+    pub to: crate::containers::FixedString<32>,
+    /// The float parameter whose value drives this transition.
+    pub condition_param: crate::containers::FixedString<32>,
+    /// Transition fires when `param >= threshold` (for ≥ semantics) or
+    /// when `param < threshold` (for < semantics, indicated by negative threshold).
+    pub threshold: f32,
+    /// Cross-fade duration in seconds (0 = instant switch).
+    pub blend_duration: f32,
+}
+
+/// Named float parameters accessible from both the state machine and Rhai scripts.
+#[derive(Clone, Debug, Default)]
+pub struct StateMachineParams {
+    pub entries: crate::containers::FixedArray<(crate::containers::FixedString<32>, f32), 16>,
+}
+
+impl StateMachineParams {
+    pub fn set(&mut self, name: &str, value: f32) {
+        for (n, v) in self.entries.as_mut_slice() {
+            if n.as_str() == name { *v = value; return; }
+        }
+        // Not found — insert if capacity allows
+        let mut key = crate::containers::FixedString::<32>::new();
+        key.push_str(name);
+        self.entries.push((key, value));
+    }
+
+    pub fn get(&self, name: &str) -> f32 {
+        for (n, v) in self.entries.as_slice() {
+            if n.as_str() == name { return *v; }
+        }
+        0.0
+    }
+}
+
+/// A state machine layered on top of `AnimatorComponent`.
+///
+/// Holds up to 16 named animation states and 32 transitions.  Each frame
+/// `evaluate_transitions` is called by the animation system; when a condition
+/// fires it triggers a `crossfade_to` on the owning `AnimatorComponent`.
+#[derive(Clone, Debug, Default)]
+pub struct AnimatorStateMachine {
+    /// Named states: (name → AnimationState).
+    pub states: crate::containers::FixedArray<
+        (crate::containers::FixedString<32>, AnimationState), 16,
+    >,
+    /// All possible transitions.
+    pub transitions: crate::containers::FixedArray<StateMachineTransition, 32>,
+    /// Shared float parameters accessible by transitions and scripts.
+    pub params: StateMachineParams,
+    /// Name of the currently active state.
+    pub current_state_name: crate::containers::FixedString<32>,
+}
+
+impl AnimatorStateMachine {
+    /// Register a named animation state.
+    pub fn add_state(&mut self, name: &str, state: AnimationState) {
+        let mut key = crate::containers::FixedString::<32>::new();
+        key.push_str(name);
+        self.states.push((key, state));
+    }
+
+    /// Register a transition.
+    pub fn add_transition(
+        &mut self,
+        from: &str,
+        to: &str,
+        param: &str,
+        threshold: f32,
+        blend_duration: f32,
+    ) {
+        let mut t = StateMachineTransition {
+            from: crate::containers::FixedString::new(),
+            to: crate::containers::FixedString::new(),
+            condition_param: crate::containers::FixedString::new(),
+            threshold,
+            blend_duration,
+        };
+        t.from.push_str(from);
+        t.to.push_str(to);
+        t.condition_param.push_str(param);
+        self.transitions.push(t);
+    }
+
+    /// Set a float parameter by name.
+    pub fn set_param(&mut self, name: &str, value: f32) {
+        self.params.set(name, value);
+    }
+
+    /// Get a float parameter by name.
+    pub fn get_param(&self, name: &str) -> f32 {
+        self.params.get(name)
+    }
+
+    /// Evaluate all transitions from the current state.
+    /// Returns `Some((target_state, blend_duration))` if a transition fires.
+    pub fn evaluate_transitions(&self) -> Option<(&AnimationState, f32)> {
+        let current = self.current_state_name.as_str();
+        for t in self.transitions.as_slice() {
+            let from_matches = t.from.as_str().is_empty() || t.from.as_str() == current;
+            if !from_matches { continue; }
+
+            let param_val = self.params.get(t.condition_param.as_str());
+            let fires = if t.threshold >= 0.0 {
+                param_val >= t.threshold
+            } else {
+                param_val < -t.threshold
+            };
+            if !fires { continue; }
+            // Don't self-transition
+            if t.to.as_str() == current { continue; }
+
+            // Find the target state
+            for (name, state) in self.states.as_slice() {
+                if name.as_str() == t.to.as_str() {
+                    return Some((state, t.blend_duration));
+                }
+            }
+        }
+        None
+    }
+
+    /// Update the current state name after a crossfade commits.
+    pub fn commit_transition(&mut self, new_state_name: &str) {
+        self.current_state_name = crate::containers::FixedString::new();
+        self.current_state_name.push_str(new_state_name);
+    }
+}
+
+/// Drives skeletal animation playback for entities with a `SkeletonComponent`.
 #[derive(Clone, Debug)]
 pub struct AnimatorComponent {
-    /// Current state (Single Clip or Blend1D).
+    /// Current state (Single Clip, Blend1D, or Blend2D).
     pub state: AnimationState,
     /// Current playback time in seconds for the primary state.
     pub current_time: f32,
@@ -553,6 +706,12 @@ pub struct AnimatorComponent {
     pub is_playing: bool,
     /// Whether the animation loops.
     pub is_looping: bool,
+
+    /// Optional state machine layered on top of direct state control.
+    ///
+    /// When `Some`, `evaluate_transitions` is called each frame and may
+    /// override the active state via `crossfade_to`.
+    pub state_machine: Option<AnimatorStateMachine>,
 }
 
 impl Default for AnimatorComponent {
@@ -567,6 +726,7 @@ impl Default for AnimatorComponent {
             speed: 1.0,
             is_playing: true,
             is_looping: true,
+            state_machine: None,
         }
     }
 }
@@ -649,3 +809,78 @@ impl ReflectComponent for ScriptBehaviorComponent {
     }
 }
 
+
+// �� ClothComponent �����������������������������������������������������������
+
+/// Marks an entity as a GPU-simulated cloth / soft body.
+///
+/// The `RenderBackend` uses this component to maintain a `ClothGpuInstance`
+/// for the entity.  The ECS component stores simulation parameters; the GPU
+/// state (velocity buffer, descriptor sets) lives in `RenderBackend::cloth_instances`.
+#[derive(Clone, Debug)]
+pub struct ClothComponent {
+    pub grid_width: u32,
+    pub grid_height: u32,
+    pub stiffness: f32,
+    pub damping: f32,
+    pub solver_iterations: u32,
+    /// Flat indices of pinned grid particles (row * grid_width + col).
+    pub pinned_vertices: crate::containers::FixedArray<u32, 16>,
+    /// Sphere colliders in local space: [cx, cy, cz, radius].
+    pub sphere_colliders: crate::containers::FixedArray<[f32; 4], 8>,
+    /// Index into `RenderBackend::cloth_instances` once the GPU instance is created.
+    pub gpu_instance_index: Option<usize>,
+}
+
+impl Default for ClothComponent {
+    fn default() -> Self {
+        Self {
+            grid_width: 16,
+            grid_height: 16,
+            stiffness: 0.8,
+            damping: 0.02,
+            solver_iterations: 8,
+            pinned_vertices: crate::containers::FixedArray::new(),
+            sphere_colliders: crate::containers::FixedArray::new(),
+            gpu_instance_index: None,
+        }
+    }
+}
+
+impl ReflectComponent for ClothComponent {
+    fn name() -> &'static str { "Cloth" }
+
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+
+    fn draw_inspector(
+        &mut self,
+        ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
+        let mut changed = false;
+        let mut gw = self.grid_width as f32;
+        if ui.drag_float("Grid Width", &mut gw) {
+            self.grid_width = (gw as u32).clamp(2, 64);
+            changed = true;
+        }
+        let mut gh = self.grid_height as f32;
+        if ui.drag_float("Grid Height", &mut gh) {
+            self.grid_height = (gh as u32).clamp(2, 64);
+            changed = true;
+        }
+        if ui.drag_float("Stiffness", &mut self.stiffness) { changed = true; }
+        if ui.drag_float("Damping", &mut self.damping) { changed = true; }
+        let mut iters = self.solver_iterations as f32;
+        if ui.drag_float("Solver Iterations", &mut iters) {
+            self.solver_iterations = (iters as u32).clamp(1, 32);
+            changed = true;
+        }
+        changed
+    }
+}

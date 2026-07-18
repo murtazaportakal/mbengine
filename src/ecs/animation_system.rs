@@ -5,6 +5,8 @@ use crate::ecs::{
 };
 use crate::renderer::vulkan::skeleton::SkeletonPose;
 
+// ── Duration helpers ──────────────────────────────────────────────────────────
+
 /// Get the maximum duration of a given state for looping/stopping logic.
 fn get_state_duration(
     state: &AnimationState,
@@ -13,30 +15,53 @@ fn get_state_duration(
 ) -> f32 {
     match state {
         AnimationState::Clip { clip_name } => {
-            if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_name.as_str())
-            {
-                clip.duration
-            } else {
-                0.0
-            }
+            asset_manager
+                .get_animation_clip(skeleton_name, clip_name.as_str())
+                .map(|c| c.duration)
+                .unwrap_or(0.0)
         }
         AnimationState::Blend1D { clip_a, clip_b, .. } => {
-            let dur_a = if let Some(clip) =
-                asset_manager.get_animation_clip(skeleton_name, clip_a.as_str())
-            {
-                clip.duration
-            } else {
-                0.0
-            };
-            let dur_b = if let Some(clip) =
-                asset_manager.get_animation_clip(skeleton_name, clip_b.as_str())
-            {
-                clip.duration
-            } else {
-                0.0
-            };
-            dur_a.max(dur_b)
+            let da = asset_manager
+                .get_animation_clip(skeleton_name, clip_a.as_str())
+                .map(|c| c.duration)
+                .unwrap_or(0.0);
+            let db = asset_manager
+                .get_animation_clip(skeleton_name, clip_b.as_str())
+                .map(|c| c.duration)
+                .unwrap_or(0.0);
+            da.max(db)
         }
+        AnimationState::Blend2D {
+            clip_bl, clip_br, clip_tl, clip_tr, ..
+        } => {
+            [clip_bl, clip_br, clip_tl, clip_tr]
+                .iter()
+                .filter_map(|name| {
+                    asset_manager
+                        .get_animation_clip(skeleton_name, name.as_str())
+                        .map(|c| c.duration)
+                })
+                .fold(0.0f32, f32::max)
+        }
+    }
+}
+
+// ── Pose samplers ─────────────────────────────────────────────────────────────
+
+/// Sample a clip at time `t`, writing into `out_pose`.
+fn sample_clip(
+    clip_name: &str,
+    time: f32,
+    skeleton_name: &str,
+    asset_manager: &AssetManager,
+    bone_count: usize,
+    out_pose: &mut SkeletonPose,
+) {
+    if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_name) {
+        let t = if clip.duration > 0.0 { time % clip.duration } else { 0.0 };
+        clip.sample_pose(t, bone_count, out_pose);
+    } else {
+        *out_pose = SkeletonPose::new(bone_count);
     }
 }
 
@@ -51,52 +76,53 @@ fn sample_state(
 ) {
     match state {
         AnimationState::Clip { clip_name } => {
-            if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_name.as_str())
-            {
-                let t = if clip.duration > 0.0 {
-                    time % clip.duration
-                } else {
-                    0.0
-                };
-                clip.sample_pose(t, bone_count, out_pose);
-            } else {
-                *out_pose = SkeletonPose::new(bone_count);
-            }
+            sample_clip(clip_name.as_str(), time, skeleton_name, asset_manager, bone_count, out_pose);
         }
-        AnimationState::Blend1D {
-            clip_a,
-            clip_b,
-            weight,
-        } => {
+
+        AnimationState::Blend1D { clip_a, clip_b, weight } => {
             let mut pose_a = SkeletonPose::new(bone_count);
             let mut pose_b = SkeletonPose::new(bone_count);
-
-            if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_a.as_str()) {
-                let t = if clip.duration > 0.0 {
-                    time % clip.duration
-                } else {
-                    0.0
-                };
-                clip.sample_pose(t, bone_count, &mut pose_a);
-            }
-            if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_b.as_str()) {
-                let t = if clip.duration > 0.0 {
-                    time % clip.duration
-                } else {
-                    0.0
-                };
-                clip.sample_pose(t, bone_count, &mut pose_b);
-            }
-
+            sample_clip(clip_a.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_a);
+            sample_clip(clip_b.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_b);
             SkeletonPose::blend(&pose_a, &pose_b, *weight, out_pose);
+        }
+
+        AnimationState::Blend2D {
+            clip_bl, clip_br, clip_tl, clip_tr, param_x, param_y,
+        } => {
+            // Bilinear interpolation:
+            //   lerp( lerp(bl, br, x), lerp(tl, tr, x), y )
+            let mut pose_bl = SkeletonPose::new(bone_count);
+            let mut pose_br = SkeletonPose::new(bone_count);
+            let mut pose_tl = SkeletonPose::new(bone_count);
+            let mut pose_tr = SkeletonPose::new(bone_count);
+
+            sample_clip(clip_bl.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_bl);
+            sample_clip(clip_br.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_br);
+            sample_clip(clip_tl.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_tl);
+            sample_clip(clip_tr.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_tr);
+
+            // Bottom row blend
+            let mut pose_bottom = SkeletonPose::new(bone_count);
+            SkeletonPose::blend(&pose_bl, &pose_br, *param_x, &mut pose_bottom);
+
+            // Top row blend
+            let mut pose_top = SkeletonPose::new(bone_count);
+            SkeletonPose::blend(&pose_tl, &pose_tr, *param_x, &mut pose_top);
+
+            // Vertical blend
+            SkeletonPose::blend(&pose_bottom, &pose_top, *param_y, out_pose);
         }
     }
 }
 
-/// Process all active animations, advance their timers, and compute local-to-model
-/// bone matrices for GPU skinning.
+// ── Main animation processor ──────────────────────────────────────────────────
+
+/// Process all active animations, advance their timers, evaluate state machines,
+/// and compute local-to-model bone matrices for GPU skinning.
 pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) {
-    // Safe because this is the only place updating animation time and computed matrices
+    // SAFETY: this is the only system that mutates AnimatorComponent and
+    // SkeletonComponent this frame; the Scheduler enforces exclusivity.
     let animators_mut = unsafe { &mut *world.get_component_array_mut_ptr::<AnimatorComponent>() };
     let skeletons_mut = unsafe { &mut *world.get_component_array_mut_ptr::<SkeletonComponent>() };
     let entities = animators_mut.dense_entities();
@@ -113,11 +139,35 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
         }
 
         let skeleton_comp = unsafe { skeletons_mut.get_mut(entity) };
-
         let dt_scaled = dt * animator.speed;
         animator.current_time += dt_scaled;
 
         let skeleton_name = skeleton_comp.skeleton_name.as_str();
+
+        // ── State machine evaluation ─────────────────────────────────────────
+        // If a state machine is present, check transitions each frame.
+        // We must call evaluate_transitions via a reborrow to avoid holding an
+        // immutable ref across the mutable crossfade_to call.
+        if let Some(sm) = &animator.state_machine {
+            if let Some((target_state, blend_dur)) = sm.evaluate_transitions() {
+                let new_state = target_state.clone();
+                let dur = blend_dur;
+                // Commit the new state name for future transition evaluations.
+                let new_name = {
+                    // Find the name of this target state in the state machine.
+                    // This is the reverse lookup: state → name.
+                    let sm2 = animator.state_machine.as_ref().unwrap();
+                    sm2.states.as_slice()
+                        .iter()
+                        .find(|(_, s)| std::ptr::eq(s, target_state))
+                        .map(|(n, _)| n.clone())
+                };
+                animator.crossfade_to(new_state, dur);
+                if let (Some(sm2), Some(name)) = (animator.state_machine.as_mut(), new_name) {
+                    sm2.commit_transition(name.as_str());
+                }
+            }
+        }
 
         if let Some(skeleton) = asset_manager.get_skeleton(skeleton_name) {
             let duration = get_state_duration(&animator.state, skeleton_name, asset_manager);
@@ -176,14 +226,12 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
                 }
             }
 
-            // 3. Convert to matrices and compute
+            // 3. Convert to matrices and compute final bone matrices
             let mut local_transforms = crate::containers::FixedArray::<
                 crate::math::mat4::Mat4,
                 { crate::renderer::vulkan::skeleton::MAX_BONES },
             >::new();
             final_pose.to_matrices(&mut local_transforms);
-
-            // Compute final bone matrices
             skeleton.compute_bone_matrices(&local_transforms, &mut skeleton_comp.computed_matrices);
         }
     }

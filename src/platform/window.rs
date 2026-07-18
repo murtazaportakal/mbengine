@@ -178,6 +178,12 @@ impl Window {
     }
 }
 
+impl Drop for Window {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 /// Global Win32 message callback.
 unsafe extern "system" fn window_proc(
     hwnd: win32::HWND,

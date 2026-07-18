@@ -31,7 +31,6 @@ fn test_vulkan_initialization() {
     assert_eq!(swapchain.image_views.len(), swapchain.images.len());
 
     // Cleanup
-    use engine::renderer::RenderDevice;
     swapchain.shutdown(&vulkan);
     vulkan.shutdown();
 }

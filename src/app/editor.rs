@@ -2,6 +2,14 @@ use crate::ecs::reflection::ComponentRegistry;
 use crate::ecs::{EntityId, World};
 use crate::physics::PhysicsSystem;
 use crate::ui::UiContext;
+use crate::scripting::visual_graph::VisualGraph;
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum EditorTab {
+    Scene3D,
+    ScriptGraph,
+    Profiler,
+}
 
 pub enum EditorAction {
     Play,
@@ -11,6 +19,8 @@ pub enum EditorAction {
     DeleteEntity(EntityId),
     AddComponent(EntityId, String),
     TranslateSelected(crate::math::vec::Vec3),
+    ToggleDebugCull,
+    SpawnStressTest,
 }
 
 pub struct Editor {
@@ -20,6 +30,15 @@ pub struct Editor {
     pub active_gizmo_axis: Option<u8>,
     pub gizmo_drag_start_mouse: crate::math::vec::Vec2,
     pub gizmo_drag_start_pos: crate::math::vec::Vec3,
+    
+    // Node Graph state
+    pub active_tab: EditorTab,
+    pub graph: VisualGraph,
+    pub graph_pan: crate::math::vec::Vec2,
+    pub dragging_node: Option<u32>,
+    pub connecting_from: Option<(u32, u8)>, // (node_id, port_id)
+    pub inspector_scroll: f32,
+    pub hierarchy_scroll: f32,
 }
 
 impl Default for Editor {
@@ -62,6 +81,13 @@ impl Editor {
             active_gizmo_axis: None,
             gizmo_drag_start_mouse: crate::math::vec::Vec2::new(0.0, 0.0),
             gizmo_drag_start_pos: crate::math::vec::Vec3::new(0.0, 0.0, 0.0),
+            active_tab: EditorTab::Scene3D,
+            graph: VisualGraph::new(),
+            graph_pan: crate::math::vec::Vec2::new(0.0, 0.0),
+            dragging_node: None,
+            connecting_from: None,
+            inspector_scroll: 0.0,
+            hierarchy_scroll: 0.0,
         }
     }
 
@@ -88,6 +114,7 @@ impl Editor {
         let mut actions = Vec::new();
         let mut raycast_request = None;
         let mut viewport_hovered = false;
+        let mut new_viewport_size = None;
 
         // Check if a file dialog completed
         if let Some(rx) = &self.file_dialog_receiver {
@@ -113,18 +140,18 @@ impl Editor {
             .begin();
 
         ui_ctx.begin_horizontal_layout(top_bar_rect);
-        ButtonBuilder::new(ui_ctx, 2)
-            .text("3D Scene")
-            .style(&SLATE_BASE)
-            .build();
-        ButtonBuilder::new(ui_ctx, 3)
-            .text("Script Graph")
-            .style(&SLATE_BASE)
-            .build();
-        ButtonBuilder::new(ui_ctx, 4)
-            .text("Profiler")
-            .style(&SLATE_BASE)
-            .build();
+        let scene_style = if self.active_tab == EditorTab::Scene3D { &SLATE_SECONDARY } else { &SLATE_BASE };
+        if ButtonBuilder::new(ui_ctx, 2).text("3D Scene").style(scene_style).build() {
+            self.active_tab = EditorTab::Scene3D;
+        }
+        let graph_style = if self.active_tab == EditorTab::ScriptGraph { &SLATE_SECONDARY } else { &SLATE_BASE };
+        if ButtonBuilder::new(ui_ctx, 3).text("Script Graph").style(graph_style).build() {
+            self.active_tab = EditorTab::ScriptGraph;
+        }
+        let profiler_style = if self.active_tab == EditorTab::Profiler { &SLATE_SECONDARY } else { &SLATE_BASE };
+        if ButtonBuilder::new(ui_ctx, 4).text("Profiler").style(profiler_style).build() {
+            self.active_tab = EditorTab::Profiler;
+        }
         if ButtonBuilder::new(ui_ctx, 11)
             .text("Import Model")
             .style(&SLATE_BASE)
@@ -169,6 +196,7 @@ impl Editor {
         ui_ctx.end_horizontal_layout();
         ui_ctx.end_panel();
 
+        if self.active_tab == EditorTab::Scene3D {
         // 2. Left Scene Hierarchy
         let hierarchy_w = 250.0;
         let hierarchy_rect = UiRect {
@@ -177,12 +205,23 @@ impl Editor {
             w: hierarchy_w,
             h: screen_h - 40.0,
         };
+
+        if hierarchy_rect.contains(ui_ctx.mouse_pos) {
+            self.hierarchy_scroll -= ui_ctx.mouse_scroll_y * 30.0;
+            if self.hierarchy_scroll < 0.0 {
+                self.hierarchy_scroll = 0.0;
+            }
+        }
+
         PanelBuilder::new(ui_ctx, 7)
             .rect(hierarchy_rect)
             .style(&SLATE_SECONDARY)
             .begin();
+            
+        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::SetScissor { rect: Some(hierarchy_rect) });
 
         ui_ctx.begin_vertical_layout(hierarchy_rect);
+        ui_ctx.cursor.y -= self.hierarchy_scroll;
         ui_ctx.label("Scene Hierarchy");
         ui_ctx.label_color("RED TEXT TEST", crate::ui::UiColor::rgba(255, 0, 0, 255));
         ui_ctx.label(" ");
@@ -193,6 +232,24 @@ impl Editor {
             .build()
         {
             actions.push(EditorAction::SpawnEntity);
+        }
+        ui_ctx.label(" ");
+
+        if ButtonBuilder::new(ui_ctx, 105)
+            .text("Toggle Debug Culling")
+            .style(&SLATE_BASE)
+            .build()
+        {
+            actions.push(EditorAction::ToggleDebugCull);
+        }
+        ui_ctx.label(" ");
+
+        if ButtonBuilder::new(ui_ctx, 106)
+            .text("10,000 Object Stress Test")
+            .style(&SLATE_BASE)
+            .build()
+        {
+            actions.push(EditorAction::SpawnStressTest);
         }
         ui_ctx.label(" ");
 
@@ -219,6 +276,7 @@ impl Editor {
         }
 
         ui_ctx.end_vertical_layout();
+        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::SetScissor { rect: None });
         ui_ctx.end_panel();
 
         // 3. Right Inspector (Unity style)
@@ -229,12 +287,23 @@ impl Editor {
             w: inspector_w,
             h: screen_h - 40.0,
         };
+
+        if inspector_rect.contains(ui_ctx.mouse_pos) {
+            self.inspector_scroll -= ui_ctx.mouse_scroll_y * 30.0;
+            if self.inspector_scroll < 0.0 {
+                self.inspector_scroll = 0.0;
+            }
+        }
+
         PanelBuilder::new(ui_ctx, 8)
             .rect(inspector_rect)
             .style(&SLATE_SECONDARY)
             .begin();
+            
+        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::SetScissor { rect: Some(inspector_rect) });
 
         ui_ctx.begin_vertical_layout(inspector_rect);
+        ui_ctx.cursor.y -= self.inspector_scroll;
         ui_ctx.label("Inspector");
 
         if let Some(entity_id) = *selected_entity {
@@ -279,6 +348,7 @@ impl Editor {
         }
 
         ui_ctx.end_vertical_layout();
+        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::SetScissor { rect: None });
         ui_ctx.end_panel();
 
         // 4. Center Viewport (Unreal style)
@@ -304,7 +374,7 @@ impl Editor {
             }
         }
 
-        let new_viewport_size = Some((viewport_rect.w as u32, viewport_rect.h as u32));
+        new_viewport_size = Some((viewport_rect.w as u32, viewport_rect.h as u32));
 
         // --- 3D GIZMOS ---
         if let Some(entity) = selected_entity {
@@ -528,6 +598,141 @@ impl Editor {
                     }
                 }
             }
+        }
+        } else if self.active_tab == EditorTab::ScriptGraph {
+            // Full-screen canvas below the top bar
+            let canvas_rect = UiRect {
+                x: 0.0,
+                y: 40.0,
+                w: screen_w,
+                h: screen_h - 40.0,
+            };
+            PanelBuilder::new(ui_ctx, 1000)
+                .rect(canvas_rect)
+                .style(&SLATE_SECONDARY)
+                .begin();
+
+            ui_ctx.begin_vertical_layout(canvas_rect);
+            ui_ctx.label("Visual Scripting Node Graph");
+            
+            if ButtonBuilder::new(ui_ctx, 1001).text("Add Node (Update)").style(&SLATE_BASE).build() {
+                let id = self.graph.nodes.len() as u32 + 1;
+                self.graph.nodes.push(crate::scripting::visual_graph::GraphNode {
+                    id,
+                    node_type: crate::scripting::visual_graph::NodeType::OnUpdate,
+                    x: self.graph_pan.x + 100.0 + (id as f32 * 20.0),
+                    y: self.graph_pan.y + 100.0,
+                    inputs: vec![],
+                    outputs: vec![crate::scripting::visual_graph::NodePort {
+                        name: "Flow Out".to_string(),
+                        data_type: crate::scripting::visual_graph::PortType::Flow,
+                    }],
+                    param_value: 0.0,
+                });
+            }
+            if ButtonBuilder::new(ui_ctx, 1002).text("Add Node (Print)").style(&SLATE_BASE).build() {
+                let id = self.graph.nodes.len() as u32 + 1;
+                self.graph.nodes.push(crate::scripting::visual_graph::GraphNode {
+                    id,
+                    node_type: crate::scripting::visual_graph::NodeType::Print,
+                    x: self.graph_pan.x + 300.0 + (id as f32 * 20.0),
+                    y: self.graph_pan.y + 100.0,
+                    inputs: vec![crate::scripting::visual_graph::NodePort {
+                        name: "Flow In".to_string(),
+                        data_type: crate::scripting::visual_graph::PortType::Flow,
+                    }],
+                    outputs: vec![crate::scripting::visual_graph::NodePort {
+                        name: "Flow Out".to_string(),
+                        data_type: crate::scripting::visual_graph::PortType::Flow,
+                    }],
+                    param_value: 0.0,
+                });
+            }
+
+            let mut hovered_node = None;
+            for node in self.graph.nodes.iter_mut().rev() {
+                let node_rect = UiRect {
+                    x: canvas_rect.x + node.x,
+                    y: canvas_rect.y + node.y,
+                    w: 120.0,
+                    h: 60.0 + (node.inputs.len().max(node.outputs.len()) as f32 * 20.0),
+                };
+                
+                if node_rect.contains(ui_ctx.mouse_pos) {
+                    hovered_node = Some(node.id);
+                    if ui_ctx.mouse_pressed {
+                        self.dragging_node = Some(node.id);
+                    }
+                    break;
+                }
+            }
+
+            if ui_ctx.mouse_released {
+                self.dragging_node = None;
+            }
+
+            if let Some(drag_id) = self.dragging_node {
+                if let Some(node) = self.graph.nodes.iter_mut().find(|n| n.id == drag_id) {
+                    node.x += ui_ctx.mouse_delta.x;
+                    node.y += ui_ctx.mouse_delta.y;
+                }
+            } else if ui_ctx.mouse_down && hovered_node.is_none() && canvas_rect.contains(ui_ctx.mouse_pos) {
+                // Pan canvas
+                self.graph_pan.x += ui_ctx.mouse_delta.x;
+                self.graph_pan.y += ui_ctx.mouse_delta.y;
+            }
+
+            // Draw Nodes
+            for node in &self.graph.nodes {
+                let node_rect = UiRect {
+                    x: canvas_rect.x + node.x,
+                    y: canvas_rect.y + node.y,
+                    w: 120.0,
+                    h: 60.0 + (node.inputs.len().max(node.outputs.len()) as f32 * 20.0),
+                };
+                
+                let is_dragged = self.dragging_node == Some(node.id);
+                let bg_color = if is_dragged {
+                    crate::ui::context::UiColor::rgb(80, 80, 80)
+                } else {
+                    crate::ui::context::UiColor::rgb(50, 50, 50)
+                };
+
+                ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad {
+                    rect: node_rect,
+                    color: bg_color,
+                    rounding: 4.0,
+                });
+                
+                let mut title = crate::containers::FixedString::<128>::new();
+                use core::fmt::Write;
+                let _ = write!(title, "{:?}", node.node_type);
+                ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Text {
+                    pos: crate::math::vec::Vec2::new(node_rect.x + 10.0, node_rect.y + 10.0),
+                    text: title,
+                    color: crate::ui::context::UiColor::WHITE,
+                    font_size: 16.0,
+                });
+
+                // Draw ports (stub)
+                for (i, _in_port) in node.inputs.iter().enumerate() {
+                    ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad {
+                        rect: UiRect { x: node_rect.x - 4.0, y: node_rect.y + 40.0 + (i as f32 * 20.0), w: 8.0, h: 8.0 },
+                        color: crate::ui::context::UiColor::rgb(200, 200, 50),
+                        rounding: 4.0,
+                    });
+                }
+                for (i, _out_port) in node.outputs.iter().enumerate() {
+                    ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad {
+                        rect: UiRect { x: node_rect.x + node_rect.w - 4.0, y: node_rect.y + 40.0 + (i as f32 * 20.0), w: 8.0, h: 8.0 },
+                        color: crate::ui::context::UiColor::rgb(200, 200, 50),
+                        rounding: 4.0,
+                    });
+                }
+            }
+            
+            ui_ctx.end_vertical_layout();
+            ui_ctx.end_panel();
         }
 
         (
