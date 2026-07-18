@@ -29,6 +29,7 @@ The engine has reached full maturity for its baseline requirements. All V1 and V
 - **Nanite-Style Culling Pipeline**: Designed and implemented a multi-phase compute shader (`cull.comp`) performing frustum, occlusion (HZB), and screen-space LOD culling on individual meshlets.
 - **GPU-Driven Indirect Drawing**: Integrated completely GPU-driven rendering (`vkCmdDrawIndexedIndirectCount`) utilizing atomic draw counters and compacted indirect command buffers.
 - **Data-Oriented Fixes**: Solved severe Vulkan struct stride misalignments (144 bytes vs 160 bytes) between Rust `InstanceData` and GLSL `InstanceData`, ensuring robust GPU memory access up to 100,000 instances without mathematical degradation or screen glitches.
+- **🚨 Known Issue / Next Session**: HZB Occlusion culling is currently over-aggressive and falsely culling visible objects. It has been temporarily disabled (`false && pc.hzbEnabled > 0.5`) in `cull.comp`. Next session must investigate the `generate_hzb.comp` depth reduction mip-chain, `textureLod` sampler alignment, and `sphereNearDepth` coordinate space calculation.
 
 ### Engine Stabilization & Stress Testing (July 18, 2026)
 - **ECS Capacity Limits**: Massively increased internal sparse-set Component Array capacities from 1,000 to 20,000 to cleanly support the 10,000 Object Stress Test.
