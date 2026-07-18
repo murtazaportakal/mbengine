@@ -234,8 +234,8 @@ impl UiBackend {
             // Pre-allocate UI geometry buffers for both in-flight frames.
             // 64K vertices + 64K indices per frame covers full editor UI +
             // gizmos without growing on the hot path.
-            let ui_vertex_capacity = 64 * 1024;
-            let ui_index_capacity = 64 * 1024;
+            let ui_vertex_capacity = 1024 * 1024;
+            let ui_index_capacity = 1024 * 1024;
 
             let mut vertex_buffers: [Option<Buffer>; 2] = [None::<Buffer>, None::<Buffer>].map(|_| None);
             let mut index_buffers: [Option<Buffer>; 2] = [None::<Buffer>, None::<Buffer>].map(|_| None);
