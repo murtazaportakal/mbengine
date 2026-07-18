@@ -46,6 +46,24 @@ impl ComputeCullPipeline {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            // MeshletBuffer
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(5)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            // PrefixSumBuffer
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(6)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            // HZB sampler (previous-frame depth pyramid for occlusion culling)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(7)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
@@ -59,7 +77,9 @@ impl ComputeCullPipeline {
         let push_constant_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(80); // totalMeshlets (4) + pad (12) + world_matrix (64)
+            // totalMeshlets(4) + totalInstances(4) + debugCull(4) + pad2(4)
+            // + screenWidth(4) + screenHeight(4) + lodBias(4) + hzbEnabled(4) = 32 bytes
+            .size(32);
 
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(std::slice::from_ref(&descriptor_set_layout))
@@ -110,6 +130,8 @@ impl ComputeCullPipeline {
         indirect_buffer: vk::Buffer,
         instance_buffer: vk::Buffer,
         draw_count_buffer: vk::Buffer,
+        meshlet_buffer: vk::Buffer,
+        prefix_sum_buffer: vk::Buffer,
         descriptor_set: vk::DescriptorSet,
     ) {
         if ubo_buffer == vk::Buffer::null() || descriptor_set == vk::DescriptorSet::null() {
@@ -164,12 +186,60 @@ impl ComputeCullPipeline {
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&draw_count_info));
 
+        let meshlet_info = vk::DescriptorBufferInfo::default()
+            .buffer(meshlet_buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
+
+        let write_meshlet = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(5)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&meshlet_info));
+
+        let prefix_info = vk::DescriptorBufferInfo::default()
+            .buffer(prefix_sum_buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
+
+        let write_prefix = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(6)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&prefix_info));
+
+        // Write a dummy null-sampler for binding 7 — will be updated per-frame
+        // by update_hzb_descriptor() once the HZB target is available.
         unsafe {
             vulkan.device.update_descriptor_sets(
-                &[write_ubo, write_indirect, write_instance, write_draw_count],
+                &[write_ubo, write_indirect, write_instance, write_draw_count, write_meshlet, write_prefix],
                 &[],
             );
         }
+    }
+
+    /// Update binding 7 to point to the HZB image for occlusion testing.
+    pub fn update_hzb_descriptor(
+        &self,
+        vulkan: &VulkanDevice,
+        hzb_view: vk::ImageView,
+        hzb_sampler: vk::Sampler,
+        descriptor_set: vk::DescriptorSet,
+    ) {
+        if hzb_view == vk::ImageView::null() || descriptor_set == vk::DescriptorSet::null() { return; }
+        let image_info = vk::DescriptorImageInfo::default()
+            .image_view(hzb_view)
+            .image_layout(vk::ImageLayout::GENERAL)
+            .sampler(hzb_sampler);
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(7)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(std::slice::from_ref(&image_info));
+        unsafe { vulkan.device.update_descriptor_sets(&[write], &[]); }
     }
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {

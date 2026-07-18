@@ -8,6 +8,8 @@ use crate::renderer::vulkan::VulkanDevice;
 pub struct MeshletData {
     pub center: [f32; 3],
     pub radius: f32,
+    pub cone_axis: [f32; 3],
+    pub cone_cutoff: f32,
     pub index_offset: u32,
     pub triangle_count: u32,
     pub padding: [u32; 2],
@@ -239,42 +241,14 @@ impl Mesh {
                     global_indices.push(global_vertex_index);
                 }
 
-                // Compute bounding sphere
-                // meshopt returns it as an iterator of Meshlet<'_>, but let's do a simple AABB/Sphere manually
-                // to avoid the meshopt struct bounds mismatch, or just parse the bounds.
-                // We'll compute a simple bounding sphere for the meshlet.
-                let mut min = [f32::MAX; 3];
-                let mut max = [f32::MIN; 3];
-                for idx in index_offset as usize..global_indices.len() {
-                    let v = &vertices[global_indices[idx] as usize];
-                    for j in 0..3 {
-                        if v.pos[j] < min[j] {
-                            min[j] = v.pos[j];
-                        }
-                        if v.pos[j] > max[j] {
-                            max[j] = v.pos[j];
-                        }
-                    }
-                }
-                let center = [
-                    (min[0] + max[0]) * 0.5,
-                    (min[1] + max[1]) * 0.5,
-                    (min[2] + max[2]) * 0.5,
-                ];
-                let mut radius_sq = 0.0f32;
-                for idx in index_offset as usize..global_indices.len() {
-                    let v = &vertices[global_indices[idx] as usize];
-                    let dist_sq = (v.pos[0] - center[0]).powi(2)
-                        + (v.pos[1] - center[1]).powi(2)
-                        + (v.pos[2] - center[2]).powi(2);
-                    if dist_sq > radius_sq {
-                        radius_sq = dist_sq;
-                    }
-                }
+                // Compute bounds via meshopt
+                let bounds = meshopt::compute_meshlet_bounds(meshlets_raw.get(i), &vertex_data);
 
                 meshlet_data_vec.push(MeshletData {
-                    center,
-                    radius: radius_sq.sqrt(),
+                    center: bounds.center,
+                    radius: bounds.radius,
+                    cone_axis: bounds.cone_axis,
+                    cone_cutoff: bounds.cone_cutoff,
                     index_offset,
                     triangle_count: raw_m.triangle_count,
                     padding: [0; 2],
@@ -358,6 +332,8 @@ impl Mesh {
         let meshlet_data = vec![crate::renderer::vulkan::mesh::MeshletData {
             center: meshlet_center,
             radius: meshlet_radius_sq.sqrt().max(0.001),
+            cone_axis: [0.0, 1.0, 0.0],
+            cone_cutoff: -1.0,
             index_offset: 0,
             triangle_count: indices.len() as u32 / 3,
             padding: [0; 2],

@@ -100,6 +100,7 @@ impl Editor {
         selected_entity: &mut Option<EntityId>,
         _bloom_threshold: &mut f32,
         _fps: f32,
+        last_visible_meshlets: u32,
         _is_playing: bool,
         screen_w: f32,
         screen_h: f32,
@@ -126,6 +127,27 @@ impl Editor {
         use crate::ui::context::{
             ButtonBuilder, PanelBuilder, UiRect, SLATE_BASE, SLATE_SECONDARY,
         };
+
+        // Render the stats in top right or left
+        let stats_rect = UiRect {
+            x: screen_w - 200.0,
+            y: 0.0,
+            w: 200.0,
+            h: 40.0,
+        };
+        PanelBuilder::new(ui_ctx, 100)
+            .rect(stats_rect)
+            .style(&SLATE_SECONDARY)
+            .begin();
+        ui_ctx.begin_vertical_layout(stats_rect);
+        
+        let mut stats_label = crate::containers::FixedString::<128>::new();
+        use core::fmt::Write;
+        let _ = write!(stats_label, "FPS: {:.1} | Meshlets: {}", _fps, last_visible_meshlets);
+        ui_ctx.label(&stats_label);
+        
+        ui_ctx.end_vertical_layout();
+        ui_ctx.end_panel();
 
         // 1. Top Bar (Godot style)
         let top_bar_rect = UiRect {

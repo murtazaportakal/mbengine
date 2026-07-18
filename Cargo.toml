@@ -21,6 +21,10 @@ path = "src/main.rs"
 name = "packer"
 path = "src/bin/packer.rs"
 
+[[bin]]
+name = "cooker"
+path = "src/bin/cooker.rs"
+
 [[test]]
 name = "test_ecs"
 path = "tests/test_ecs.rs"
@@ -62,6 +66,7 @@ opt-level = 3
 lto = true
 
 [dependencies]
+bytemuck = { version = "1", features = ["derive"] }
 ash = "0.38"
 image = { version = "0.25", features = ["hdr"] }
 memoffset = "0.9.1"

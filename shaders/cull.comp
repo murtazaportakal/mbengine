@@ -8,7 +8,8 @@ struct InstanceData {
     vec4 aabbMax;
     vec4 color;
     vec4 pbr;
-    uvec4 extra; // x: indexCount, y: firstIndex, z: vertexOffset, w: roughness (float bitcast)
+    uvec4 extra; // x: indexCount, y: firstIndex, z: vertexOffset, w: emissive tex idx
+    uvec4 geometry2; // x: meshletOffset, y: meshletCount, z: pad, w: pad
 };
 
 struct VkDrawIndexedIndirectCommand {
@@ -45,110 +46,177 @@ layout(set = 0, binding = 2) writeonly buffer IndirectDrawBuffer {
     VkDrawIndexedIndirectCommand commands[];
 };
 
-// Atomic counter holding the number of visible (compacted) draw commands.
-// MUST be reset to 0 by the CPU before each dispatch (see application.rs).
 layout(set = 0, binding = 4) buffer DrawCountBuffer {
     uint drawCount;
 };
 
-layout(push_constant) uniform PushConstants {
-    uint totalInstances;
+struct MeshletData {
+    vec3 center;
+    float radius;
+    vec3 coneAxis;
+    float coneCutoff;
+    uint indexOffset;
+    uint triangleCount;
     uint pad0;
     uint pad1;
+};
+
+layout(set = 0, binding = 5) readonly buffer MeshletBuffer {
+    MeshletData meshlets[];
+};
+
+layout(set = 0, binding = 6) readonly buffer PrefixSumBuffer {
+    uint prefixSum[];
+};
+
+// HZB from the previous frame - used for occlusion culling.
+// Layout is GENERAL (desktop Vulkan allows sampling from GENERAL).
+layout(set = 0, binding = 7) uniform sampler2D hzbSampler;
+
+layout(push_constant) uniform PushConstants {
+    uint totalMeshlets;
+    uint totalInstances;
+    uint debugCull;   // 0 = normal, 1 = disable frustum+HZB (show all)
     uint pad2;
+    float screenWidth;
+    float screenHeight;
+    float lodBias;    // Min projected radius (pixels) to render a meshlet. Default 2.0.
+    float hzbEnabled; // 1.0 = enable HZB occlusion test, 0.0 = skip (first frame / disabled)
 } pc;
+
+uint binary_search_instance(uint meshletIdx) {
+    uint left = 0;
+    uint right = pc.totalInstances - 1;
+    uint result = 0;
+    while (left <= right) {
+        uint mid = left + (right - left) / 2;
+        if (prefixSum[mid] <= meshletIdx) {
+            result = mid;
+            left = mid + 1;
+        } else {
+            right = mid - 1;
+        }
+    }
+    return result;
+}
 
 void main() {
     uint gID = gl_GlobalInvocationID.x;
-    if (gID >= pc.totalInstances) return;
+    if (gID >= pc.totalMeshlets) return;
 
-    InstanceData inst = instances[gID];
+    // 1. Find which instance this meshlet belongs to
+    uint instanceIdx = binary_search_instance(gID);
+    InstanceData inst = instances[instanceIdx];
 
-    // Get AABB corners in local space
-    vec3 minP = inst.aabbMin.xyz;
-    vec3 maxP = inst.aabbMax.xyz;
+    // 2. Fetch meshlet data
+    uint localMeshletIdx = gID - prefixSum[instanceIdx];
+    MeshletData meshlet = meshlets[inst.geometry2.x + localMeshletIdx];
 
-    // 8 corners of the AABB
-    vec3 corners[8] = vec3[](
-        vec3(minP.x, minP.y, minP.z),
-        vec3(maxP.x, minP.y, minP.z),
-        vec3(minP.x, maxP.y, minP.z),
-        vec3(maxP.x, maxP.y, minP.z),
-        vec3(minP.x, minP.y, maxP.z),
-        vec3(maxP.x, minP.y, maxP.z),
-        vec3(minP.x, maxP.y, maxP.z),
-        vec3(maxP.x, maxP.y, maxP.z)
-    );
+    // 3. Transform meshlet bounding sphere to world space
+    vec3 worldCenter = (inst.world * vec4(meshlet.center, 1.0)).xyz;
+    float maxScale = max(max(length(inst.world[0].xyz), length(inst.world[1].xyz)), length(inst.world[2].xyz));
+    float worldRadius = meshlet.radius * maxScale;
 
-    // Transform to world space and compute world AABB
-    vec3 worldMin = vec3(1000000.0);
-    vec3 worldMax = vec3(-1000000.0);
-    for (int i = 0; i < 8; i++) {
-        vec3 wc = (inst.world * vec4(corners[i], 1.0)).xyz;
-        worldMin = min(worldMin, wc);
-        worldMax = max(worldMax, wc);
-    }
-    
-    vec3 worldCenter = (worldMin + worldMax) * 0.5;
-    vec3 worldExtents = (worldMax - worldMin) * 0.5;
-
-    // Extract frustum planes from View-Projection matrix
-    mat4 vp = ubo.viewProj;
-    vec4 planes[6];
-    // Left, Right, Bottom, Top, Near, Far
-    planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]);
-    planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]);
-    planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]);
-    planes[3] = vec4(vp[0][3] - vp[0][1], vp[1][3] - vp[1][1], vp[2][3] - vp[2][1], vp[3][3] - vp[3][1]);
-    planes[4] = vec4(vp[0][3] + vp[0][2], vp[1][3] + vp[1][2], vp[2][3] + vp[2][2], vp[3][3] + vp[3][2]);
-    planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]);
-
-    // Normalize planes
-    for (int p = 0; p < 6; p++) {
-        float len = length(planes[p].xyz);
-        planes[p] /= len;
+    // 4. Back-face cone culling
+    // meshopt expects viewDir from camera to meshlet center
+    vec3 coneAxisWorld = normalize(mat3(inst.world) * meshlet.coneAxis);
+    vec3 viewDir = normalize(worldCenter - ubo.cameraPos.xyz);
+    if (dot(coneAxisWorld, viewDir) > meshlet.coneCutoff) {
+        return; // Entirely backfacing
     }
 
-    // ---- Frustum Culling ----
+    // 5. Project bounding sphere to clip space for frustum + HZB + LOD tests
+    //    Project sphere center + edge point to compute screen-space radius.
+    vec4 clipCenter = ubo.viewProj * vec4(worldCenter, 1.0);
+
     bool visible = true;
-    for (int p = 0; p < 6; p++) {
-        vec3 pNormal = planes[p].xyz;
-        float pDist = planes[p].w;
-        
-        // Compute effective radius of AABB projected onto plane normal
-        float r = dot(worldExtents, abs(pNormal));
-        float d = dot(pNormal, worldCenter) + pDist;
-        
-        if (d < -r) {
-            visible = false;
-            break;
+
+    if (pc.debugCull == 0) {
+        // 7. Frustum culling against 6 planes extracted from viewProj
+        mat4 vp = ubo.viewProj;
+        vec4 planes[6];
+        planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]);
+        planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]);
+        planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]);
+        planes[3] = vec4(vp[0][3] - vp[0][1], vp[1][3] - vp[1][1], vp[2][3] - vp[2][1], vp[3][3] - vp[3][1]);
+        planes[4] = vec4(vp[0][3] + vp[0][2], vp[1][3] + vp[1][2], vp[2][3] + vp[2][2], vp[3][3] + vp[3][2]);
+        planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]);
+
+        for (int p = 0; p < 6; p++) {
+            float len = length(planes[p].xyz);
+            planes[p] /= len;
+            float dist = dot(planes[p].xyz, worldCenter) + planes[p].w;
+            if (dist < -worldRadius) {
+                visible = false;
+                break;
+            }
         }
     }
 
-    // Debug Culling Visualization (pc.pad0 as debug flag)
-    if (pc.pad0 == 1) {
-        if (!visible) {
-            // Paint culled instances RED and render them anyway
-            instances[gID].color = vec4(1.0, 0.0, 0.0, 1.0);
-            visible = true;
+    if (!visible) return;
+
+    // 6. & 8. Screen-space tests (LOD and HZB)
+    // ONLY safe if the sphere is entirely in front of the camera (w > radius).
+    if (pc.debugCull == 0 && clipCenter.w > worldRadius) {
+        float invW = 1.0 / clipCenter.w;
+        vec3 ndcCenter = clipCenter.xyz * invW;
+
+        vec3 viewForward = worldCenter - ubo.cameraPos.xyz;
+        float distToCenter = length(viewForward);
+        if (distToCenter > 0.0) {
+            viewForward /= distToCenter;
         } else {
-            // Paint visible instances GREEN
-            instances[gID].color = vec4(0.0, 1.0, 0.0, 1.0);
+            viewForward = vec3(0.0, 0.0, 1.0);
+        }
+
+        // Compute screen-space radius by projecting an edge point of the sphere
+        // along a stable orthogonal axis to prevent LOD flickering.
+        vec3 upRef = abs(viewForward.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        vec3 camRight = normalize(cross(viewForward, upRef));
+        
+        vec4 edgeClip = ubo.viewProj * vec4(worldCenter + camRight * worldRadius, 1.0);
+        float edgeNdcX = edgeClip.x / edgeClip.w;
+        float screenRadius = abs(edgeNdcX - ndcCenter.x) * pc.screenWidth * 0.5;
+
+        // Phase G - Screen-space LOD: cull sub-pixel meshlets
+        if (screenRadius < pc.lodBias) {
+            return; // Too small to contribute meaningfully
+        }
+
+        // Phase F - HZB Occlusion Test
+        if (pc.hzbEnabled > 0.5) {
+            // Map NDC to UV [0,1]
+            vec2 screenUV = ndcCenter.xy * 0.5 + 0.5;
+
+            // Clamp radius to valid range
+            float sr = max(screenRadius, 1.0);
+
+            // Pick the coarsest mip that covers the sphere footprint
+            float mipLevel = ceil(log2(sr * 2.0));
+            mipLevel = clamp(mipLevel, 0.0, float(textureQueryLevels(hzbSampler) - 1));
+
+            // Sample HZB at the sphere's projected center.
+            float hzbDepth = textureLod(hzbSampler, screenUV, mipLevel).r;
+
+            // NDC depth of the sphere's nearest point (closest face to camera).
+            vec3 nearestPoint = worldCenter - viewForward * worldRadius;
+            vec4 clipNear = ubo.viewProj * vec4(nearestPoint, 1.0);
+            float sphereNearDepth = (clipNear.w <= 0.0) ? 0.0 : (clipNear.z / clipNear.w);
+
+            if (sphereNearDepth > hzbDepth + 0.001) {
+                visible = false;
+            }
         }
     }
 
-    // Cull invisible instances: skip the draw command entirely.
-    if (!visible) {
-        return;
-    }
+    if (!visible) return;
 
     // Atomically reserve a slot in the compacted command buffer.
     uint slot = atomicAdd(drawCount, 1);
 
-    // extra.x = indexCount, extra.y = firstIndex, extra.z = vertexOffset
-    commands[slot].indexCount = inst.extra.x;
+    commands[slot].indexCount = meshlet.triangleCount * 3;
     commands[slot].instanceCount = 1;
-    commands[slot].firstIndex = inst.extra.y;
+    commands[slot].firstIndex = inst.extra.y + meshlet.indexOffset;
     commands[slot].vertexOffset = int(inst.extra.z);
-    commands[slot].firstInstance = gID;
+    commands[slot].firstInstance = instanceIdx;
 }

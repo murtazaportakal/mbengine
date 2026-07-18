@@ -333,7 +333,7 @@ impl ShadowPass {
         &self,
         cmd: vk::CommandBuffer,
         world: &crate::ecs::World,
-        world_matrices: &[(u32, crate::math::mat4::Mat4)],
+        world_matrices: &std::collections::HashMap<crate::ecs::EntityId, crate::math::mat4::Mat4>,
         asset_manager: &crate::asset_manager::AssetManager,
         vulkan: &VulkanDevice,
         geometry_pool: &crate::renderer::vulkan::GeometryPool,
@@ -404,10 +404,7 @@ impl ShadowPass {
             if !transforms.has(entity) { continue; }
 
             let t = unsafe { transforms.get(entity) };
-            let model = world_matrices.iter()
-                .find(|(e, _)| *e == entity)
-                .map(|(_, m)| *m)
-                .unwrap_or(t.matrix);
+            let model = world_matrices.get(&entity).copied().unwrap_or(t.matrix);
 
             let model_raw = [
                 [model.cols[0].x, model.cols[0].y, model.cols[0].z, model.cols[0].w],

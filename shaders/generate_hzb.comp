@@ -1,0 +1,46 @@
+#version 450
+
+// HZB mip generation — 2x2 max-depth reduction of the source depth/color.
+// Each 8x8 threadgroup writes one 8x8 tile of the destination mip.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Source image (depth buffer for mip 0, previous HZB mip for subsequent levels).
+// For depth buffers we use R32_SFLOAT copy; the depth image must be blit-copied
+// to an R32_SFLOAT image before this pass (see backend.rs).
+layout(set = 0, binding = 0) uniform sampler2D srcImage;
+
+// Destination mip (storage image write target, R32_SFLOAT).
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D dstImage;
+
+layout(set = 0, binding = 2) uniform HzbParams {
+    uint srcWidth;
+    uint srcHeight;
+    uint dstWidth;
+    uint dstHeight;
+};
+
+void main() {
+    ivec2 dstCoord = ivec2(gl_GlobalInvocationID.xy);
+    if (dstCoord.x >= int(dstWidth) || dstCoord.y >= int(dstHeight)) return;
+
+    // Sample 4 texels from the source at 2x resolution.
+    // Using explicit unnormalized texel fetches for exact coverage.
+    vec2 srcSize = vec2(float(srcWidth), float(srcHeight));
+    // Map destination pixel to the center of its 2x2 source footprint.
+    vec2 uv00 = (vec2(dstCoord) * 2.0 + vec2(0.5)) / srcSize;
+    vec2 uv10 = (vec2(dstCoord) * 2.0 + vec2(1.5, 0.5)) / srcSize;
+    vec2 uv01 = (vec2(dstCoord) * 2.0 + vec2(0.5, 1.5)) / srcSize;
+    vec2 uv11 = (vec2(dstCoord) * 2.0 + vec2(1.5)) / srcSize;
+
+    float d00 = textureLod(srcImage, uv00, 0.0).r;
+    float d10 = textureLod(srcImage, uv10, 0.0).r;
+    float d01 = textureLod(srcImage, uv01, 0.0).r;
+    float d11 = textureLod(srcImage, uv11, 0.0).r;
+
+    // Conservative: take the MAXIMUM depth (farthest from camera).
+    // An occluded meshlet's depth must be GREATER than all 4 samples to be culled.
+    float maxDepth = max(max(d00, d10), max(d01, d11));
+
+    imageStore(dstImage, dstCoord, vec4(maxDepth, 0.0, 0.0, 0.0));
+}

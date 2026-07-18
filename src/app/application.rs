@@ -20,7 +20,7 @@ pub struct Application {
     pub window: Window,
     pub asset_manager: crate::asset_manager::AssetManager,
     /// Pre-allocated flat map of entity-index → world matrix.
-    pub world_matrices: Vec<(u32, crate::math::mat4::Mat4)>,
+    pub world_matrices: std::collections::HashMap<crate::ecs::EntityId, crate::math::mat4::Mat4>,
     pub input: crate::app::input::Input,
     pub timer: Timer,
     pub memory: MemorySubsystem,
@@ -150,38 +150,38 @@ impl Application {
             );
         }
 
-        // Spawn default cube entities so the viewport shows geometry.
-        // Each mesh from cube.obj becomes a visible entity (after camera+light).
-        for &mesh_index in &cube_model_indices {
-            let cube_entity = world.create_entity();
-            unsafe {
-                world.add_component(
-                    cube_entity,
-                    TransformComponent {
-                        position: Vec3::new(0.0, 0.0, 0.0),
-                        rotation: Vec3::new(0.0, 0.0, 0.0),
-                        scale: Vec3::new(1.0, 1.0, 1.0),
-                        matrix: crate::math::mat4::Mat4::identity(),
-                    },
-                );
-                world.add_component(
-                    cube_entity,
-                    RenderComponent {
-                        visible: true,
-                        mesh_index,
-                        metallic: 0.0,
-                        roughness: 0.8,
-                        r: 1.0, g: 1.0, b: 1.0,
-                    },
-                );
-                world.add_component(
-                    cube_entity,
-                    HierarchyComponent {
-                        parent: None,
-                        local_matrix: crate::math::mat4::Mat4::identity(),
-                    },
-                );
-            }
+        // Spawn a single default cube entity at the origin.
+        let mesh_index = cube_model_indices[0];
+        let cube_entity = world.create_entity();
+        unsafe {
+            world.add_component(
+                cube_entity,
+                TransformComponent {
+                    position: Vec3::new(0.0, 0.0, 0.0),
+                    rotation: Vec3::new(0.0, 0.0, 0.0),
+                    scale: Vec3::new(1.0, 1.0, 1.0),
+                    matrix: crate::math::mat4::Mat4::identity(),
+                },
+            );
+            world.add_component(
+                cube_entity,
+                RenderComponent {
+                    visible: true,
+                    mesh_index,
+                    metallic: 0.0,
+                    roughness: 0.8,
+                    r: 0.8,
+                    g: 0.8,
+                    b: 0.8,
+                },
+            );
+            world.add_component(
+                cube_entity,
+                HierarchyComponent {
+                    parent: None,
+                    local_matrix: crate::math::mat4::Mat4::identity(),
+                },
+            );
         }
 
         let ui_ctx = crate::ui::UiContext::new();
@@ -200,7 +200,7 @@ impl Application {
             render,
             window,
             asset_manager,
-            world_matrices: Vec::with_capacity(256),
+            world_matrices: std::collections::HashMap::with_capacity(10000),
             input,
             timer,
             memory,
@@ -289,7 +289,7 @@ impl Application {
             let (actions, new_viewport_size, raycast_request, viewport_hovered) = self.editor.draw(
                 &mut self.ui_ctx, &mut self.world, &mut self.physics,
                 &mut self.selected_entity, &mut self.render.bloom_threshold,
-                1.0 / dt as f32, self.is_playing,
+                1.0 / dt as f32, self.render.last_visible_meshlets, self.is_playing,
                 self.window.width as f32, self.window.height as f32,
                 view_mat, proj_mat,
             );
@@ -636,7 +636,7 @@ impl Application {
                                 let mut best_entity = None;
                                 let renders = self.world.get_component_array::<RenderComponent>();
                                 for entity in renders.dense_entities_slice().iter().copied() {
-                                    if let Some(matrix) = self.world_matrices.iter().find(|(e,_)|*e==entity).map(|(_,m)|*m) {
+                                    if let Some(matrix) = self.world_matrices.get(&entity) {
                                         let center = Vec3::new(matrix.cols[3].x, matrix.cols[3].y, matrix.cols[3].z);
                                         let sx = Vec3::new(matrix.cols[0].x, matrix.cols[0].y, matrix.cols[0].z).length();
                                         let sy = Vec3::new(matrix.cols[1].x, matrix.cols[1].y, matrix.cols[1].z).length();
@@ -716,17 +716,16 @@ impl Application {
             for (i, t) in transforms.as_mut_slice().iter_mut().enumerate() {
                 let entity = unsafe { *entities.add(i) };
                 t.update_matrix();
-                self.world_matrices.push((entity, t.matrix));
+                self.world_matrices.insert(entity, t.matrix);
             }
             let hierarchies = self.world.get_component_array::<HierarchyComponent>();
 
             for (i, hier) in hierarchies.as_slice().iter().enumerate() {
                 let entity = hierarchies.dense_entities_slice()[i];
                 if let Some(parent) = hier.parent {
-                    if let Some(pw) = self.world_matrices.iter().find(|(e,_)|*e==parent).map(|(_,m)|*m) {
-                        if let Some(ci) = self.world_matrices.iter().position(|(e,_)|*e==entity) {
-                            let cl = self.world_matrices[ci].1;
-                            self.world_matrices[ci].1 = pw * cl;
+                    if let Some(pw) = self.world_matrices.get(&parent).copied() {
+                        if let Some(cl) = self.world_matrices.get(&entity).copied() {
+                            self.world_matrices.insert(entity, pw * cl);
                         }
                     }
                 }

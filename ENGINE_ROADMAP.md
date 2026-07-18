@@ -25,6 +25,11 @@ These rules are **non-negotiable** across all future sessions and govern the eng
 
 The engine has reached full maturity for its baseline requirements. All V1 and V2 epics are 100% complete and actively functional in the repository.
 
+### GPU-Driven Meshlet Culling (July 18, 2026)
+- **Nanite-Style Culling Pipeline**: Designed and implemented a multi-phase compute shader (`cull.comp`) performing frustum, occlusion (HZB), and screen-space LOD culling on individual meshlets.
+- **GPU-Driven Indirect Drawing**: Integrated completely GPU-driven rendering (`vkCmdDrawIndexedIndirectCount`) utilizing atomic draw counters and compacted indirect command buffers.
+- **Data-Oriented Fixes**: Solved severe Vulkan struct stride misalignments (144 bytes vs 160 bytes) between Rust `InstanceData` and GLSL `InstanceData`, ensuring robust GPU memory access up to 100,000 instances without mathematical degradation or screen glitches.
+
 ### Engine Stabilization & Stress Testing (July 18, 2026)
 - **ECS Capacity Limits**: Massively increased internal sparse-set Component Array capacities from 1,000 to 20,000 to cleanly support the 10,000 Object Stress Test.
 - **UI Buffer Scalability**: Increased Vulkan Immediate-Mode GUI vertex/index buffers from 64K to 1,024K (4MB) to prevent buffer overflows when visualizing extreme entity counts in the Scene Hierarchy.
