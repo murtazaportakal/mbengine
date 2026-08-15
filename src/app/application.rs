@@ -434,16 +434,15 @@ impl Application {
                                 let renders = self.world.get_component_array_mut::<RenderComponent>();
                                 if renders.has(entity) {
                                     if let Some(mat) = self.asset_manager.materials.get(&name).cloned() {
-                                        let mut mesh_idx = 0;
-                                        {
+                                        let mesh_idx = {
                                             let r = unsafe { renders.get_mut(entity) };
                                             r.r = mat.base_color_factor[0];
                                             r.g = mat.base_color_factor[1];
                                             r.b = mat.base_color_factor[2];
                                             r.metallic = mat.metallic_factor;
                                             r.roughness = mat.roughness_factor;
-                                            mesh_idx = r.mesh_index;
-                                        }
+                                            r.mesh_index
+                                        };
                                         let mut albedo_idx = 0;
                                         let mut normal_idx = 0;
                                         let mut mr_idx = 0;

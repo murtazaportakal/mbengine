@@ -3,7 +3,7 @@ use crate::ecs::{
     components::{AnimationState, AnimatorComponent, SkeletonComponent},
     World,
 };
-use crate::renderer::vulkan::skeleton::SkeletonPose;
+
 
 // ── Duration helpers ──────────────────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
             }
         }
 
-        if let Some(skeleton) = asset_manager.get_skeleton(skeleton_name) {
+        if asset_manager.get_skeleton(skeleton_name).is_some() {
             let duration = get_state_duration(&animator.state, asset_manager);
             if animator.current_time > duration && duration > 0.0 {
                 if animator.is_looping {

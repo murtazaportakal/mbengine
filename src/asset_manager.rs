@@ -581,12 +581,12 @@ impl AssetManager {
         let magic = &bytes[0..4];
         if magic != b"ANIM" { return None; }
         
-        let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        let _version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
         let bone_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
         let clip_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
 
         let mut offset = 16;
-        let mut read_str = |len: u32, offset: &mut usize| -> Option<String> {
+        let read_str = |len: u32, offset: &mut usize| -> Option<String> {
             let start = *offset;
             let end = start + len as usize;
             if end > bytes.len() { return None; }
@@ -701,7 +701,7 @@ impl AssetManager {
                 });
             }
 
-            let clip_index = self.animation_clips.len() as u32;
+            let _clip_index = self.animation_clips.len() as u32;
 
             let mut gpu_clip = crate::renderer::vulkan::animation::GpuClip::default();
             gpu_clip.duration = duration;

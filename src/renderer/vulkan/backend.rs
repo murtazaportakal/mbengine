@@ -23,7 +23,6 @@ use crate::renderer::vulkan::{
     buffer::Buffer,
     compute_cloth::{ComputeClothPipeline, ClothGpuInstance, MAX_CLOTH_INSTANCES},
     compute_cull::ComputeCullPipeline,
-    compute_skinning::{self, ComputeSkinningPipeline},
     hzb::HzbTarget,
     GeometryPool, OffscreenTarget, Pipeline, PostProcessPipeline, Swapchain, UiBackend,
     VulkanDevice, shadow_pass::ShadowPass,
@@ -226,23 +225,6 @@ impl RenderBackend {
         };
 
         let mut compute_pipeline = ComputeCullPipeline::new(&vulkan, &asset_manager.vfs);
-
-        let skinning_pipeline = ComputeSkinningPipeline::new(&vulkan, &asset_manager.vfs);
-
-        let skinning_pool_sizes = [
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1500),
-        ];
-        let skinning_pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(&skinning_pool_sizes)
-            .max_sets(500);
-        let skinning_descriptor_pool = unsafe {
-            vulkan
-                .device
-                .create_descriptor_pool(&skinning_pool_info, None)
-                .unwrap()
-        };
 
         let mut descriptor_pool = vk::DescriptorPool::null();
         let mut descriptor_set = [vk::DescriptorSet::null(), vk::DescriptorSet::null()];
@@ -527,7 +509,7 @@ impl RenderBackend {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         ).expect("Failed to create anim bone matrices buffer");
 
-        let mut anim_pipeline = crate::renderer::vulkan::compute_anim::ComputeAnimPipeline::new(&vulkan, &asset_manager.vfs);
+        let anim_pipeline = crate::renderer::vulkan::compute_anim::ComputeAnimPipeline::new(&vulkan, &asset_manager.vfs);
         let anim_descriptor_pool = unsafe {
             let pool_sizes = [vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
@@ -547,7 +529,7 @@ impl RenderBackend {
             [vk::DescriptorSet::null(), vk::DescriptorSet::null()]
         };
 
-        if let Some(anim) = &anim_pipeline {
+        if anim_pipeline.is_some() {
             for i in 0..2 {
                 let inst_info = vk::DescriptorBufferInfo::default()
                     .buffer(anim_data_buffers[i].handle)
