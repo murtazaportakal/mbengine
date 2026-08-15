@@ -1013,7 +1013,7 @@ fn write_mat(mat: &RawMaterial, path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn cook_texture(in_path: &Path, out_path: &Path, is_srgb: bool) -> std::io::Result<()> {
+fn cook_texture(in_path: &Path, out_path: &Path, _is_srgb: bool) -> std::io::Result<()> {
     println!("[Cooker] Compressing texture: {}", in_path.display());
     
     // Load image
@@ -1023,41 +1023,24 @@ fn cook_texture(in_path: &Path, out_path: &Path, is_srgb: bool) -> std::io::Resu
     let rgba8 = img.into_rgba8();
     let (width, height) = rgba8.dimensions();
     
-    // Convert to RgbaSurface for intel_tex_2
-    let surface = intel_tex_2::RgbaSurface {
-        data: &rgba8,
-        width,
-        height,
-        stride: width * 4,
-    };
-    
-    // Compress to BC7
-    let settings = intel_tex_2::bc7::opaque_ultra_fast_settings();
-    let compressed_data = intel_tex_2::bc7::compress_blocks(&settings, &surface);
-    
     // Write .tex file
     let file = File::create(out_path)?;
     let mut w = BufWriter::new(file);
     
-    let format = if is_srgb {
-        TexFormat::Bc7SrgbBlock as u32
-    } else {
-        TexFormat::Bc7UnormBlock as u32
-    };
-    
+    let data_size = rgba8.as_raw().len() as u32;
     let header = TexHeader {
         magic: *TEX_MAGIC,
         version: TEX_VERSION,
         width,
         height,
-        format,
-        mip_count: 1, // TODO: generate mips
-        data_size: compressed_data.len() as u32,
+        format: TexFormat::Rgba8Unorm as u32,
+        mip_count: 1,
+        data_size,
         _pad: 0,
     };
     
     w.write_all(bytemuck::bytes_of(&header))?;
-    w.write_all(&compressed_data)?;
+    w.write_all(rgba8.as_raw())?;
     w.flush()?;
     
     Ok(())

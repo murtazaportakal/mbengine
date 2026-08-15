@@ -80,7 +80,7 @@ libloading = "0.8"
 ab_glyph = "0.2"
 meshopt = "0.3"
 rodio = "0.17.3"
-intel_tex_2 = "0.2"
+
 gltf = { version = "1.4", features = ["KHR_lights_punctual", "KHR_materials_emissive_strength", "KHR_materials_ior", "KHR_materials_pbrSpecularGlossiness", "KHR_materials_specular", "KHR_materials_transmission", "KHR_materials_unlit", "KHR_materials_variants", "KHR_materials_volume", "KHR_texture_transform", "extensions", "extras", "guess_mime_type"] }
 rfd = "0.17.2"
 rhai = "1.19"
