@@ -107,22 +107,22 @@ impl GeometryPool {
         })
     }
 
-    /// Append a mesh to the geometry pool.
+    /// Append a mesh to the geometry pool, populated by a callback.
     ///
-    /// Uses persistent staging buffers (mapped/unmapped per call) to
-    /// eliminate vkDestroyBuffer validation errors.  Only a single
-    /// temporary command buffer is allocated/freed from the transfer pool.
-    pub fn append_mesh(
+    /// The callback `fill_data` is provided with raw pointers to the mapped
+    /// staging buffers for vertices, indices, and meshlets respectively.
+    /// It must write exactly the expected number of bytes.
+    pub fn append_with_callback<F>(
         &mut self,
         vulkan: &VulkanDevice,
-        vertices: &[Vertex],
-        indices: &[u32],
-        meshlets: &[MeshletData],
-    ) -> Option<(u32, u32, u32)> {
-        let v_count = vertices.len() as u32;
-        let i_count = indices.len() as u32;
-        let m_count = meshlets.len() as u32;
-
+        v_count: u32,
+        i_count: u32,
+        m_count: u32,
+        mut fill_data: F,
+    ) -> Option<(u32, u32, u32)>
+    where
+        F: FnMut(*mut u8, *mut u8, *mut u8) -> std::io::Result<()>,
+    {
         if self.current_vertex_count + v_count > self.max_vertices
             || self.current_index_count + i_count > self.max_indices
             || self.current_meshlet_count + m_count > self.max_meshlets
@@ -146,81 +146,46 @@ impl GeometryPool {
         let i_offset = self.current_index_count;
         let m_offset = self.current_meshlet_count;
 
-        // --- Upload to persistent staging buffers via map/memcpy/unmap ---
-        // HOST_COHERENT ensures the GPU sees the writes without an explicit
-        // flush.  No staging buffer is ever destroyed here.
+        let mut v_ptr = std::ptr::null_mut();
+        let mut i_ptr = std::ptr::null_mut();
+        let mut m_ptr = std::ptr::null_mut();
 
-        // Vertex staging
         if v_count > 0 {
-            let data_size = v_byte_size;
-            let data_ptr = unsafe {
+            v_ptr = unsafe {
                 vulkan
                     .device
-                    .map_memory(
-                        self.staging_vertex.memory,
-                        0,
-                        data_size,
-                        vk::MemoryMapFlags::empty(),
-                    )
+                    .map_memory(self.staging_vertex.memory, 0, v_byte_size, vk::MemoryMapFlags::empty())
                     .unwrap()
-            };
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    vertices.as_ptr() as *const u8,
-                    data_ptr as *mut u8,
-                    data_size as usize,
-                );
-                vulkan.device.unmap_memory(self.staging_vertex.memory);
-            }
+            } as *mut u8;
         }
-
-        // Index staging
         if i_count > 0 {
-            let data_size = i_byte_size;
-            let data_ptr = unsafe {
+            i_ptr = unsafe {
                 vulkan
                     .device
-                    .map_memory(
-                        self.staging_index.memory,
-                        0,
-                        data_size,
-                        vk::MemoryMapFlags::empty(),
-                    )
+                    .map_memory(self.staging_index.memory, 0, i_byte_size, vk::MemoryMapFlags::empty())
                     .unwrap()
-            };
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    indices.as_ptr() as *const u8,
-                    data_ptr as *mut u8,
-                    data_size as usize,
-                );
-                vulkan.device.unmap_memory(self.staging_index.memory);
-            }
+            } as *mut u8;
+        }
+        if m_count > 0 {
+            m_ptr = unsafe {
+                vulkan
+                    .device
+                    .map_memory(self.staging_meshlet.memory, 0, m_byte_size, vk::MemoryMapFlags::empty())
+                    .unwrap()
+            } as *mut u8;
         }
 
-        // Meshlet staging
-        if m_count > 0 {
-            let data_size = m_byte_size;
-            let data_ptr = unsafe {
-                vulkan
-                    .device
-                    .map_memory(
-                        self.staging_meshlet.memory,
-                        0,
-                        data_size,
-                        vk::MemoryMapFlags::empty(),
-                    )
-                    .unwrap()
-            };
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    meshlets.as_ptr() as *const u8,
-                    data_ptr as *mut u8,
-                    data_size as usize,
-                );
-                vulkan.device.unmap_memory(self.staging_meshlet.memory);
-            }
+        if fill_data(v_ptr, i_ptr, m_ptr).is_err() {
+            crate::log_info!("Failed to fill mesh data via callback");
+            if v_count > 0 { unsafe { vulkan.device.unmap_memory(self.staging_vertex.memory); } }
+            if i_count > 0 { unsafe { vulkan.device.unmap_memory(self.staging_index.memory); } }
+            if m_count > 0 { unsafe { vulkan.device.unmap_memory(self.staging_meshlet.memory); } }
+            return None;
         }
+
+        if v_count > 0 { unsafe { vulkan.device.unmap_memory(self.staging_vertex.memory); } }
+        if i_count > 0 { unsafe { vulkan.device.unmap_memory(self.staging_index.memory); } }
+        if m_count > 0 { unsafe { vulkan.device.unmap_memory(self.staging_meshlet.memory); } }
 
         // --- Single transfer command buffer copies all three ---
         if let Some(cmd) = vulkan.begin_single_time_commands() {
@@ -257,9 +222,7 @@ impl GeometryPool {
             if m_count > 0 {
                 let copy_region = vk::BufferCopy::default()
                     .src_offset(0)
-                    .dst_offset(
-                        (m_offset as usize * std::mem::size_of::<MeshletData>()) as u64,
-                    )
+                    .dst_offset((m_offset as usize * std::mem::size_of::<MeshletData>()) as u64)
                     .size(m_byte_size);
                 unsafe {
                     vulkan.device.cmd_copy_buffer(
@@ -280,6 +243,53 @@ impl GeometryPool {
 
         Some((v_offset, i_offset, m_offset))
     }
+
+    /// Append a mesh to the geometry pool from slices in memory.
+    pub fn append_mesh(
+        &mut self,
+        vulkan: &VulkanDevice,
+        vertices: &[Vertex],
+        indices: &[u32],
+        meshlets: &[MeshletData],
+    ) -> Option<(u32, u32, u32)> {
+        self.append_with_callback(
+            vulkan,
+            vertices.len() as u32,
+            indices.len() as u32,
+            meshlets.len() as u32,
+            |v_ptr, i_ptr, m_ptr| {
+                if !v_ptr.is_null() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            vertices.as_ptr() as *const u8,
+                            v_ptr,
+                            vertices.len() * std::mem::size_of::<Vertex>(),
+                        );
+                    }
+                }
+                if !i_ptr.is_null() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            indices.as_ptr() as *const u8,
+                            i_ptr,
+                            indices.len() * std::mem::size_of::<u32>(),
+                        );
+                    }
+                }
+                if !m_ptr.is_null() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            meshlets.as_ptr() as *const u8,
+                            m_ptr,
+                            meshlets.len() * std::mem::size_of::<MeshletData>(),
+                        );
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
         self.vertex_buffer.shutdown(vulkan);

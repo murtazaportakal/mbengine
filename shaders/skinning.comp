@@ -21,9 +21,9 @@ struct OutputVertex {
 
 // ── Bindings ────────────────────────────────────────────────────────────────
 
-// Bone matrices (model-space), up to MAX_BONES
+// Global Bone matrices (model-space) for all instances
 layout(std430, binding = 0) readonly buffer BoneMatrices {
-    mat4 boneMatrices[128];
+    mat4 boneMatrices[];
 };
 
 // Original (bind-pose) vertex data
@@ -39,6 +39,7 @@ layout(std430, binding = 2) writeonly buffer OutputVertices {
 // ── Push Constants ──────────────────────────────────────────────────────────
 layout(push_constant) uniform PushConstants {
     uint vertexCount;
+    uint boneMatrixOffset;
 } pc;
 
 // Helper: read a vec3 from the flat float array at the given float-index offset
@@ -113,10 +114,10 @@ void main() {
 
     if (totalWeight > 0.0001) {
         mat4 skinMatrix = 
-            weights.x * boneMatrices[joints.x] +
-            weights.y * boneMatrices[joints.y] +
-            weights.z * boneMatrices[joints.z] +
-            weights.w * boneMatrices[joints.w];
+            weights.x * boneMatrices[pc.boneMatrixOffset + joints.x] +
+            weights.y * boneMatrices[pc.boneMatrixOffset + joints.y] +
+            weights.z * boneMatrices[pc.boneMatrixOffset + joints.z] +
+            weights.w * boneMatrices[pc.boneMatrixOffset + joints.w];
 
         skinnedPos    = (skinMatrix * vec4(pos, 1.0)).xyz;
         skinnedNormal = mat3(skinMatrix) * normal;

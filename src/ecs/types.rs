@@ -106,9 +106,10 @@ pub const SKELETON_TYPE_ID: ComponentTypeId = 8;
 pub const ANIMATOR_TYPE_ID: ComponentTypeId = 9;
 pub const AUDIO_LISTENER_TYPE_ID: ComponentTypeId = 10;
 pub const AUDIO_EMITTER_TYPE_ID: ComponentTypeId = 11;
+pub const NAME_TYPE_ID: ComponentTypeId = 12;
 
 /// First ID available for dynamically registered component types.
-const DYNAMIC_ID_START: ComponentTypeId = 12;
+const DYNAMIC_ID_START: ComponentTypeId = 13;
 
 /// Table of (TypeId, assigned ComponentTypeId) for core engine components.
 /// Populated lazily on first access via `OnceLock`.
@@ -133,6 +134,7 @@ fn core_type_table() -> &'static [(TypeId, ComponentTypeId)] {
                 AUDIO_LISTENER_TYPE_ID,
             ),
             (TypeId::of::<AudioEmitterComponent>(), AUDIO_EMITTER_TYPE_ID),
+            (TypeId::of::<NameComponent>(), NAME_TYPE_ID),
         ]
     })
 }

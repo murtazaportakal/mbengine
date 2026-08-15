@@ -12,8 +12,6 @@ use ash::vk;
 
 /// GPU resources for a single skinned mesh instance.
 pub struct SkinningInstance {
-    /// SSBO containing the bone matrices (MAX_BONES * Mat4).
-    pub bone_buffer: Buffer,
     /// SSBO containing the deformed vertex data (output of compute).
     pub skinned_vertex_buffer: Buffer,
     /// Number of vertices in the mesh.
@@ -31,22 +29,11 @@ impl SkinningInstance {
         vulkan: &VulkanDevice,
         pipeline: &ComputeSkinningPipeline,
         descriptor_pool: vk::DescriptorPool,
+        global_bone_buffer: vk::Buffer,
         source_vertex_buffer: vk::Buffer,
         vertex_offset: u64,
         vertex_count: u32,
     ) -> Option<Self> {
-        // Bone matrix buffer (MAX_BONES * 64 bytes per Mat4)
-        let bone_buffer_size = (MAX_BONES * std::mem::size_of::<Mat4>()) as u64;
-        let bone_buffer = Buffer::new(
-            vulkan,
-            bone_buffer_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-
-        // Initialize with identity matrices
-        let identity_matrices = vec![Mat4::identity(); MAX_BONES];
-        bone_buffer.upload(vulkan, &identity_matrices);
 
         // Skinned vertex output buffer (same size as input)
         let vertex_size = std::mem::size_of::<crate::renderer::vulkan::pipeline::Vertex>();
@@ -69,9 +56,9 @@ impl SkinningInstance {
 
         // Update descriptor set
         let bone_info = vk::DescriptorBufferInfo::default()
-            .buffer(bone_buffer.handle)
+            .buffer(global_bone_buffer)
             .offset(0)
-            .range(bone_buffer_size);
+            .range(vk::WHOLE_SIZE);
 
         let input_info = vk::DescriptorBufferInfo::default()
             .buffer(source_vertex_buffer)
@@ -106,24 +93,13 @@ impl SkinningInstance {
         }
 
         Some(Self {
-            bone_buffer,
             skinned_vertex_buffer,
             vertex_count,
             descriptor_set,
         })
     }
 
-    /// Upload bone matrices to the GPU.
-    pub fn upload_bone_matrices(&self, vulkan: &VulkanDevice, matrices: &[Mat4]) {
-        // Pad to MAX_BONES with identity
-        let mut padded = vec![Mat4::identity(); MAX_BONES];
-        let count = matrices.len().min(MAX_BONES);
-        padded[..count].copy_from_slice(&matrices[..count]);
-        self.bone_buffer.upload(vulkan, &padded);
-    }
-
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
-        self.bone_buffer.shutdown(vulkan);
         self.skinned_vertex_buffer.shutdown(vulkan);
     }
 }
@@ -178,11 +154,11 @@ impl ComputeSkinningPipeline {
                 .ok()?
         };
 
-        // Push constant: vertex_count (u32)
+        // Push constant: vertex_count (u32), bone_matrix_offset (u32)
         let push_constant_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(4); // sizeof(u32)
+            .size(8); // sizeof(u32) * 2
 
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(std::slice::from_ref(&descriptor_set_layout))
@@ -252,12 +228,14 @@ impl ComputeSkinningPipeline {
         );
 
         let vertex_count = instance.vertex_count;
+        let bone_matrix_offset = 0u32; // TEMP offset, will be provided by backend later
+        let pc_data = [vertex_count, bone_matrix_offset];
         vulkan.device.cmd_push_constants(
             command_buffer,
             self.layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
-            &vertex_count.to_ne_bytes(),
+            bytemuck::bytes_of(&pc_data),
         );
 
         // Dispatch: ceil(vertex_count / 256)

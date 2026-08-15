@@ -109,6 +109,7 @@ fn test_full_ecs_smoke_test() {
         world.register_component::<Position>(1024);
         world.register_component::<Velocity>(1024);
         world.register_component::<Health>(512);
+        world.register_component::<engine::ecs::components::NameComponent>(1024);
     }
     println!("    Registered 3 component types");
 
@@ -329,6 +330,24 @@ fn test_full_ecs_smoke_test() {
 
     println!("    Stale handle correctly detected");
 
+    // ── 8. Entity Name registry ──────────────────────────────────────
+    let e_named = world.create_entity();
+    world.set_entity_name(e_named, "Player");
+    assert_eq!(world.get_entity_name(e_named), Some("Player"));
+    assert_eq!(world.find_entity_by_name("Player"), Some(e_named));
+    
+    // Test renaming
+    world.set_entity_name(e_named, "Player1");
+    assert_eq!(world.get_entity_name(e_named), Some("Player1"));
+    assert_eq!(world.find_entity_by_name("Player"), None);
+    assert_eq!(world.find_entity_by_name("Player1"), Some(e_named));
+
+    // Test destruction cleanup
+    world.destroy_entity(e_named);
+    assert_eq!(world.find_entity_by_name("Player1"), None);
+    
+    println!("    Entity Name registry works OK");
+
     // Cleanup: World is dropped first (reverse declaration order),
     // then MemorySubsystem — matching C++ destruction order.
     drop(world);
@@ -336,3 +355,5 @@ fn test_full_ecs_smoke_test() {
 
     println!("\n=== All ECS tests passed ===");
 }
+
+

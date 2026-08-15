@@ -253,7 +253,7 @@ fn extract_skeleton(
         })
         .collect();
 
-    let skeleton = Skeleton::new(bones);
+    let skeleton = Skeleton::new(bones, 0);
     (Some(skeleton), joint_node_to_bone_index)
 }
 
@@ -382,6 +382,7 @@ fn extract_animations(
         clips.push(AnimationClip {
             name: clip_name,
             duration,
+            gpu_index: 0,
             channels,
         });
     }

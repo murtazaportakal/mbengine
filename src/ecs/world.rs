@@ -16,6 +16,7 @@
 use super::component_array::{ComponentArray, ComponentArrayOps};
 use super::entity_manager::EntityManager;
 use super::types::*;
+use crate::containers::{FixedString, HashMap};
 use crate::memory::ArenaAllocator;
 use std::ptr;
 
@@ -32,6 +33,9 @@ pub struct World {
 
     /// Number of component types registered (tracks highest ID + 1).
     registered_component_count: u32,
+
+    /// Fast lookup from string to EntityId.
+    name_to_id: *mut HashMap<FixedString<64>, EntityId>,
 }
 
 /// Stores a type-erased component array pointer with its vtable for trait dispatch.
@@ -74,11 +78,19 @@ impl World {
 
         const NONE: Option<ComponentArrayEntry> = None;
 
+        let name_to_id_ptr = arena.allocate(
+            std::mem::size_of::<HashMap<FixedString<64>, EntityId>>(),
+            std::mem::align_of::<HashMap<FixedString<64>, EntityId>>(),
+        ) as *mut HashMap<FixedString<64>, EntityId>;
+        assert!(!name_to_id_ptr.is_null());
+        ptr::write(name_to_id_ptr, HashMap::with_capacity(arena, 256));
+
         Self {
             arena: arena as *mut ArenaAllocator,
             entity_manager,
             component_arrays: [NONE; MAX_COMPONENT_TYPES as usize],
             registered_component_count: 0,
+            name_to_id: name_to_id_ptr,
         }
     }
 
@@ -142,6 +154,15 @@ impl World {
 
         let index = get_entity_index(id);
 
+        if self.has_component::<crate::ecs::components::NameComponent>(id) {
+            let name_comp = unsafe { self.get_component_array::<crate::ecs::components::NameComponent>().get(id) };
+            if !name_comp.name.is_empty() {
+                unsafe {
+                    (*self.name_to_id).remove(&name_comp.name);
+                }
+            }
+        }
+
         // Notify all registered component arrays to remove this entity's data.
         for i in 0..self.registered_component_count as usize {
             if let Some(ref mut entry) = self.component_arrays[i] {
@@ -171,6 +192,50 @@ impl World {
     /// Returns the number of entities written.
     pub fn get_alive_entities(&self, buffer: &mut [EntityId]) -> usize {
         unsafe { (*self.entity_manager).get_alive_entities(buffer) }
+    }
+
+    // ── entity names ─────────────────────────────────────────────────────────
+
+    pub fn set_entity_name(&mut self, id: EntityId, name: &str) {
+        if !self.is_alive(id) {
+            return;
+        }
+        let fixed_name = FixedString::<64>::try_from_str(name).unwrap_or_default();
+
+        if self.has_component::<crate::ecs::components::NameComponent>(id) {
+            let old_name = unsafe { self.get_component_array::<crate::ecs::components::NameComponent>().get(id).name.clone() };
+            if !old_name.is_empty() {
+                unsafe { (*self.name_to_id).remove(&old_name); }
+            }
+            unsafe {
+                self.get_component_mut::<crate::ecs::components::NameComponent>(id).name = fixed_name.clone();
+            }
+        } else {
+            unsafe {
+                self.add_component(id, crate::ecs::components::NameComponent { name: fixed_name.clone() });
+            }
+        }
+
+        unsafe {
+            (*self.name_to_id).insert(&mut *self.arena, fixed_name, id);
+        }
+    }
+
+    pub fn get_entity_name(&self, id: EntityId) -> Option<&str> {
+        if !self.is_alive(id) || !self.has_component::<crate::ecs::components::NameComponent>(id) {
+            return None;
+        }
+        let name_comp = unsafe { self.get_component_array::<crate::ecs::components::NameComponent>().get(id) };
+        if name_comp.name.is_empty() {
+            None
+        } else {
+            Some(name_comp.name.as_str())
+        }
+    }
+
+    pub fn find_entity_by_name(&self, name: &str) -> Option<EntityId> {
+        let fixed_name = FixedString::<64>::try_from_str(name).unwrap_or_default();
+        unsafe { (*self.name_to_id).get(&fixed_name).copied() }
     }
 
     // ── component operations ────────────────────────────────────────────

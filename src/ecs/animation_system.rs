@@ -10,23 +10,22 @@ use crate::renderer::vulkan::skeleton::SkeletonPose;
 /// Get the maximum duration of a given state for looping/stopping logic.
 fn get_state_duration(
     state: &AnimationState,
-    skeleton_name: &str,
     asset_manager: &AssetManager,
 ) -> f32 {
     match state {
-        AnimationState::Clip { clip_name } => {
+        AnimationState::Clip { clip_handle } => {
             asset_manager
-                .get_animation_clip(skeleton_name, clip_name.as_str())
+                .get_animation_clip(*clip_handle)
                 .map(|c| c.duration)
                 .unwrap_or(0.0)
         }
         AnimationState::Blend1D { clip_a, clip_b, .. } => {
             let da = asset_manager
-                .get_animation_clip(skeleton_name, clip_a.as_str())
+                .get_animation_clip(*clip_a)
                 .map(|c| c.duration)
                 .unwrap_or(0.0);
             let db = asset_manager
-                .get_animation_clip(skeleton_name, clip_b.as_str())
+                .get_animation_clip(*clip_b)
                 .map(|c| c.duration)
                 .unwrap_or(0.0);
             da.max(db)
@@ -36,9 +35,9 @@ fn get_state_duration(
         } => {
             [clip_bl, clip_br, clip_tl, clip_tr]
                 .iter()
-                .filter_map(|name| {
+                .filter_map(|handle| {
                     asset_manager
-                        .get_animation_clip(skeleton_name, name.as_str())
+                        .get_animation_clip(**handle)
                         .map(|c| c.duration)
                 })
                 .fold(0.0f32, f32::max)
@@ -46,75 +45,7 @@ fn get_state_duration(
     }
 }
 
-// ── Pose samplers ─────────────────────────────────────────────────────────────
-
-/// Sample a clip at time `t`, writing into `out_pose`.
-fn sample_clip(
-    clip_name: &str,
-    time: f32,
-    skeleton_name: &str,
-    asset_manager: &AssetManager,
-    bone_count: usize,
-    out_pose: &mut SkeletonPose,
-) {
-    if let Some(clip) = asset_manager.get_animation_clip(skeleton_name, clip_name) {
-        let t = if clip.duration > 0.0 { time % clip.duration } else { 0.0 };
-        clip.sample_pose(t, bone_count, out_pose);
-    } else {
-        *out_pose = SkeletonPose::new(bone_count);
-    }
-}
-
-/// Sample an `AnimationState` into a `SkeletonPose`.
-fn sample_state(
-    state: &AnimationState,
-    time: f32,
-    skeleton_name: &str,
-    asset_manager: &AssetManager,
-    bone_count: usize,
-    out_pose: &mut SkeletonPose,
-) {
-    match state {
-        AnimationState::Clip { clip_name } => {
-            sample_clip(clip_name.as_str(), time, skeleton_name, asset_manager, bone_count, out_pose);
-        }
-
-        AnimationState::Blend1D { clip_a, clip_b, weight } => {
-            let mut pose_a = SkeletonPose::new(bone_count);
-            let mut pose_b = SkeletonPose::new(bone_count);
-            sample_clip(clip_a.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_a);
-            sample_clip(clip_b.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_b);
-            SkeletonPose::blend(&pose_a, &pose_b, *weight, out_pose);
-        }
-
-        AnimationState::Blend2D {
-            clip_bl, clip_br, clip_tl, clip_tr, param_x, param_y,
-        } => {
-            // Bilinear interpolation:
-            //   lerp( lerp(bl, br, x), lerp(tl, tr, x), y )
-            let mut pose_bl = SkeletonPose::new(bone_count);
-            let mut pose_br = SkeletonPose::new(bone_count);
-            let mut pose_tl = SkeletonPose::new(bone_count);
-            let mut pose_tr = SkeletonPose::new(bone_count);
-
-            sample_clip(clip_bl.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_bl);
-            sample_clip(clip_br.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_br);
-            sample_clip(clip_tl.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_tl);
-            sample_clip(clip_tr.as_str(), time, skeleton_name, asset_manager, bone_count, &mut pose_tr);
-
-            // Bottom row blend
-            let mut pose_bottom = SkeletonPose::new(bone_count);
-            SkeletonPose::blend(&pose_bl, &pose_br, *param_x, &mut pose_bottom);
-
-            // Top row blend
-            let mut pose_top = SkeletonPose::new(bone_count);
-            SkeletonPose::blend(&pose_tl, &pose_tr, *param_x, &mut pose_top);
-
-            // Vertical blend
-            SkeletonPose::blend(&pose_bottom, &pose_top, *param_y, out_pose);
-        }
-    }
-}
+// Pose sampling and CPU skinning have been moved to GPU compute shaders.
 
 // ── Main animation processor ──────────────────────────────────────────────────
 
@@ -170,7 +101,7 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
         }
 
         if let Some(skeleton) = asset_manager.get_skeleton(skeleton_name) {
-            let duration = get_state_duration(&animator.state, skeleton_name, asset_manager);
+            let duration = get_state_duration(&animator.state, asset_manager);
             if animator.current_time > duration && duration > 0.0 {
                 if animator.is_looping {
                     animator.current_time %= duration;
@@ -182,57 +113,19 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
                 }
             }
 
-            let bone_count = skeleton.bone_count();
-
-            // 1. Sample current state
-            let mut current_pose = SkeletonPose::new(bone_count);
-            sample_state(
-                &animator.state,
-                animator.current_time,
-                skeleton_name,
-                asset_manager,
-                bone_count,
-                &mut current_pose,
-            );
-
-            // 2. Handle crossfade
-            let mut final_pose = current_pose;
-
-            if let Some(target) = &animator.target_state {
+            // CPU no longer computes keyframes or bone matrices.
+            // This is deferred to `anim_update.comp` on the GPU.
+            
+            // Just handle crossfade timers
+            if animator.target_state.is_some() {
                 animator.transition_time += dt_scaled;
                 animator.crossfade_current += dt_scaled;
 
-                let mut target_pose = SkeletonPose::new(bone_count);
-                sample_state(
-                    target,
-                    animator.transition_time,
-                    skeleton_name,
-                    asset_manager,
-                    bone_count,
-                    &mut target_pose,
-                );
-
-                let mut blended_pose = SkeletonPose::new(bone_count);
-                let blend_weight =
-                    (animator.crossfade_current / animator.crossfade_duration).clamp(0.0, 1.0);
-
-                SkeletonPose::blend(&final_pose, &target_pose, blend_weight, &mut blended_pose);
-                final_pose = blended_pose;
-
-                // Check if transition is complete
                 if animator.crossfade_current >= animator.crossfade_duration {
                     animator.state = animator.target_state.take().unwrap();
                     animator.current_time = animator.transition_time;
                 }
             }
-
-            // 3. Convert to matrices and compute final bone matrices
-            let mut local_transforms = crate::containers::FixedArray::<
-                crate::math::mat4::Mat4,
-                { crate::renderer::vulkan::skeleton::MAX_BONES },
-            >::new();
-            final_pose.to_matrices(&mut local_transforms);
-            skeleton.compute_bone_matrices(&local_transforms, &mut skeleton_comp.computed_matrices);
         }
     }
 }

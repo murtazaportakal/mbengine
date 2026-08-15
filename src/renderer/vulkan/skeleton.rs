@@ -37,15 +37,18 @@ pub struct Skeleton {
     pub bones: Vec<Bone>,
     /// Map bone name → bone index for quick lookup.
     pub name_to_index: std::collections::HashMap<String, usize>,
+    /// GPU index in the global AnimationPool
+    pub gpu_index: u32,
 }
 
 impl Skeleton {
     /// Create a new skeleton from a list of bones.
-    pub fn new(bones: Vec<Bone>) -> Self {
+    pub fn new(bones: Vec<Bone>, gpu_index: u32) -> Self {
         let name_to_index = bones.iter().map(|b| (b.name.clone(), b.index)).collect();
         Self {
             bones,
             name_to_index,
+            gpu_index,
         }
     }
 
@@ -214,6 +217,8 @@ pub struct AnimationClip {
     pub name: String,
     /// Total duration in seconds.
     pub duration: f32,
+    /// The GPU index in the AnimationPool
+    pub gpu_index: u32,
     /// Per-bone animation channels.
     pub channels: Vec<BoneChannel>,
 }

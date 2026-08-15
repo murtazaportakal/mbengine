@@ -106,6 +106,112 @@ const MAT_MAGIC: &[u8; 4] = b"MATL";
 /// Increment when `MatHeader` or `MatData` layout changes.
 const MAT_VERSION: u32 = 1;
 
+// ── .tex binary format ────────────────────────────────────────────────────────
+
+/// Magic bytes written at the start of every `.tex` file.
+const TEX_MAGIC: &[u8; 4] = b"TEXL";
+const TEX_VERSION: u32 = 1;
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(dead_code)]
+pub enum TexFormat {
+    Rgba8Unorm = 0,
+    Bc7UnormBlock = 1,
+    Bc7SrgbBlock = 2,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct TexHeader {
+    magic: [u8; 4],
+    version: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    mip_count: u32,
+    data_size: u32,
+    _pad: u32,
+}
+
+// ── .anim binary format ───────────────────────────────────────────────────────
+
+const ANIM_MAGIC: &[u8; 4] = b"ANIM";
+const ANIM_VERSION: u32 = 1;
+pub const MAX_BONES: usize = 128;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct AnimHeader {
+    magic: [u8; 4],
+    version: u32,
+    bone_count: u32,
+    clip_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct BoneHeader {
+    inverse_bind_matrix: [f32; 16],
+    parent_index: i32,
+    name_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct ClipHeader {
+    name_len: u32,
+    duration: f32,
+    channel_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct ChannelHeader {
+    bone_index: u32,
+    translation_count: u32,
+    rotation_count: u32,
+    scale_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct Vec3Key {
+    time: f32,
+    value: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct QuatKey {
+    time: f32,
+    value: [f32; 4],
+}
+
+struct RawBone {
+    name: String,
+    inverse_bind_matrix: [f32; 16],
+    parent_index: i32,
+}
+
+struct RawChannel {
+    bone_index: u32,
+    translations: Vec<Vec3Key>,
+    rotations: Vec<QuatKey>,
+    scales: Vec<Vec3Key>,
+}
+
+struct RawClip {
+    name: String,
+    duration: f32,
+    channels: Vec<RawChannel>,
+}
+
+struct RawSkeleton {
+    bones: Vec<RawBone>,
+    clips: Vec<RawClip>,
+}
+
 /// Fixed header for `.mat` files.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -178,7 +284,7 @@ fn main() {
     println!("[cooker] Out dir: {}", out_dir.display());
 
     // Parse the glTF file
-    let (primitives, materials) = load_gltf(&input_path).unwrap_or_else(|e| {
+    let (primitives, mut materials, skeleton) = load_gltf(&input_path).unwrap_or_else(|e| {
         eprintln!("[cooker] Failed to load glTF: {}", e);
         std::process::exit(1);
     });
@@ -198,6 +304,39 @@ fn main() {
         eprintln!("[cooker] Cannot create output directory '{}': {}", out_dir.display(), e);
         std::process::exit(1);
     });
+
+    let input_parent = input_path.parent().unwrap_or(Path::new(""));
+
+    // Pre-cook all textures in materials
+    for mat in &mut materials {
+        let mut process_tex = |tex_opt: &mut Option<String>, is_srgb: bool| {
+            if let Some(tex) = tex_opt {
+                let in_tex_path = input_parent.join(&tex);
+                
+                // Change extension to .tex
+                let out_tex = std::path::Path::new(tex).with_extension("tex").to_string_lossy().into_owned();
+                let out_tex_path = out_dir.join(&out_tex);
+                
+                if let Some(parent) = out_tex_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                
+                // Always cook if missing (or we could check timestamps for incremental builds later)
+                if !out_tex_path.exists() || true {
+                    if let Err(e) = cook_texture(&in_tex_path, &out_tex_path, is_srgb) {
+                        eprintln!("[cooker] WARNING: Failed to cook texture {}: {}", in_tex_path.display(), e);
+                    }
+                }
+                
+                *tex_opt = Some(out_tex);
+            }
+        };
+        
+        process_tex(&mut mat.albedo_tex, true);
+        process_tex(&mut mat.normal_tex, false);
+        process_tex(&mut mat.mr_tex, false);
+        process_tex(&mut mat.emissive_tex, true);
+    }
 
     // Write one .mesh per primitive
     for (i, prim) in primitives.iter().enumerate() {
@@ -240,6 +379,21 @@ fn main() {
                     mat_name, mat.metallic_factor, mat.roughness_factor);
             }
         }
+    }
+
+    if let Some(skel) = skeleton {
+        let anim_name = format!("{}.anim", stem);
+        let anim_path = out_dir.join(&anim_name);
+        write_anim(&skel, &anim_path).unwrap_or_else(|e| {
+            eprintln!("[cooker] Failed to write '{}': {}", anim_path.display(), e);
+            std::process::exit(1);
+        });
+        println!(
+            "[cooker] ✓ {} — {} bones, {} clips",
+            anim_name,
+            skel.bones.len(),
+            skel.clips.len()
+        );
     }
 
     println!("[cooker] Done.");
@@ -290,7 +444,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf), String> {
 // ── glTF loading ──────────────────────────────────────────────────────────────
 
 /// Parse a glTF / GLB file into raw intermediate primitives and materials.
-fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>), String> {
+fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option<RawSkeleton>), String> {
     let (document, buffers, _images) =
         gltf::import(path).map_err(|e| format!("gltf::import failed: {}", e))?;
 
@@ -394,15 +548,22 @@ fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>), Strin
             let is_skinned = weights.iter().any(|w| w.iter().any(|&v| v > 0.0));
 
             // Build the flat Vertex array
-            let vertices: Vec<Vertex> = (0..n)
-                .map(|i| Vertex {
+            let mut vertices: Vec<Vertex> = Vec::new();
+            for i in 0..n {
+                let normal = if i < normals.len() { normals[i] } else { [0.0, 0.0, 0.0] };
+                let uv = if i < uvs.len() { uvs[i] } else { [0.0, 0.0] };
+
+                let j = if i < joints.len() { joints[i] } else { [0, 0, 0, 0] };
+                let w = if i < weights.len() { weights[i] } else { [0.0, 0.0, 0.0, 0.0] };
+
+                vertices.push(Vertex {
                     pos: positions[i],
-                    normal: normals[i],
-                    uv: uvs[i],
-                    joint_ids: joints[i],
-                    joint_weights: weights[i],
-                })
-                .collect();
+                    normal,
+                    uv,
+                    joint_ids: j,
+                    joint_weights: w,
+                });
+            }
 
             // AABB
             let (aabb_min, aabb_max) = compute_aabb(&vertices);
@@ -425,7 +586,217 @@ fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>), Strin
         }
     }
 
-    Ok((primitives, materials))
+    let skeleton = extract_skeleton_and_animations(&document, &buffers);
+    Ok((primitives, materials, skeleton))
+}
+
+// ── Skeleton & Animation Extraction ───────────────────────────────────────────
+
+fn extract_skeleton_and_animations(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Option<RawSkeleton> {
+    let skin = document.skins().next()?;
+    let joints: Vec<gltf::Node<'_>> = skin.joints().collect();
+
+    if joints.len() > MAX_BONES {
+        eprintln!("[cooker] Warning: Skeleton has {} bones (max is {}).", joints.len(), MAX_BONES);
+        return None;
+    }
+
+    // Map GLTF node index -> Bone index
+    let mut node_to_bone = std::collections::HashMap::new();
+    for (i, joint) in joints.iter().enumerate() {
+        node_to_bone.insert(joint.index(), i as u32);
+    }
+
+    // Build parent map for the entire document
+    let mut parent_map = std::collections::HashMap::new();
+    fn visit(node: &gltf::Node<'_>, map: &mut std::collections::HashMap<usize, usize>) {
+        for child in node.children() {
+            map.insert(child.index(), node.index());
+            visit(&child, map);
+        }
+    }
+    for scene in document.scenes() {
+        for node in scene.nodes() {
+            visit(&node, &mut parent_map);
+        }
+    }
+
+    // Find parent bone index
+    let find_parent_bone = |node: &gltf::Node<'_>| -> i32 {
+        let mut curr = node.index();
+        loop {
+            match parent_map.get(&curr) {
+                Some(&parent_node) => {
+                    if let Some(&bone_idx) = node_to_bone.get(&parent_node) {
+                        return bone_idx as i32;
+                    }
+                    curr = parent_node;
+                }
+                None => return -1,
+            }
+        }
+    };
+
+    let inverse_bind_matrices: Vec<[f32; 16]> = match skin
+        .reader(|buf| Some(&buffers[buf.index()]))
+        .read_inverse_bind_matrices()
+    {
+        Some(iter) => iter.map(|m| {
+            [
+                m[0][0], m[0][1], m[0][2], m[0][3],
+                m[1][0], m[1][1], m[1][2], m[1][3],
+                m[2][0], m[2][1], m[2][2], m[2][3],
+                m[3][0], m[3][1], m[3][2], m[3][3],
+            ]
+        }).collect(),
+        None => {
+            let id = [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ];
+            vec![id; joints.len()]
+        }
+    };
+
+    let mut bones = Vec::new();
+    for (i, joint) in joints.iter().enumerate() {
+        bones.push(RawBone {
+            name: joint.name().unwrap_or("unnamed").to_string(),
+            inverse_bind_matrix: inverse_bind_matrices[i],
+            parent_index: find_parent_bone(joint),
+        });
+    }
+
+    // Animations
+    let mut clips = Vec::new();
+    for animation in document.animations() {
+        let mut duration = 0.0f32;
+        let mut channels = Vec::new();
+        let mut channel_map = std::collections::HashMap::new();
+
+        for channel in animation.channels() {
+            let target_node = channel.target().node().index();
+            let bone_idx = match node_to_bone.get(&target_node) {
+                Some(&idx) => idx,
+                None => continue,
+            };
+
+            let reader = channel.reader(|buf| Some(&buffers[buf.index()]));
+            let timestamps: Vec<f32> = match reader.read_inputs() {
+                Some(iter) => iter.collect(),
+                None => continue,
+            };
+
+            if let Some(&max_t) = timestamps.last() {
+                if max_t > duration { duration = max_t; }
+            }
+
+            let entry = channel_map.entry(bone_idx).or_insert_with(|| RawChannel {
+                bone_index: bone_idx,
+                translations: Vec::new(),
+                rotations: Vec::new(),
+                scales: Vec::new(),
+            });
+
+            match reader.read_outputs() {
+                Some(gltf::animation::util::ReadOutputs::Translations(iter)) => {
+                    for (t, val) in timestamps.iter().zip(iter) {
+                        entry.translations.push(Vec3Key { time: *t, value: val });
+                    }
+                }
+                Some(gltf::animation::util::ReadOutputs::Rotations(iter)) => {
+                    for (t, val) in timestamps.iter().zip(iter.into_f32()) {
+                        entry.rotations.push(QuatKey { time: *t, value: val });
+                    }
+                }
+                Some(gltf::animation::util::ReadOutputs::Scales(iter)) => {
+                    for (t, val) in timestamps.iter().zip(iter) {
+                        entry.scales.push(Vec3Key { time: *t, value: val });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (_, ch) in channel_map {
+            channels.push(ch);
+        }
+
+        clips.push(RawClip {
+            name: animation.name().unwrap_or("unnamed_clip").to_string(),
+            duration,
+            channels,
+        });
+    }
+
+    Some(RawSkeleton { bones, clips })
+}
+
+// ── .anim writer ──────────────────────────────────────────────────────────────
+
+fn write_anim(skel: &RawSkeleton, path: &Path) -> std::io::Result<()> {
+    let file = File::create(path)?;
+    let mut w = BufWriter::new(file);
+
+    let header = AnimHeader {
+        magic: *ANIM_MAGIC,
+        version: ANIM_VERSION,
+        bone_count: skel.bones.len() as u32,
+        clip_count: skel.clips.len() as u32,
+    };
+    w.write_all(bytemuck::bytes_of(&header))?;
+
+    // Helper to write string with 4-byte padding
+    let mut write_str = |s: &str, w: &mut BufWriter<File>| -> std::io::Result<()> {
+        let bytes = s.as_bytes();
+        w.write_all(bytes)?;
+        let pad = (4 - (bytes.len() % 4)) % 4;
+        for _ in 0..pad { w.write_all(&[0])?; }
+        Ok(())
+    };
+
+    // Bones
+    for bone in &skel.bones {
+        let bh = BoneHeader {
+            inverse_bind_matrix: bone.inverse_bind_matrix,
+            parent_index: bone.parent_index,
+            name_len: bone.name.as_bytes().len() as u32,
+        };
+        w.write_all(bytemuck::bytes_of(&bh))?;
+        write_str(&bone.name, &mut w)?;
+    }
+
+    // Clips
+    for clip in &skel.clips {
+        let ch = ClipHeader {
+            name_len: clip.name.as_bytes().len() as u32,
+            duration: clip.duration,
+            channel_count: clip.channels.len() as u32,
+        };
+        w.write_all(bytemuck::bytes_of(&ch))?;
+        write_str(&clip.name, &mut w)?;
+
+        for ch in &clip.channels {
+            let channel_head = ChannelHeader {
+                bone_index: ch.bone_index,
+                translation_count: ch.translations.len() as u32,
+                rotation_count: ch.rotations.len() as u32,
+                scale_count: ch.scales.len() as u32,
+            };
+            w.write_all(bytemuck::bytes_of(&channel_head))?;
+            w.write_all(bytemuck::cast_slice(&ch.translations))?;
+            w.write_all(bytemuck::cast_slice(&ch.rotations))?;
+            w.write_all(bytemuck::cast_slice(&ch.scales))?;
+        }
+    }
+
+    w.flush()?;
+    Ok(())
 }
 
 // ── Meshlet generation ────────────────────────────────────────────────────────
@@ -639,5 +1010,55 @@ fn write_mat(mat: &RawMaterial, path: &Path) -> std::io::Result<()> {
     w.write_all(&string_section)?;
 
     w.flush()?;
+    Ok(())
+}
+
+fn cook_texture(in_path: &Path, out_path: &Path, is_srgb: bool) -> std::io::Result<()> {
+    println!("[Cooker] Compressing texture: {}", in_path.display());
+    
+    // Load image
+    let img = image::open(in_path)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    
+    let rgba8 = img.into_rgba8();
+    let (width, height) = rgba8.dimensions();
+    
+    // Convert to RgbaSurface for intel_tex_2
+    let surface = intel_tex_2::RgbaSurface {
+        data: &rgba8,
+        width,
+        height,
+        stride: width * 4,
+    };
+    
+    // Compress to BC7
+    let settings = intel_tex_2::bc7::opaque_ultra_fast_settings();
+    let compressed_data = intel_tex_2::bc7::compress_blocks(&settings, &surface);
+    
+    // Write .tex file
+    let file = File::create(out_path)?;
+    let mut w = BufWriter::new(file);
+    
+    let format = if is_srgb {
+        TexFormat::Bc7SrgbBlock as u32
+    } else {
+        TexFormat::Bc7UnormBlock as u32
+    };
+    
+    let header = TexHeader {
+        magic: *TEX_MAGIC,
+        version: TEX_VERSION,
+        width,
+        height,
+        format,
+        mip_count: 1, // TODO: generate mips
+        data_size: compressed_data.len() as u32,
+        _pad: 0,
+    };
+    
+    w.write_all(bytemuck::bytes_of(&header))?;
+    w.write_all(&compressed_data)?;
+    w.flush()?;
+    
     Ok(())
 }

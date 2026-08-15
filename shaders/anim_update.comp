@@ -1,0 +1,220 @@
+#version 450
+
+layout(local_size_x = 64) in;
+
+struct GpuBone {
+    mat4 inverse_bind_matrix;
+    int parent_index;
+    int pad0;
+    int pad1;
+    int pad2;
+};
+
+struct GpuSkeleton {
+    GpuBone bones[128];
+    uint bone_count;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+
+struct GpuClip {
+    float duration;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+    uvec4 channels[128];
+    uvec2 scale_channels[128];
+    uvec2 pad3[128];
+};
+
+struct GpuKeyframe {
+    float time;
+    vec4 value;
+};
+
+struct InstanceAnimData {
+    uint skeleton_index;
+    uint state_type;
+    
+    uint clip_a;
+    uint clip_b;
+    uint clip_c;
+    uint clip_d;
+    vec2 weights_ab;
+    vec2 weights_cd;
+    float current_time;
+    
+    uint prev_state_type;
+    uint prev_clip_a;
+    uint prev_clip_b;
+    uint prev_clip_c;
+    uint prev_clip_d;
+    vec2 prev_weights_ab;
+    vec2 prev_weights_cd;
+    float prev_time;
+    
+    float crossfade_weight;
+    uint pad0;
+    uint pad1;
+};
+
+layout(std430, binding = 0) readonly buffer AnimDataBuffer {
+    InstanceAnimData animData[];
+};
+
+layout(std430, binding = 1) readonly buffer SkeletonsBuffer {
+    GpuSkeleton skeletons[];
+};
+
+layout(std430, binding = 2) readonly buffer ClipsBuffer {
+    GpuClip clips[];
+};
+
+layout(std430, binding = 3) readonly buffer KeyframesBuffer {
+    GpuKeyframe keyframes[];
+};
+
+layout(std430, binding = 4) writeonly buffer BoneMatricesBuffer {
+    mat4 outBoneMatrices[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint instanceCount;
+} pc;
+
+vec3 interpolateVec3(uint offset, uint count, float time) {
+    if (count == 0) return vec3(0.0);
+    if (count == 1) return keyframes[offset].value.xyz;
+    
+    // Find keyframe
+    uint left = 0;
+    uint right = count - 1;
+    while (left < right) {
+        uint mid = left + (right - left) / 2;
+        if (keyframes[offset + mid].time < time) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    
+    uint idx1 = max(left, 1) - 1;
+    uint idx2 = min(idx1 + 1, count - 1);
+    
+    float t1 = keyframes[offset + idx1].time;
+    float t2 = keyframes[offset + idx2].time;
+    float factor = clamp((time - t1) / (t2 - t1 + 0.0001), 0.0, 1.0);
+    
+    return mix(keyframes[offset + idx1].value.xyz, keyframes[offset + idx2].value.xyz, factor);
+}
+
+// SLERP
+vec4 slerp(vec4 a, vec4 b, float t) {
+    float cosTheta = dot(a, b);
+    if (cosTheta < 0.0) {
+        b = -b;
+        cosTheta = -cosTheta;
+    }
+    if (cosTheta > 0.9995) {
+        return normalize(mix(a, b, t));
+    }
+    float theta = acos(cosTheta);
+    float sinTheta = sin(theta);
+    float w1 = sin((1.0 - t) * theta) / sinTheta;
+    float w2 = sin(t * theta) / sinTheta;
+    return a * w1 + b * w2;
+}
+
+vec4 interpolateQuat(uint offset, uint count, float time) {
+    if (count == 0) return vec4(0.0, 0.0, 0.0, 1.0);
+    if (count == 1) return keyframes[offset].value;
+    
+    uint left = 0;
+    uint right = count - 1;
+    while (left < right) {
+        uint mid = left + (right - left) / 2;
+        if (keyframes[offset + mid].time < time) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    
+    uint idx1 = max(left, 1) - 1;
+    uint idx2 = min(idx1 + 1, count - 1);
+    
+    float t1 = keyframes[offset + idx1].time;
+    float t2 = keyframes[offset + idx2].time;
+    float factor = clamp((time - t1) / (t2 - t1 + 0.0001), 0.0, 1.0);
+    
+    return slerp(keyframes[offset + idx1].value, keyframes[offset + idx2].value, factor);
+}
+
+mat4 trsMatrix(vec3 t, vec4 q, vec3 s) {
+    mat4 mat = mat4(1.0);
+    // Scale
+    mat[0][0] = s.x; mat[1][1] = s.y; mat[2][2] = s.z;
+    
+    // Rotation (quaternion to matrix)
+    float xx = q.x * q.x; float yy = q.y * q.y; float zz = q.z * q.z;
+    float xy = q.x * q.y; float xz = q.x * q.z; float yz = q.y * q.z;
+    float wx = q.w * q.x; float wy = q.w * q.y; float wz = q.w * q.z;
+
+    mat4 rot = mat4(
+        1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz),       2.0 * (xz - wy),       0.0,
+        2.0 * (xy - wz),       1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx),       0.0,
+        2.0 * (xz + wy),       2.0 * (yz - wx),       1.0 - 2.0 * (xx + yy), 0.0,
+        0.0,                   0.0,                   0.0,                   1.0
+    );
+    
+    mat = rot * mat;
+    
+    // Translation
+    mat[3][0] = t.x;
+    mat[3][1] = t.y;
+    mat[3][2] = t.z;
+    
+    return mat;
+}
+
+void main() {
+    uint instIdx = gl_GlobalInvocationID.x;
+    if (instIdx >= pc.instanceCount) return;
+
+    InstanceAnimData inst = animData[instIdx];
+    if (inst.skeleton_index == 0xffffffff) return; // invalid skeleton
+
+    // For now, only handle simple Clip (state_type == 0).
+    // Blend1D, Blend2D, and Crossfade will be added later or evaluated simply.
+    uint clipIdx = inst.clip_a;
+    float time = inst.current_time;
+    
+    uint outOffset = instIdx * 128; // 128 bones per instance
+    
+    mat4 globalTransforms[128];
+    uint boneCount = skeletons[inst.skeleton_index].bone_count;
+    
+    for (uint i = 0; i < boneCount; ++i) {
+        GpuBone bone = skeletons[inst.skeleton_index].bones[i];
+        uvec4 ch = clips[clipIdx].channels[i];
+        uvec2 sch = clips[clipIdx].scale_channels[i];
+        
+        vec3 t = interpolateVec3(ch.x, ch.y, time);
+        vec4 r = interpolateQuat(ch.z, ch.w, time);
+        vec3 s = interpolateVec3(sch.x, sch.y, time);
+        if (sch.y == 0) s = vec3(1.0); // Default scale if no keys
+        if (ch.y == 0) t = vec3(0.0);
+        if (ch.w == 0) r = vec4(0.0, 0.0, 0.0, 1.0);
+        
+        mat4 localMat = trsMatrix(t, r, s);
+        
+        if (bone.parent_index >= 0) {
+            globalTransforms[i] = globalTransforms[bone.parent_index] * localMat;
+        } else {
+            globalTransforms[i] = localMat;
+        }
+        
+        outBoneMatrices[outOffset + i] = globalTransforms[i] * bone.inverse_bind_matrix;
+    }
+}

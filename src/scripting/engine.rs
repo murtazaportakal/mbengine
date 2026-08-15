@@ -65,6 +65,29 @@ impl RhaiWorld {
         unsafe { self.world().is_alive(id as crate::ecs::EntityId) }
     }
 
+    // ── Entity names ─────────────────────────────────────────────────────────
+
+    pub fn set_entity_name(&mut self, id: i64, name: &str) {
+        let world = unsafe { self.world() };
+        world.set_entity_name(id as crate::ecs::EntityId, name);
+    }
+
+    pub fn get_entity_name(&self, id: i64) -> String {
+        let world = unsafe { self.world() };
+        world
+            .get_entity_name(id as crate::ecs::EntityId)
+            .unwrap_or("")
+            .to_string()
+    }
+
+    pub fn find_entity(&self, name: &str) -> i64 {
+        let world = unsafe { self.world() };
+        world
+            .find_entity_by_name(name)
+            .map(|id| id as i64)
+            .unwrap_or(-1)
+    }
+
     // ── TransformComponent queries ────────────────────────────────────────────
 
     /// Return true if the entity has a TransformComponent.
@@ -178,6 +201,9 @@ impl ScriptEngine {
             .register_fn("create_entity",   RhaiWorld::create_entity)
             .register_fn("destroy_entity",  RhaiWorld::destroy_entity)
             .register_fn("is_alive",        RhaiWorld::is_alive)
+            .register_fn("set_entity_name", RhaiWorld::set_entity_name)
+            .register_fn("get_entity_name", RhaiWorld::get_entity_name)
+            .register_fn("find_entity",     RhaiWorld::find_entity)
             // TransformComponent access
             .register_fn("has_transform",   RhaiWorld::has_transform)
             .register_fn("get_transform",   RhaiWorld::get_transform)
@@ -252,6 +278,10 @@ impl ScriptEngine {
     /// Scripts receive a `world: World` variable in scope and can call:
     /// - `world.create_entity()` → i64
     /// - `world.destroy_entity(id)`
+    /// - `world.is_alive(id)` → bool
+    /// - `world.set_entity_name(id, name)`
+    /// - `world.get_entity_name(id)` → String
+    /// - `world.find_entity(name)` → i64 (or -1)
     /// - `world.has_transform(id)` → bool
     /// - `world.get_transform(id)` → Transform
     /// - `world.set_transform(id, t)`

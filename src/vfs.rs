@@ -104,6 +104,55 @@ impl Vfs {
         fs::read(full_path)
     }
 
+    /// Read a specific chunk of a file directly into a raw pointer.
+    ///
+    /// # Safety
+    /// The caller must ensure that `dst` points to a valid, appropriately aligned
+    /// memory block of at least `len` bytes.
+    pub unsafe fn read_chunk_into_ptr(
+        &self,
+        path: impl AsRef<Path>,
+        file_offset: u64,
+        dst: *mut u8,
+        len: usize,
+    ) -> std::io::Result<()> {
+        let path_str = path.as_ref().to_string_lossy().replace("\\", "/");
+
+        // Try Pak first
+        if let Some(pak_mutex) = &self.inner.pak_file {
+            if let Some(entry) = self.inner.toc.get(&path_str) {
+                if file_offset + len as u64 > entry.size {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "Chunk exceeds file bounds",
+                    ));
+                }
+                if let Ok(mut f) = pak_mutex.lock() {
+                    f.seek(SeekFrom::Start(entry.offset + file_offset))?;
+                    let buf = std::slice::from_raw_parts_mut(dst, len);
+                    f.read_exact(buf)?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Fallback to disk
+        let full_path = self.resolve_path(path);
+        let mut f = File::open(full_path)?;
+        let metadata = f.metadata()?;
+        let file_len = metadata.len();
+        if file_offset + len as u64 > file_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Chunk exceeds file bounds",
+            ));
+        }
+        f.seek(SeekFrom::Start(file_offset))?;
+        let buf = std::slice::from_raw_parts_mut(dst, len);
+        f.read_exact(buf)?;
+        Ok(())
+    }
+
     /// Read an entire file into a string.
     pub fn read_to_string(&self, path: impl AsRef<Path>) -> std::io::Result<String> {
         let bytes = self.read_bytes(path)?;

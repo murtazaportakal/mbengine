@@ -78,6 +78,9 @@ impl Application {
         //    textures into VRAM, builds descriptor pools/sets, etc.)
         let mut render = RenderBackend::new(&window, width, height, &mut asset_manager, &ui_font)?;
 
+        // Ensure index 0 is a default white texture so untextured models render properly
+        asset_manager.load_solid_color(&render.vulkan, "default_white", 255, 255, 255, 255);
+
         // If the OS resized the window during creation, recreate the
         // swapchain now so the first frame's acquire_next_image succeeds.
         if window.width as u32 != render.swapchain.extent.width
@@ -116,6 +119,7 @@ impl Application {
             world.register_component::<crate::ecs::components::SkeletonComponent>(100);
             world.register_component::<crate::ecs::components::AnimatorComponent>(100);
             world.register_component::<crate::ecs::components::ScriptBehaviorComponent>(100);
+            world.register_component::<crate::ecs::components::NameComponent>(10000);
         }
 
         let physics = crate::physics::PhysicsSystem::new();
@@ -307,6 +311,9 @@ impl Application {
                     crate::app::editor::EditorAction::ToggleDebugCull => {
                         self.render.debug_cull = !self.render.debug_cull;
                     }
+                    crate::app::editor::EditorAction::ToggleDebugMeshlets => {
+                        self.render.debug_meshlets = !self.render.debug_meshlets;
+                    }
                     crate::app::editor::EditorAction::SpawnEntity => {
                         let new_entity = self.world.create_entity();
                         unsafe {
@@ -415,6 +422,55 @@ impl Application {
                         } else if path_obj.extension().map_or(false, |ext| ext == "obj") {
                             crate::log_info!("[SpawnModel] Loading OBJ: {}", path_obj.display());
                             mesh_indices = Some(self.asset_manager.load_model(&self.render.vulkan, &mut self.render.geometry_pool, path_str).unwrap_or(&[]).to_vec());
+                        } else if path_obj.extension().map_or(false, |ext| ext == "mesh") {
+                            crate::log_info!("[SpawnModel] Loading Cooked Mesh: {}", path_obj.display());
+                            if let Some(idx) = self.asset_manager.load_cooked_mesh(&self.render.vulkan, &mut self.render.geometry_pool, path_str) {
+                                mesh_indices = Some(vec![idx]);
+                            }
+                        } else if path_obj.extension().map_or(false, |ext| ext == "mat") {
+                            crate::log_info!("[SpawnModel] Loading Material: {}", path_obj.display());
+                            self.asset_manager.load_cooked_material(&self.render.vulkan, &name, path_str);
+                            if let Some(entity) = self.selected_entity {
+                                let renders = self.world.get_component_array_mut::<RenderComponent>();
+                                if renders.has(entity) {
+                                    if let Some(mat) = self.asset_manager.materials.get(&name).cloned() {
+                                        let mut mesh_idx = 0;
+                                        {
+                                            let r = unsafe { renders.get_mut(entity) };
+                                            r.r = mat.base_color_factor[0];
+                                            r.g = mat.base_color_factor[1];
+                                            r.b = mat.base_color_factor[2];
+                                            r.metallic = mat.metallic_factor;
+                                            r.roughness = mat.roughness_factor;
+                                            mesh_idx = r.mesh_index;
+                                        }
+                                        let mut albedo_idx = 0;
+                                        let mut normal_idx = 0;
+                                        let mut mr_idx = 0;
+                                        let mut emissive_idx = 0;
+                                        if let Some(tex) = &mat.albedo_texture {
+                                            albedo_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0) as u32;
+                                        }
+                                        if let Some(tex) = &mat.normal_texture {
+                                            normal_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0) as u32;
+                                        }
+                                        if let Some(tex) = &mat.mr_texture {
+                                            mr_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0) as u32;
+                                        }
+                                        if let Some(tex) = &mat.emissive_texture {
+                                            emissive_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0) as u32;
+                                        }
+                                        
+                                        if let Some(mesh) = self.asset_manager.get_mesh_mut(mesh_idx) {
+                                            if mat.albedo_texture.is_some() { mesh.diffuse_texture_idx = albedo_idx; }
+                                            if mat.normal_texture.is_some() { mesh.normal_texture_idx = normal_idx; }
+                                            if mat.mr_texture.is_some() { mesh.mr_texture_idx = mr_idx; }
+                                            if mat.emissive_texture.is_some() { mesh.emissive_texture_idx = emissive_idx; }
+                                        }
+                                    }
+                                }
+                            }
+                            continue; // Do not spawn a new entity for materials!
                         }
 
                         crate::log_info!("[SpawnModel] mesh_indices={:?}", mesh_indices);
@@ -474,16 +530,9 @@ impl Application {
                         if let Some(indices) = mesh_indices {
                             if indices.is_empty() {
                                 crate::log_info!("[SpawnModel] ERROR: Mesh indices was EMPTY for {}", path);
-                            }
-                            for &mesh_index in &indices {
-                                let child = self.world.create_entity();
+                            } else if indices.len() == 1 {
+                                let mesh_index = indices[0];
                                 unsafe {
-                                    self.world.add_component(child, TransformComponent {
-                                        position: Vec3::new(0.0, 0.0, 0.0),
-                                        rotation: Vec3::new(0.0, 0.0, 0.0),
-                                        scale: Vec3::new(1.0, 1.0, 1.0),
-                                        matrix: crate::math::mat4::Mat4::identity(),
-                                    });
                                     let mut metallic = 0.0f32;
                                     let mut roughness = 0.8f32;
                                     let mut r = 1.0f32; let mut g = 1.0f32; let mut b = 1.0f32;
@@ -500,14 +549,47 @@ impl Application {
                                         let collider = rapier3d::prelude::ColliderBuilder::cuboid(hx,hy,hz)
                                             .translation(rapier3d::math::Vector::new(mesh.aabb_min[0]+hx, mesh.aabb_min[1]+hy, mesh.aabb_min[2]+hz)).build();
                                         let handle = self.physics.collider_set.insert(collider);
-                                        self.world.add_component(child, crate::ecs::components::ColliderComponent { handle });
+                                        self.world.add_component(new_entity, crate::ecs::components::ColliderComponent { handle });
                                     }
-                                    self.world.add_component(child, RenderComponent {
+                                    self.world.add_component(new_entity, RenderComponent {
                                         visible: true, mesh_index, metallic, roughness, r, g, b,
                                     });
-                                    self.world.add_component(child, HierarchyComponent {
-                                        parent: Some(new_entity), local_matrix: crate::math::mat4::Mat4::identity(),
-                                    });
+                                }
+                            } else {
+                                for &mesh_index in &indices {
+                                    let child = self.world.create_entity();
+                                    unsafe {
+                                        self.world.add_component(child, TransformComponent {
+                                            position: Vec3::new(0.0, 0.0, 0.0),
+                                            rotation: Vec3::new(0.0, 0.0, 0.0),
+                                            scale: Vec3::new(1.0, 1.0, 1.0),
+                                            matrix: crate::math::mat4::Mat4::identity(),
+                                        });
+                                        let mut metallic = 0.0f32;
+                                        let mut roughness = 0.8f32;
+                                        let mut r = 1.0f32; let mut g = 1.0f32; let mut b = 1.0f32;
+                                        if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
+                                            metallic = mesh.metallic;
+                                            roughness = mesh.roughness;
+                                            r = mesh.default_color[0];
+                                            g = mesh.default_color[1];
+                                            b = mesh.default_color[2];
+                                            let hx = (mesh.aabb_max[0]-mesh.aabb_min[0]).abs()*0.5;
+                                            let hy = (mesh.aabb_max[1]-mesh.aabb_min[1]).abs()*0.5;
+                                            let hz = (mesh.aabb_max[2]-mesh.aabb_min[2]).abs()*0.5;
+                                            let hx = hx.max(0.01); let hy = hy.max(0.01); let hz = hz.max(0.01);
+                                            let collider = rapier3d::prelude::ColliderBuilder::cuboid(hx,hy,hz)
+                                                .translation(rapier3d::math::Vector::new(mesh.aabb_min[0]+hx, mesh.aabb_min[1]+hy, mesh.aabb_min[2]+hz)).build();
+                                            let handle = self.physics.collider_set.insert(collider);
+                                            self.world.add_component(child, crate::ecs::components::ColliderComponent { handle });
+                                        }
+                                        self.world.add_component(child, RenderComponent {
+                                            visible: true, mesh_index, metallic, roughness, r, g, b,
+                                        });
+                                        self.world.add_component(child, HierarchyComponent {
+                                            parent: Some(new_entity), local_matrix: crate::math::mat4::Mat4::identity(),
+                                        });
+                                    }
                                 }
                             }
                         }

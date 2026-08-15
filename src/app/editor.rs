@@ -20,6 +20,7 @@ pub enum EditorAction {
     AddComponent(EntityId, String),
     TranslateSelected(crate::math::vec::Vec3),
     ToggleDebugCull,
+    ToggleDebugMeshlets,
     SpawnStressTest,
 }
 
@@ -39,6 +40,8 @@ pub struct Editor {
     pub connecting_from: Option<(u32, u8)>, // (node_id, port_id)
     pub inspector_scroll: f32,
     pub hierarchy_scroll: f32,
+    pub file_browser_scroll: f32,
+    pub dragging_file: Option<String>,
 }
 
 impl Default for Editor {
@@ -88,6 +91,8 @@ impl Editor {
             connecting_from: None,
             inspector_scroll: 0.0,
             hierarchy_scroll: 0.0,
+            file_browser_scroll: 0.0,
+            dragging_file: None,
         }
     }
 
@@ -191,6 +196,53 @@ impl Editor {
                 });
             }
         }
+        
+        if ButtonBuilder::new(ui_ctx, 12)
+            .text("Cook Asset")
+            .style(&SLATE_BASE)
+            .build()
+        {
+            std::thread::spawn(move || {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Raw Models", &["gltf", "glb"])
+                    .pick_file()
+                {
+                    crate::log_info!("[Cooker] Cooking asset: {}", path.display());
+                    let output = std::process::Command::new("cargo")
+                        .arg("run")
+                        .arg("--bin")
+                        .arg("cooker")
+                        .arg("--")
+                        .arg(path.to_string_lossy().to_string())
+                        .arg("--out-dir")
+                        .arg("assets/cooked/")
+                        .output();
+                    
+                    match output {
+                        Ok(o) => {
+                            crate::log_info!("[Cooker] Finished cooking with status: {}", o.status);
+                            if !o.stdout.is_empty() {
+                                crate::log_info!("[Cooker] STDOUT: {}", String::from_utf8_lossy(&o.stdout));
+                            }
+                            if !o.stderr.is_empty() {
+                                crate::log_info!("[Cooker] STDERR: {}", String::from_utf8_lossy(&o.stderr));
+                            }
+                        }
+                        Err(e) => {
+                            crate::log_info!("[Cooker] Failed to run cooker: {}", e);
+                        }
+                    }
+                }
+            });
+        }
+        
+        if ButtonBuilder::new(ui_ctx, 13)
+            .text("Debug Meshlets")
+            .style(&SLATE_BASE)
+            .build()
+        {
+            actions.push(EditorAction::ToggleDebugMeshlets);
+        }
 
         // Push play/pause to the center roughly
         let center_offset = (screen_w / 2.0) - ui_ctx.cursor.x - 40.0;
@@ -219,13 +271,18 @@ impl Editor {
         ui_ctx.end_panel();
 
         if self.active_tab == EditorTab::Scene3D {
-        // 2. Left Scene Hierarchy
+        // Layout sizes
         let hierarchy_w = 250.0;
+        let inspector_w = 300.0;
+        let bottom_panel_h = 200.0;
+        let main_h = screen_h - 40.0 - bottom_panel_h;
+
+        // 2. Left Scene Hierarchy
         let hierarchy_rect = UiRect {
             x: 0.0,
             y: 40.0,
             w: hierarchy_w,
-            h: screen_h - 40.0,
+            h: main_h,
         };
 
         if hierarchy_rect.contains(ui_ctx.mouse_pos) {
@@ -302,12 +359,11 @@ impl Editor {
         ui_ctx.end_panel();
 
         // 3. Right Inspector (Unity style)
-        let inspector_w = 300.0;
         let inspector_rect = UiRect {
             x: screen_w - inspector_w,
             y: 40.0,
             w: inspector_w,
-            h: screen_h - 40.0,
+            h: main_h,
         };
 
         if inspector_rect.contains(ui_ctx.mouse_pos) {
@@ -378,7 +434,7 @@ impl Editor {
             x: hierarchy_w,
             y: 40.0,
             w: screen_w - hierarchy_w - inspector_w,
-            h: screen_h - 40.0,
+            h: main_h,
         };
 
         ui_ctx.image(viewport_rect, 0); // 0 is offscreen_texture_id
@@ -394,6 +450,15 @@ impl Editor {
                 let ndc_y = (local_y / viewport_rect.h) * 2.0 - 1.0;
                 raycast_request = Some((ndc_x, ndc_y));
             }
+            if !ui_ctx.mouse_down {
+                if let Some(file) = self.dragging_file.take() {
+                    actions.push(EditorAction::SpawnModel(file));
+                }
+            }
+        }
+        
+        if !ui_ctx.mouse_down {
+            self.dragging_file = None;
         }
 
         new_viewport_size = Some((viewport_rect.w as u32, viewport_rect.h as u32));
@@ -619,7 +684,99 @@ impl Editor {
                         }
                     }
                 }
+            ui_ctx.end_vertical_layout();
+        }
+
+        // 5. Bottom File Browser
+        let browser_rect = UiRect {
+            x: 0.0,
+            y: 40.0 + main_h,
+            w: screen_w,
+            h: bottom_panel_h,
+        };
+
+        if browser_rect.contains(ui_ctx.mouse_pos) {
+            self.file_browser_scroll -= ui_ctx.mouse_scroll_y * 30.0;
+            if self.file_browser_scroll < 0.0 {
+                self.file_browser_scroll = 0.0;
             }
+        }
+
+        PanelBuilder::new(ui_ctx, 15)
+            .rect(browser_rect)
+            .style(&SLATE_SECONDARY)
+            .begin();
+        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::SetScissor { rect: Some(browser_rect) });
+        ui_ctx.begin_vertical_layout(browser_rect);
+        ui_ctx.cursor.y -= self.file_browser_scroll;
+        ui_ctx.label("File Browser (assets/cooked)");
+        ui_ctx.label(" ");
+
+        if let Ok(entries) = std::fs::read_dir("assets/cooked") {
+            let mut x_offset = 10.0;
+            let mut y_offset = 30.0;
+            let item_w = 120.0;
+            let item_h = 40.0;
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    if ext == "mesh" || ext == "mat" || ext == "prefab" {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        
+                        let item_rect = UiRect {
+                            x: browser_rect.x + x_offset,
+                            y: browser_rect.y + y_offset - self.file_browser_scroll,
+                            w: item_w,
+                            h: item_h,
+                        };
+
+                        if item_rect.contains(ui_ctx.mouse_pos) && ui_ctx.mouse_pressed {
+                            self.dragging_file = Some(path.to_string_lossy().replace('\\', "/"));
+                        }
+
+                        let style = if self.dragging_file.as_deref() == Some(&path.to_string_lossy().replace('\\', "/")) {
+                            &SLATE_BASE
+                        } else {
+                            &SLATE_SECONDARY
+                        };
+
+                        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad { rect: item_rect, color: style.bg_color, rounding: 2.0 });
+                        
+                        let mut fs = crate::containers::FixedString::<128>::new();
+                        use core::fmt::Write;
+                        let _ = write!(fs, "{}", name);
+                        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Text { pos: crate::math::vec::Vec2::new(item_rect.x + 5.0, item_rect.y + 20.0), text: fs, color: style.text_color, font_size: 16.0 });
+
+                        x_offset += item_w + 10.0;
+                        if x_offset + item_w > browser_rect.w {
+                            x_offset = 10.0;
+                            y_offset += item_h + 10.0;
+                        }
+                    }
+                }
+            }
+        }
+        ui_ctx.end_vertical_layout();
+        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::SetScissor { rect: None });
+        ui_ctx.end_panel();
+
+        if let Some(drag_file) = &self.dragging_file {
+            let label = format!("Dragging: {}", drag_file);
+            let drag_rect = UiRect {
+                x: ui_ctx.mouse_pos.x + 10.0,
+                y: ui_ctx.mouse_pos.y + 10.0,
+                w: 200.0,
+                h: 30.0,
+            };
+            ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad { rect: drag_rect, color: crate::ui::UiColor::rgba(50, 50, 50, 200), rounding: 2.0 });
+            
+            let mut fs = crate::containers::FixedString::<128>::new();
+            use core::fmt::Write;
+            let _ = write!(fs, "{}", label);
+            ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Text { pos: crate::math::vec::Vec2::new(drag_rect.x + 5.0, drag_rect.y + 20.0), text: fs, color: crate::ui::UiColor::rgba(255, 255, 255, 255), font_size: 16.0 });
+        }
+
         }
         } else if self.active_tab == EditorTab::ScriptGraph {
             // Full-screen canvas below the top bar

@@ -513,13 +513,13 @@ impl ReflectComponent for SkeletonComponent {
 pub enum AnimationState {
     /// Single clip playback.
     Clip {
-        clip_name: crate::containers::FixedString<64>,
+        clip_handle: u32,
     },
     /// 1D linear blend between two clips using `weight` ∈ [0, 1].
     Blend1D {
-        clip_a:  crate::containers::FixedString<64>,
-        clip_b:  crate::containers::FixedString<64>,
-        weight:  f32, // 0.0 = clip_a, 1.0 = clip_b
+        clip_a: u32,
+        clip_b: u32,
+        weight: f32, // 0.0 = clip_a, 1.0 = clip_b
     },
     /// 2D bilinear blend between four clips arranged on a unit-square grid.
     ///
@@ -530,10 +530,10 @@ pub enum AnimationState {
     ///              param_x=0   param_x=1
     /// ```
     Blend2D {
-        clip_bl: crate::containers::FixedString<64>, // bottom-left  (0, 0)
-        clip_br: crate::containers::FixedString<64>, // bottom-right (1, 0)
-        clip_tl: crate::containers::FixedString<64>, // top-left     (0, 1)
-        clip_tr: crate::containers::FixedString<64>, // top-right    (1, 1)
+        clip_bl: u32, // bottom-left  (0, 0)
+        clip_br: u32, // bottom-right (1, 0)
+        clip_tl: u32, // top-left     (0, 1)
+        clip_tr: u32, // top-right    (1, 1)
         param_x: f32, // horizontal blend param [0, 1]
         param_y: f32, // vertical   blend param [0, 1]
     },
@@ -542,7 +542,7 @@ pub enum AnimationState {
 impl Default for AnimationState {
     fn default() -> Self {
         AnimationState::Clip {
-            clip_name: crate::containers::FixedString::new(),
+            clip_handle: 0,
         }
     }
 }
@@ -882,5 +882,33 @@ impl ReflectComponent for ClothComponent {
             changed = true;
         }
         changed
+    }
+}
+
+// ── NameComponent ────────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug, Default)]
+pub struct NameComponent {
+    pub name: crate::containers::FixedString<64>,
+}
+
+impl ReflectComponent for NameComponent {
+    fn name() -> &'static str { "Name" }
+
+    fn add_to_entity(
+        entity: crate::ecs::EntityId,
+        world: &mut crate::ecs::World,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) {
+        unsafe { world.add_component(entity, Self::default()); }
+    }
+
+    fn draw_inspector(
+        &mut self,
+        _ui: &mut crate::ui::UiContext,
+        _physics: &mut crate::physics::PhysicsSystem,
+    ) -> bool {
+        // Name edits via Inspector could be done here later
+        false
     }
 }

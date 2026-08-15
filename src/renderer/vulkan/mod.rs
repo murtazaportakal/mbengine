@@ -1,6 +1,10 @@
+pub mod animation;
+pub mod animation_pool;
 pub mod backend;
 pub mod bloom;
 pub mod buffer;
+pub mod cluster_lighting;
+pub mod compute_anim;
 pub mod compute_cloth;
 pub mod compute_cull;
 pub mod compute_skinning;
@@ -19,6 +23,7 @@ pub mod swapchain;
 pub mod texture;
 pub mod ui_backend;
 
+pub use animation_pool::AnimationPool;
 pub use backend::RenderBackend;
 pub use bloom::BloomTarget;
 pub use buffer::Buffer;

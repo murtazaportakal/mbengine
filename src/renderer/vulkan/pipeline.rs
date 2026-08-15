@@ -22,13 +22,19 @@ pub struct PointLight {
 #[derive(Clone, Copy, Debug)]
 pub struct GlobalUbo {
     pub view_proj: crate::math::mat4::Mat4,
+    pub view: crate::math::mat4::Mat4,
+    pub proj: crate::math::mat4::Mat4,
+    pub inverse_proj: crate::math::mat4::Mat4,
     pub light_space_matrix: crate::math::mat4::Mat4,
     pub camera_pos: [f32; 4],
     pub light_dir: [f32; 4],
     pub light_color: [f32; 4],
-    pub point_lights: [PointLight; 4],
+    pub screen_size: [f32; 2],
+    pub z_near: f32,
+    pub z_far: f32,
     pub num_point_lights: u32,
-    pub _padding: [u32; 3],
+    pub debug_meshlets: u32,
+    pub _padding: [u32; 2],
 }
 
 #[repr(C)]
@@ -204,11 +210,39 @@ impl Pipeline {
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
 
+        let anim_bone_matrices_layout_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(7)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX);
+
+        let light_buffer_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(4)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
+        let light_grid_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(5)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
+        let light_index_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(6)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
         let global_bindings = [
             ubo_layout_binding,
             env_map_layout_binding,
             shadow_map_layout_binding,
             instance_layout_binding,
+            anim_bone_matrices_layout_binding,
+            light_buffer_binding,
+            light_grid_binding,
+            light_index_binding,
         ];
 
         let material_bindings = [sampler_layout_binding];

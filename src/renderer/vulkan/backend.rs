@@ -47,6 +47,7 @@ pub struct RenderBackend {
 
     // === Lifetime 3: geometry ===
     pub geometry_pool: GeometryPool,
+    pub animation_pool: crate::renderer::vulkan::animation_pool::AnimationPool,
 
     // === Lifetime 4: multi-buffered GPU buffers ===
     pub draw_count_buffers: [Buffer; 2],
@@ -56,16 +57,18 @@ pub struct RenderBackend {
     pub instance_mapped: [*mut c_void; 2],
     pub prefix_sum_buffers: [Buffer; 2],
     pub prefix_sum_mapped: [*mut u32; 2],
+    pub anim_data_buffers: [Buffer; 2],
+    pub anim_data_mapped: [*mut std::ffi::c_void; 2],
+    pub anim_bone_matrices_buffer: Buffer,
 
     // === Lifetime 5: uniform buffer ===
     pub ubo_buffer: vk::Buffer,
     pub ubo_memory: vk::DeviceMemory,
     pub ubo_mapped: *mut c_void,
 
-    // === Lifetime 6: compute/skinning pipelines ===
-    pub skinning_pipeline: Option<ComputeSkinningPipeline>,
-    pub skinning_instances: Vec<compute_skinning::SkinningInstance>,
-    pub skinning_descriptor_pool: vk::DescriptorPool,
+    pub anim_pipeline: Option<crate::renderer::vulkan::compute_anim::ComputeAnimPipeline>,
+    pub anim_descriptor_pool: vk::DescriptorPool,
+    pub anim_descriptor_sets: [vk::DescriptorSet; 2],
     pub compute_pipeline: Option<ComputeCullPipeline>,
     pub compute_descriptor_pool: vk::DescriptorPool,
     /// GPU cloth simulation pipeline.  `None` if shaders could not be loaded.
@@ -103,6 +106,7 @@ pub struct RenderBackend {
     // === Lifetime 12: pre-allocated CPU scratch buffers ===
     /// Pre-allocated buffer for instance data built each frame.
     pub instance_data_buffer: Vec<crate::renderer::vulkan::pipeline::InstanceData>,
+    pub anim_instance_data_buffer: Vec<crate::renderer::vulkan::animation::InstanceAnimData>,
     pub prefix_sum_data_buffer: Vec<u32>,
     pub last_visible_meshlets: u32,
 
@@ -117,6 +121,7 @@ pub struct RenderBackend {
 
     // === Debug Toggles ===
     pub debug_cull: bool,
+    pub debug_meshlets: bool,
 }
 
 impl RenderBackend {
@@ -400,8 +405,11 @@ impl RenderBackend {
         let bindless_set = ubo_data.1;
 
         let geometry_pool =
-            GeometryPool::new(&vulkan, 4_000_000, 12_000_000, 400_000)
+            GeometryPool::new(&vulkan, 10_000_000, 30_000_000, 1_000_000)
                 .expect("Failed to create GeometryPool");
+        let animation_pool =
+            crate::renderer::vulkan::animation_pool::AnimationPool::new(&vulkan, 1024, 4096, 1_000_000)
+                .expect("Failed to create AnimationPool");
 
         let mut ui_backend = UiBackend::new(&vulkan, swapchain.format.format, &asset_manager.vfs);
         ui_backend.set_font(&vulkan, ui_font);
@@ -461,6 +469,26 @@ impl RenderBackend {
             draw_count_maps.push(dcb_mapped as *mut u32);
         }
 
+        let anim_data_size = (10_000 * std::mem::size_of::<crate::renderer::vulkan::animation::InstanceAnimData>()) as u64;
+        let mut anim_data_bufs = Vec::with_capacity(2);
+        let mut anim_data_maps = Vec::with_capacity(2);
+        for _ in 0..2 {
+            let ab = Buffer::new(
+                &vulkan,
+                anim_data_size,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ).expect("Failed to create anim data buffer");
+            let mapped = unsafe {
+                vulkan
+                    .device
+                    .map_memory(ab.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                    .expect("Failed to map anim data buffer")
+            };
+            anim_data_bufs.push(ab);
+            anim_data_maps.push(mapped);
+        }
+
         let mut prefix_sum_bufs = Vec::new();
         let mut prefix_sum_maps = Vec::new();
         for _ in 0..2 {
@@ -475,7 +503,7 @@ impl RenderBackend {
                 vulkan
                     .device
                     .map_memory(pb.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                    .expect("Failed to map prefix sum buffer")
+                    .expect("Failed to create prefix sum buffer")
             };
             prefix_sum_maps.push(mapped as *mut u32);
             prefix_sum_bufs.push(pb);
@@ -488,20 +516,91 @@ impl RenderBackend {
         let draw_count_mapped = [draw_count_maps.remove(0), draw_count_maps.remove(0)];
         let prefix_sum_buffers = [prefix_sum_bufs.remove(0), prefix_sum_bufs.remove(0)];
         let prefix_sum_mapped = [prefix_sum_maps.remove(0), prefix_sum_maps.remove(0)];
+        let anim_data_buffers = [anim_data_bufs.remove(0), anim_data_bufs.remove(0)];
+        let anim_data_mapped = [anim_data_maps.remove(0), anim_data_maps.remove(0)];
+        
+        let anim_bone_matrices_size = (max_instances * 128 * std::mem::size_of::<crate::math::mat4::Mat4>()) as u64;
+        let anim_bone_matrices_buffer = Buffer::new(
+            &vulkan,
+            anim_bone_matrices_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        ).expect("Failed to create anim bone matrices buffer");
 
-        // Bind instance buffers into descriptor set 3
+        let mut anim_pipeline = crate::renderer::vulkan::compute_anim::ComputeAnimPipeline::new(&vulkan, &asset_manager.vfs);
+        let anim_descriptor_pool = unsafe {
+            let pool_sizes = [vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(10)];
+            let pool_info = vk::DescriptorPoolCreateInfo::default()
+                .pool_sizes(&pool_sizes)
+                .max_sets(2);
+            vulkan.device.create_descriptor_pool(&pool_info, None).unwrap()
+        };
+        let anim_descriptor_sets = if let Some(anim) = &anim_pipeline {
+            let layouts = [anim.descriptor_set_layout, anim.descriptor_set_layout];
+            let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(anim_descriptor_pool)
+                .set_layouts(&layouts);
+            unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap().try_into().unwrap() }
+        } else {
+            [vk::DescriptorSet::null(), vk::DescriptorSet::null()]
+        };
+
+        if let Some(anim) = &anim_pipeline {
+            for i in 0..2 {
+                let inst_info = vk::DescriptorBufferInfo::default()
+                    .buffer(anim_data_buffers[i].handle)
+                    .offset(0).range(vk::WHOLE_SIZE);
+                let skel_info = vk::DescriptorBufferInfo::default()
+                    .buffer(animation_pool.skeleton_buffer.handle)
+                    .offset(0).range(vk::WHOLE_SIZE);
+                let clip_info = vk::DescriptorBufferInfo::default()
+                    .buffer(animation_pool.clip_buffer.handle)
+                    .offset(0).range(vk::WHOLE_SIZE);
+                let kf_info = vk::DescriptorBufferInfo::default()
+                    .buffer(animation_pool.keyframe_buffer.handle)
+                    .offset(0).range(vk::WHOLE_SIZE);
+                let out_info = vk::DescriptorBufferInfo::default()
+                    .buffer(anim_bone_matrices_buffer.handle)
+                    .offset(0).range(vk::WHOLE_SIZE);
+                    
+                let writes = [
+                    vk::WriteDescriptorSet::default().dst_set(anim_descriptor_sets[i]).dst_binding(0).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&inst_info)),
+                    vk::WriteDescriptorSet::default().dst_set(anim_descriptor_sets[i]).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&skel_info)),
+                    vk::WriteDescriptorSet::default().dst_set(anim_descriptor_sets[i]).dst_binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&clip_info)),
+                    vk::WriteDescriptorSet::default().dst_set(anim_descriptor_sets[i]).dst_binding(3).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&kf_info)),
+                    vk::WriteDescriptorSet::default().dst_set(anim_descriptor_sets[i]).dst_binding(4).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&out_info)),
+                ];
+                unsafe { vulkan.device.update_descriptor_sets(&writes, &[]); }
+            }
+        }
+
+        // Bind instance buffers into descriptor set 3 and anim_bone_matrices_buffer into binding 7
         for i in 0..2 {
             let instance_info = vk::DescriptorBufferInfo::default()
                 .buffer(instance_buffers[i].handle)
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
-            let write_desc = vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_set[i])
-                .dst_binding(3)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&instance_info));
-            unsafe { vulkan.device.update_descriptor_sets(&[write_desc], &[]) };
+            let anim_info = vk::DescriptorBufferInfo::default()
+                .buffer(anim_bone_matrices_buffer.handle)
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_set[i])
+                    .dst_binding(3)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&instance_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_set[i])
+                    .dst_binding(7)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&anim_info)),
+            ];
+            unsafe { vulkan.device.update_descriptor_sets(&writes, &[]) };
         }
 
         if let Some(compute) = &mut compute_pipeline {
@@ -559,6 +658,7 @@ impl RenderBackend {
             sdr_target,
             offscreen_target,
             geometry_pool,
+            animation_pool,
             draw_count_buffers,
             draw_count_mapped,
             indirect_buffers,
@@ -566,12 +666,15 @@ impl RenderBackend {
             instance_mapped,
             prefix_sum_buffers,
             prefix_sum_mapped,
+            anim_data_buffers,
+            anim_data_mapped,
+            anim_bone_matrices_buffer,
             ubo_buffer,
             ubo_memory,
             ubo_mapped,
-            skinning_pipeline,
-            skinning_instances: Vec::new(),
-            skinning_descriptor_pool,
+            anim_pipeline,
+            anim_descriptor_pool,
+            anim_descriptor_sets,
             compute_pipeline,
             compute_descriptor_pool,
             cloth_pipeline,
@@ -594,9 +697,11 @@ impl RenderBackend {
             bloom_threshold: 1.0,
             resource_tracker: ResourceTracker::new(),
             instance_data_buffer: Vec::with_capacity(max_instances),
+            anim_instance_data_buffer: Vec::with_capacity(10_000),
             prefix_sum_data_buffer: Vec::with_capacity(max_instances),
             last_visible_meshlets: 0,
             debug_cull: false,
+            debug_meshlets: false,
             hzb_target: None,
             depth_copy_sampler: vk::Sampler::null(),
             hzb_frame_count: 0,
@@ -815,6 +920,9 @@ impl RenderBackend {
 
         // Extract Camera
         let mut view_proj = crate::math::mat4::Mat4::identity();
+        let mut view = crate::math::mat4::Mat4::identity();
+        let mut proj = crate::math::mat4::Mat4::identity();
+        let mut inverse_proj = crate::math::mat4::Mat4::identity();
         let mut camera_pos = [0.0f32; 4];
         {
             let cameras = world.get_component_array::<CameraComponent>();
@@ -830,12 +938,13 @@ impl RenderBackend {
                         yaw.cos() * pitch.cos(),
                     ).normalize();
                     let center = cam_transform.position + forward;
-                    let view = crate::math::mat4::Mat4::look_at(
+                    view = crate::math::mat4::Mat4::look_at(
                         cam_transform.position, center, Vec3::new(0.0, 1.0, 0.0),
                     );
                     let aspect = self.offscreen_target.width as f32 / self.offscreen_target.height as f32;
-                    let proj = crate::math::mat4::Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 10000.0);
+                    proj = crate::math::mat4::Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 10000.0);
                     view_proj = proj * view;
+                    inverse_proj = proj.try_inverse().unwrap_or(crate::math::mat4::Mat4::identity());
                     camera_pos = [cam_transform.position.x, cam_transform.position.y, cam_transform.position.z, 1.0];
                 }
             }
@@ -892,13 +1001,19 @@ impl RenderBackend {
 
         let ubo = crate::renderer::vulkan::pipeline::GlobalUbo {
             view_proj,
+            view,
+            proj,
+            inverse_proj,
             camera_pos,
             light_dir,
             light_color,
             light_space_matrix,
-            point_lights: point_lights_array,
+            screen_size: [self.offscreen_target.width as f32, self.offscreen_target.height as f32],
+            z_near: 0.1,
+            z_far: 10000.0,
             num_point_lights,
-            _padding: [0; 3],
+            debug_meshlets: if self.debug_meshlets { 1 } else { 0 },
+            _padding: [0; 2],
         };
         if !self.ubo_mapped.is_null() {
             unsafe {
@@ -947,13 +1062,17 @@ impl RenderBackend {
 
         // --- Instance Data ---
         // Reuse the pre-allocated buffer — zero heap allocations on the hot path.
+        // Reuse the pre-allocated buffer — zero heap allocations on the hot path.
         self.instance_data_buffer.clear();
+        self.anim_instance_data_buffer.clear();
         self.prefix_sum_data_buffer.clear();
         self.prefix_sum_data_buffer.push(0); // Exclusive scan starts with 0
 
         {
             let renders = world.get_component_array::<RenderComponent>();
             let transforms = world.get_component_array::<TransformComponent>();
+            let animators = world.get_component_array::<crate::ecs::components::AnimatorComponent>();
+            let skeletons = world.get_component_array::<crate::ecs::components::SkeletonComponent>();
             let dense = renders.as_slice();
             let entities = renders.dense_entities_slice();
             for i in 0..dense.len() {
@@ -964,6 +1083,65 @@ impl RenderBackend {
                 let t = unsafe { transforms.get(entity) };
                 let wm = world_matrices.get(&entity).copied().unwrap_or(t.matrix);
                 if let Some(mesh) = asset_manager.get_mesh(r.mesh_index) {
+                    let mut anim_instance_id = 0xffffffff;
+                    
+                    if animators.has(entity) && skeletons.has(entity) {
+                        let animator = unsafe { animators.get(entity) };
+                        let skeleton_comp = unsafe { skeletons.get(entity) };
+                        if let Some(skeleton) = asset_manager.get_skeleton(&skeleton_comp.skeleton_name) {
+                            anim_instance_id = self.anim_instance_data_buffer.len() as u32;
+                            
+                            let mut anim_data = crate::renderer::vulkan::animation::InstanceAnimData::default();
+                            anim_data.skeleton_index = skeleton.gpu_index;
+                            anim_data.current_time = animator.current_time;
+                            anim_data.crossfade_weight = if animator.crossfade_duration > 0.0 {
+                                (animator.crossfade_current / animator.crossfade_duration).clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            };
+                            
+                            let mut write_state = |state: &crate::ecs::components::AnimationState, is_target: bool| {
+                                let (state_type, ca, cb, cc, cd, wab, wcd) = match state {
+                                    crate::ecs::components::AnimationState::Clip { clip_handle } => {
+                                        (0, asset_manager.animation_clips[*clip_handle as usize].gpu_index, 0, 0, 0, [1.0, 0.0], [0.0, 0.0])
+                                    }
+                                    crate::ecs::components::AnimationState::Blend1D { clip_a, clip_b, weight } => {
+                                        (1, asset_manager.animation_clips[*clip_a as usize].gpu_index, asset_manager.animation_clips[*clip_b as usize].gpu_index, 0, 0, [*weight, 1.0 - *weight], [0.0, 0.0])
+                                    }
+                                    crate::ecs::components::AnimationState::Blend2D { clip_bl, clip_br, clip_tl, clip_tr, param_x, param_y } => {
+                                        (2, asset_manager.animation_clips[*clip_bl as usize].gpu_index, asset_manager.animation_clips[*clip_br as usize].gpu_index, asset_manager.animation_clips[*clip_tl as usize].gpu_index, asset_manager.animation_clips[*clip_tr as usize].gpu_index, [*param_x, *param_y], [0.0, 0.0]) // Note: weights mapping might need adjusting in compute shader based on actual formula
+                                    }
+                                };
+                                
+                                if !is_target {
+                                    anim_data.state_type = state_type;
+                                    anim_data.clip_a = ca;
+                                    anim_data.clip_b = cb;
+                                    anim_data.clip_c = cc;
+                                    anim_data.clip_d = cd;
+                                    anim_data.weights_ab = wab;
+                                    anim_data.weights_cd = wcd;
+                                } else {
+                                    anim_data.prev_state_type = state_type;
+                                    anim_data.prev_clip_a = ca;
+                                    anim_data.prev_clip_b = cb;
+                                    anim_data.prev_clip_c = cc;
+                                    anim_data.prev_clip_d = cd;
+                                    anim_data.prev_weights_ab = wab;
+                                    anim_data.prev_weights_cd = wcd;
+                                    anim_data.prev_time = animator.transition_time;
+                                }
+                            };
+                            
+                            write_state(&animator.state, false);
+                            if let Some(target) = &animator.target_state {
+                                write_state(target, true);
+                            }
+                            
+                            self.anim_instance_data_buffer.push(anim_data);
+                        }
+                    }
+                
                     self.instance_data_buffer.push(crate::renderer::vulkan::pipeline::InstanceData {
                         world: wm,
                         aabb_min: [mesh.aabb_min[0], mesh.aabb_min[1], mesh.aabb_min[2], 1.0],
@@ -971,7 +1149,7 @@ impl RenderBackend {
                         color: [r.r, r.g, r.b, f32::from_bits(mesh.diffuse_texture_idx)],
                         pbr: [r.metallic, r.roughness, f32::from_bits(mesh.normal_texture_idx), f32::from_bits(mesh.mr_texture_idx)],
                         geometry: [mesh.index_count, mesh.index_offset, mesh.vertex_offset, mesh.emissive_texture_idx],
-                        geometry2: [mesh.meshlet_offset, mesh.meshlet_count, 0, 0],
+                        geometry2: [mesh.meshlet_offset, mesh.meshlet_count, anim_instance_id, 0],
                     });
                     
                     let last_prefix = *self.prefix_sum_data_buffer.last().unwrap();
@@ -988,6 +1166,13 @@ impl RenderBackend {
                 self.instance_mapped[self.current_frame] as *mut _,
                 self.instance_data_buffer.len(),
             );
+            if !self.anim_instance_data_buffer.is_empty() {
+                std::ptr::copy_nonoverlapping(
+                    self.anim_instance_data_buffer.as_ptr(),
+                    self.anim_data_mapped[self.current_frame] as *mut _,
+                    self.anim_instance_data_buffer.len(),
+                );
+            }
             std::ptr::copy_nonoverlapping(
                 self.prefix_sum_data_buffer.as_ptr(),
                 self.prefix_sum_mapped[self.current_frame] as *mut _,
@@ -1005,6 +1190,32 @@ impl RenderBackend {
                 cmd, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::DependencyFlags::empty(), std::slice::from_ref(&mem_bar), &[], &[],
             );
+        }
+        
+        let anim_count = self.anim_instance_data_buffer.len() as u32;
+        if anim_count > 0 {
+            if let Some(anim) = &self.anim_pipeline {
+                unsafe {
+                    self.vulkan.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, anim.pipeline);
+                    self.vulkan.device.cmd_bind_descriptor_sets(
+                        cmd, vk::PipelineBindPoint::COMPUTE, anim.layout, 0,
+                        std::slice::from_ref(&self.anim_descriptor_sets[self.current_frame]), &[],
+                    );
+                    self.vulkan.device.cmd_push_constants(
+                        cmd, anim.layout, vk::ShaderStageFlags::COMPUTE, 0,
+                        &anim_count.to_ne_bytes(),
+                    );
+                    self.vulkan.device.cmd_dispatch(cmd, (anim_count + 63) / 64, 1, 1);
+                    
+                    let mem_bar = vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+                    self.vulkan.device.cmd_pipeline_barrier(
+                        cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::DependencyFlags::empty(), std::slice::from_ref(&mem_bar), &[], &[],
+                    );
+                }
+            }
         }
 
         if let Some(compute) = &self.compute_pipeline {
@@ -1268,10 +1479,9 @@ impl Drop for RenderBackend {
             if self.post_process_descriptor_pool != vk::DescriptorPool::null() { self.vulkan.device.destroy_descriptor_pool(self.post_process_descriptor_pool, None); }
             if self.descriptor_pool != vk::DescriptorPool::null() { self.vulkan.device.destroy_descriptor_pool(self.descriptor_pool, None); }
             if self.compute_descriptor_pool != vk::DescriptorPool::null() { self.vulkan.device.destroy_descriptor_pool(self.compute_descriptor_pool, None); }
-            if self.skinning_descriptor_pool != vk::DescriptorPool::null() { self.vulkan.device.destroy_descriptor_pool(self.skinning_descriptor_pool, None); }
-            for mut inst in self.skinning_instances.drain(..) { inst.shutdown(&self.vulkan); }
+            if self.anim_descriptor_pool != vk::DescriptorPool::null() { self.vulkan.device.destroy_descriptor_pool(self.anim_descriptor_pool, None); }
             if let Some(mut cp) = self.compute_pipeline.take() { cp.shutdown(&self.vulkan); }
-            if let Some(mut sp) = self.skinning_pipeline.take() { sp.shutdown(&self.vulkan); }
+            if let Some(mut ap) = self.anim_pipeline.take() { ap.shutdown(&self.vulkan); }
             // Cloth — shut down the GPU buffers for each instance, then the pipeline.
             for mut inst in self.cloth_instances.drain(..) {
                 inst.velocity_buffer.shutdown(&self.vulkan);
@@ -1282,9 +1492,11 @@ impl Drop for RenderBackend {
             // Buffers
             if self.ubo_buffer != vk::Buffer::null() { self.vulkan.device.destroy_buffer(self.ubo_buffer, None); }
             if self.ubo_memory != vk::DeviceMemory::null() { self.vulkan.device.free_memory(self.ubo_memory, None); }
+            self.anim_bone_matrices_buffer.shutdown(&self.vulkan);
             for i in 0..2 {
-                self.instance_buffers[i].shutdown(&self.vulkan);
-                self.indirect_buffers[i].shutdown(&self.vulkan);
+        for b in &mut self.instance_buffers { b.shutdown(&self.vulkan); }
+        for b in &mut self.prefix_sum_buffers { b.shutdown(&self.vulkan); }
+        for b in &mut self.anim_data_buffers { b.shutdown(&self.vulkan); }
                 self.draw_count_buffers[i].shutdown(&self.vulkan);
                 self.prefix_sum_buffers[i].shutdown(&self.vulkan);
             }
@@ -1295,6 +1507,7 @@ impl Drop for RenderBackend {
 
             // Geometry
             self.geometry_pool.shutdown(&self.vulkan);
+        self.animation_pool.shutdown(&self.vulkan);
             self.blur_target.shutdown(&self.vulkan);
 
             // Core

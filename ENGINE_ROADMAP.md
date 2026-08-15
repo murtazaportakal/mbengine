@@ -25,6 +25,11 @@ These rules are **non-negotiable** across all future sessions and govern the eng
 
 The engine has reached full maturity for its baseline requirements. All V1 and V2 epics are 100% complete and actively functional in the repository.
 
+### GPU-Driven Skeletal Animation (August 15, 2026)
+- **Compute Shader Skinning Pipeline**: Eliminated CPU-side bone matrix multiplication. Implemented `anim_update.comp` to evaluate bone hierarchy transformations directly from the global GPU `AnimationPool` using compute shaders.
+- **Global Bone Matrices & Vertex Skinning**: Unified all animation matrices into a single massive global SSBO (`anim_bone_matrices_buffer`) supporting up to 100,000 animated instances simultaneously. The vertex shader (`shader.vert`) dynamically performs skinning on-the-fly, completely bypassing intermediate memory writes.
+- **Meshlet Visualization UI**: Added an Unreal Engine Nanite-style debug visualization mode. Implemented `gl_DrawID` hashing in `shader.vert` to dynamically assign distinct pseudo-random colors to every rendered meshlet cluster in real-time, toggleable via the editor UI.
+
 ### GPU-Driven Meshlet Culling (July 18, 2026)
 - **Nanite-Style Culling Pipeline**: Designed and implemented a multi-phase compute shader (`cull.comp`) performing frustum, occlusion (HZB), and screen-space LOD culling on individual meshlets.
 - **GPU-Driven Indirect Drawing**: Integrated completely GPU-driven rendering (`vkCmdDrawIndexedIndirectCount`) utilizing atomic draw counters and compacted indirect command buffers.
@@ -179,7 +184,7 @@ Run tests via `cargo test`. Contains 40 tests covering:
 
 ## V4 Master Plan — GPU-Driven Rendering & Asset Pipeline
 
-> **Status:** Phase 0 complete (2026-07-11). Phases 1–5 pending.
+> **Status:** Phase 0 & Phase 4 complete. Phases 1, 2, 3, 5 pending.
 
 ### Architectural Constraints for V4
 
@@ -250,16 +255,16 @@ These supplement the core constraints above:
 
 ---
 
-### Phase 4: Logic, Scripting & Lighting
+### Phase 4: Logic, Scripting & Lighting (Completed)
 
-**Gate:** A game script can spawn, query, and destroy entities created in the editor; scene supports 8+ dynamic point lights.
+**Gate:** A game script can spawn, query, and destroy entities created in the editor; scene supports 8+ dynamic point lights. *(Completed)*
 
-| Priority | Feature | Description |
-|---|---|---|
-| **P1** | Script entity name/ID bridge | Entity names registered in a VFS-like flat string table; exposed to Rhai context |
-| **P1** | DLL hot-reload entity persistence | Verify ECS entity IDs survive `game.dll` unload/reload across scenes loaded in editor |
-| **P2** | Forward+ cluster grid | Divide frustum into 3D tiles in compute; assign point lights per tile; sample in `shader.frag` — supports 256+ dynamic lights with O(1) per-fragment cost |
-| **P3** | Deferred lighting (optional) | GBuffer MRT (albedo/normal/PBR) + separate lighting pass — heavier but enables screen-space effects |
+| Priority | Feature | Description | Status |
+|---|---|---|---|
+| **P1** | Script entity name/ID bridge | Entity names registered in a VFS-like flat string table; exposed to Rhai context | *(Done)* |
+| **P1** | DLL hot-reload entity persistence | Verify ECS entity IDs survive `game.dll` unload/reload across scenes loaded in editor | *(Done)* |
+| **P2** | Forward+ cluster grid | Divide frustum into 3D tiles in compute; assign point lights per tile; sample in `shader.frag` — supports 256+ dynamic lights with O(1) per-fragment cost | *(Done)* |
+| **P3** | Deferred lighting (optional) | GBuffer MRT (albedo/normal/PBR) + separate lighting pass — heavier but enables screen-space effects | *(Skipped/Replaced by Forward+)* |
 
 ---
 

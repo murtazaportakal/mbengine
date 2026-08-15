@@ -154,6 +154,12 @@ impl<const N: usize> PartialEq for FixedString<N> {
 
 impl<const N: usize> Eq for FixedString<N> {}
 
+impl<const N: usize> std::hash::Hash for FixedString<N> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
 impl<const N: usize> fmt::Write for FixedString<N> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if self.len + s.len() > N {

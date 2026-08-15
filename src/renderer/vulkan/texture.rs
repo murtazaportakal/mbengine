@@ -447,6 +447,162 @@ impl Texture {
         })
     }
 
+    pub fn new_bc7(
+        vulkan: &VulkanDevice,
+        width: u32,
+        height: u32,
+        format_val: u32,
+        data: &[u8],
+    ) -> Option<Self> {
+        let format = match format_val {
+            1 => vk::Format::BC7_UNORM_BLOCK,
+            2 => vk::Format::BC7_SRGB_BLOCK,
+            _ => vk::Format::R8G8B8A8_SRGB,
+        };
+
+        let buffer_size = data.len() as u64;
+
+        let data_ptr = unsafe {
+            vulkan
+                .device
+                .map_memory(
+                    vulkan.staging_memory,
+                    0,
+                    buffer_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap()
+        };
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), data_ptr as *mut u8, buffer_size as usize);
+            vulkan.device.unmap_memory(vulkan.staging_memory);
+        }
+
+        let mip_levels = 1;
+
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(mip_levels)
+            .array_layers(1)
+            .format(format)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let image = unsafe { vulkan.device.create_image(&image_info, None).ok()? };
+
+        let mem_reqs = unsafe { vulkan.device.get_image_memory_requirements(image) };
+        let memory_type_index = vulkan.find_memory_type(
+            mem_reqs.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(mem_reqs.size)
+            .memory_type_index(memory_type_index);
+
+        let memory = unsafe { vulkan.device.allocate_memory(&alloc_info, None).ok()? };
+        unsafe { vulkan.device.bind_image_memory(image, memory, 0).ok()? };
+
+        let cmd = vulkan.begin_single_time_commands()?;
+
+        Self::transition_image_layout(
+            vulkan,
+            cmd,
+            image,
+            format,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+
+        let region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .image_extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            });
+
+        unsafe {
+            vulkan.device.cmd_copy_buffer_to_image(
+                cmd,
+                vulkan.staging_buffer,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                std::slice::from_ref(&region),
+            );
+        }
+
+        Self::transition_image_layout(
+            vulkan,
+            cmd,
+            image,
+            format,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        vulkan.end_single_time_commands(cmd);
+
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(mip_levels)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            );
+
+        let view = unsafe { vulkan.device.create_image_view(&view_info, None).ok()? };
+
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::REPEAT)
+            .address_mode_v(vk::SamplerAddressMode::REPEAT)
+            .address_mode_w(vk::SamplerAddressMode::REPEAT)
+            .anisotropy_enable(true)
+            .max_anisotropy(16.0)
+            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+            .unnormalized_coordinates(false)
+            .compare_enable(false)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .min_lod(0.0)
+            .max_lod(mip_levels as f32)
+            .mip_lod_bias(0.0);
+
+        let sampler = unsafe { vulkan.device.create_sampler(&sampler_info, None).ok()? };
+
+        Some(Self {
+            image,
+            memory,
+            view,
+            sampler,
+        })
+    }
+
     fn transition_image_layout(
         vulkan: &VulkanDevice,
         cmd: vk::CommandBuffer,

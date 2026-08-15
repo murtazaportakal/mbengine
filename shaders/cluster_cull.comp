@@ -1,0 +1,76 @@
+#version 450
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct PointLight {
+    vec4 position; // w = radius
+    vec4 color;
+};
+
+struct ClusterAABB {
+    vec4 minPoint;
+    vec4 maxPoint;
+};
+
+layout(set = 0, binding = 0) readonly buffer ClusterBuffer {
+    ClusterAABB clusters[];
+};
+layout(set = 0, binding = 1) readonly buffer LightBuffer {
+    PointLight pointLights[];
+};
+layout(set = 0, binding = 2) writeonly buffer LightIndexBuffer {
+    uint lightIndices[];
+};
+layout(set = 0, binding = 3) writeonly buffer LightGridBuffer {
+    uvec2 lightGrid[]; // offset, count
+};
+layout(set = 0, binding = 4) buffer GlobalIndexCount {
+    uint globalIndexCount;
+};
+
+layout(push_constant) uniform PushConstants {
+    mat4 view;
+    uint numLights;
+    uvec3 gridDimensions;
+} pc;
+
+bool testSphereAABB(vec3 center, float radius, vec3 aabbMin, vec3 aabbMax) {
+    vec3 closestPoint = max(aabbMin, min(center, aabbMax));
+    vec3 diff = closestPoint - center;
+    return dot(diff, diff) <= (radius * radius);
+}
+
+void main() {
+    uint tileIndex = gl_GlobalInvocationID.x;
+    uint totalClusters = pc.gridDimensions.x * pc.gridDimensions.y * pc.gridDimensions.z;
+    if (tileIndex >= totalClusters) {
+        return;
+    }
+                     
+    ClusterAABB aabb = clusters[tileIndex];
+    
+    uint visibleLightCount = 0;
+    uint visibleLightIndices[256];
+    
+    for (uint i = 0; i < pc.numLights; i++) {
+        PointLight light = pointLights[i];
+        
+        vec3 viewPos = (pc.view * vec4(light.position.xyz, 1.0)).xyz;
+        float radius = light.position.w; 
+        if (radius <= 0.0) { radius = 10.0; } // Fallback
+        
+        if (testSphereAABB(viewPos, radius, aabb.minPoint.xyz, aabb.maxPoint.xyz)) {
+            if (visibleLightCount < 256) {
+                visibleLightIndices[visibleLightCount] = i;
+                visibleLightCount++;
+            }
+        }
+    }
+    
+    uint offset = atomicAdd(globalIndexCount, visibleLightCount);
+    
+    for (uint i = 0; i < visibleLightCount; i++) {
+        lightIndices[offset + i] = visibleLightIndices[i];
+    }
+    
+    lightGrid[tileIndex] = uvec2(offset, visibleLightCount);
+}

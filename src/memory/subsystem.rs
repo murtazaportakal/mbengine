@@ -97,7 +97,7 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             frame_arena_size: 64 * MB,
-            persistent_arena_size: 128 * MB,
+            persistent_arena_size: 256 * MB,
             ecs_pool_size: 64 * MB,
             ecs_pool_block_size: 64,
             ecs_pool_block_align: 16,
@@ -425,7 +425,7 @@ mod tests {
 
         // Verify allocators are accessible.
         assert!(mem.frame_arena().capacity() == 64 * MB);
-        assert!(mem.persistent_arena().capacity() == 128 * MB);
+        assert!(mem.persistent_arena().capacity() == 256 * MB);
         assert!(mem.temp_stack().capacity() == 32 * MB);
 
         mem.shutdown();

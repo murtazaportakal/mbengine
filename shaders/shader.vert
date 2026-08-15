@@ -1,4 +1,5 @@
 #version 450
+#extension GL_ARB_shader_draw_parameters : require
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -41,6 +42,10 @@ layout(set = 0, binding = 3) readonly buffer InstanceBuffer {
     InstanceData instances[];
 };
 
+layout(set = 0, binding = 7) readonly buffer AnimBoneMatrices {
+    mat4 boneMatrices[];
+};
+
 layout(location = 4) out vec4 fragColor;
 layout(location = 5) out float fragMetallic;
 layout(location = 6) out float fragRoughness;
@@ -48,25 +53,50 @@ layout(location = 7) flat out uint fragTextureIndex;
 layout(location = 8) flat out uint fragNormalTextureIndex;
 layout(location = 9) flat out uint fragMRTextureIndex;
 layout(location = 10) flat out uint fragEmissiveTextureIndex;
+layout(location = 11) flat out vec3 fragMeshletColor;
 
 void main() {
     InstanceData inst = instances[gl_InstanceIndex];
-    vec4 worldPos = inst.world * vec4(inPosition, 1.0);
+    uint animInstanceId = inst.geometry2.z;
+    
+    vec3 localPos = inPosition;
+    vec3 localNormal = inNormal;
+    
+    if (animInstanceId != 0xFFFFFFFF) {
+        float totalWeight = inJointWeights.x + inJointWeights.y + inJointWeights.z + inJointWeights.w;
+        if (totalWeight > 0.0001) {
+            uint offset = animInstanceId * 128;
+            mat4 skinMat = 
+                inJointWeights.x * boneMatrices[offset + inJointIds.x] +
+                inJointWeights.y * boneMatrices[offset + inJointIds.y] +
+                inJointWeights.z * boneMatrices[offset + inJointIds.z] +
+                inJointWeights.w * boneMatrices[offset + inJointIds.w];
+                
+            localPos = (skinMat * vec4(inPosition, 1.0)).xyz;
+            localNormal = mat3(skinMat) * inNormal;
+        }
+    }
+    
+    vec4 worldPos = inst.world * vec4(localPos, 1.0);
     fragPos = worldPos.xyz;
     
-    // Transform normal to world space. 
-    // In a real engine, we'd use inverse(transpose(mat3(inst.world))) if scale is non-uniform.
-    fragNormal = mat3(inst.world) * inNormal;
+    fragNormal = mat3(inst.world) * localNormal;
     fragUV = inUV;
     fragPosLightSpace = ubo.lightSpaceMatrix * worldPos;
 
     fragColor = vec4(inst.color.rgb, 1.0);
     fragMetallic = inst.pbr.x;
     fragRoughness = inst.pbr.y;
-    fragTextureIndex = floatBitsToUint(inst.color.a);
-    fragNormalTextureIndex = floatBitsToUint(inst.pbr.z);
-    fragMRTextureIndex = floatBitsToUint(inst.pbr.w);
+    fragTextureIndex = inst.color.w != 0.0 ? floatBitsToUint(inst.color.w) : 0xFFFFFFFF;
+    fragNormalTextureIndex = inst.pbr.z != 0.0 ? floatBitsToUint(inst.pbr.z) : 0xFFFFFFFF;
+    fragMRTextureIndex = inst.pbr.w != 0.0 ? floatBitsToUint(inst.pbr.w) : 0xFFFFFFFF;
     fragEmissiveTextureIndex = inst.geometry.w;
+
+    uint id = gl_DrawIDARB;
+    float r = float((id * 137 + 59) % 256) / 255.0;
+    float g = float((id * 73 + 17) % 256) / 255.0;
+    float b = float((id * 251 + 101) % 256) / 255.0;
+    fragMeshletColor = vec3(r, g, b);
 
     gl_Position = ubo.viewProj * worldPos;
 }

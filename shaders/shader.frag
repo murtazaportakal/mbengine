@@ -13,14 +13,32 @@ struct PointLight {
 
 layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 viewProj;
+    mat4 view;
+    mat4 proj;
+    mat4 inverseProj;
     mat4 lightSpaceMatrix;
     vec4 cameraPos;
     vec4 lightDir;
     vec4 lightColor;
-    PointLight pointLights[4];
+    vec2 screenSize;
+    float zNear;
+    float zFar;
     uint numPointLights;
-    uvec3 _padding;
+    uint debugMeshlets;
+    uvec2 _padding;
 } ubo;
+
+layout(std430, set = 0, binding = 4) readonly buffer PointLightBuffer {
+    PointLight lights[];
+} pointLights;
+
+layout(std430, set = 0, binding = 5) readonly buffer LightGridBuffer {
+    uvec2 lightGrid[]; // x = offset, y = count
+};
+
+layout(std430, set = 0, binding = 6) readonly buffer LightIndexBuffer {
+    uint lightIndices[];
+};
 
 layout(location = 4) in vec4 fragColor;
 layout(location = 5) in float fragMetallic;
@@ -29,6 +47,7 @@ layout(location = 7) flat in uint fragTextureIndex;
 layout(location = 8) flat in uint fragNormalTextureIndex;
 layout(location = 9) flat in uint fragMRTextureIndex;
 layout(location = 10) flat in uint fragEmissiveTextureIndex;
+layout(location = 11) flat in vec3 fragMeshletColor;
 
 #extension GL_EXT_nonuniform_qualifier : enable
 layout(set = 1, binding = 0) uniform sampler2D textures[];
@@ -166,14 +185,33 @@ void main() {
         Lo += (1.0 - shadow) * (kD * albedo / PI + specular) * radiance * NdotL;
     }
     
-    // Point Lights
-    for (uint i = 0; i < ubo.numPointLights; i++) {
-        vec3 L = normalize(ubo.pointLights[i].position.xyz - fragPos);
+    // Point Lights via Forward+ Clustering
+    vec4 viewPos = ubo.view * vec4(fragPos, 1.0);
+    float viewZ = -viewPos.z;
+    
+    uint zTile = uint(max(log2(viewZ / ubo.zNear) * 24.0 / log2(ubo.zFar / ubo.zNear), 0.0));
+    zTile = min(zTile, 23); // clamp to max 24 slices
+    
+    uvec2 tile = uvec2(gl_FragCoord.xy / vec2(ubo.screenSize.x / 16.0, ubo.screenSize.y / 9.0));
+    tile.x = min(tile.x, 15);
+    tile.y = min(tile.y, 8);
+    
+    uint clusterIndex = tile.x + (tile.y * 16) + (zTile * 16 * 9);
+    
+    uvec2 gridData = lightGrid[clusterIndex];
+    uint offset = gridData.x;
+    uint count = gridData.y;
+    
+    for (uint i = 0; i < count; i++) {
+        uint lightIdx = lightIndices[offset + i];
+        PointLight light = pointLights.lights[lightIdx];
+        
+        vec3 L = normalize(light.position.xyz - fragPos);
         vec3 H = normalize(V + L);
         
-        float distance = length(ubo.pointLights[i].position.xyz - fragPos);
+        float distance = length(light.position.xyz - fragPos);
         float attenuation = 1.0 / (distance * distance);
-        vec3 radiance = ubo.pointLights[i].color.rgb * ubo.pointLights[i].color.w * attenuation;
+        vec3 radiance = light.color.rgb * light.color.w * attenuation;
         
         float NDF = DistributionGGX(N, H, roughness);   
         float G   = GeometrySmith(N, V, L, roughness);    
@@ -220,6 +258,10 @@ void main() {
     }
     
     vec3 color = ambient + Lo + emissive;
+    
+    if (ubo.debugMeshlets > 0) {
+        color = fragMeshletColor;
+    }
     
     outColor = vec4(color, texColor.a);
 }
