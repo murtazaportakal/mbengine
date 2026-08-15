@@ -309,7 +309,7 @@ fn main() {
 
     // Pre-cook all textures in materials
     for mat in &mut materials {
-        let mut process_tex = |tex_opt: &mut Option<String>, is_srgb: bool| {
+        let process_tex = |tex_opt: &mut Option<String>, is_srgb: bool| {
             if let Some(tex) = tex_opt {
                 let in_tex_path = input_parent.join(&tex);
                 
@@ -752,7 +752,7 @@ fn write_anim(skel: &RawSkeleton, path: &Path) -> std::io::Result<()> {
     w.write_all(bytemuck::bytes_of(&header))?;
 
     // Helper to write string with 4-byte padding
-    let mut write_str = |s: &str, w: &mut BufWriter<File>| -> std::io::Result<()> {
+    let write_str = |s: &str, w: &mut BufWriter<File>| -> std::io::Result<()> {
         let bytes = s.as_bytes();
         w.write_all(bytes)?;
         let pad = (4 - (bytes.len() % 4)) % 4;

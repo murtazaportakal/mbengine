@@ -4,9 +4,7 @@
 //! applies weighted bone transforms, and writes deformed vertices to an output buffer.
 //! The output buffer is then bound as the vertex buffer during rendering.
 
-use crate::math::mat4::Mat4;
 use crate::renderer::vulkan::buffer::Buffer;
-use crate::renderer::vulkan::skeleton::MAX_BONES;
 use crate::renderer::vulkan::VulkanDevice;
 use ash::vk;
 
