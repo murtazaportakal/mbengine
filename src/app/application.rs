@@ -154,38 +154,40 @@ impl Application {
             );
         }
 
-        // Spawn a single default cube entity at the origin.
-        let mesh_index = cube_model_indices[0];
-        let cube_entity = world.create_entity();
-        unsafe {
-            world.add_component(
-                cube_entity,
-                TransformComponent {
-                    position: Vec3::new(0.0, 0.0, 0.0),
-                    rotation: Vec3::new(0.0, 0.0, 0.0),
-                    scale: Vec3::new(1.0, 1.0, 1.0),
-                    matrix: crate::math::mat4::Mat4::identity(),
-                },
-            );
-            world.add_component(
-                cube_entity,
-                RenderComponent {
-                    visible: true,
-                    mesh_index,
-                    metallic: 0.0,
-                    roughness: 0.8,
-                    r: 0.8,
-                    g: 0.8,
-                    b: 0.8,
-                },
-            );
-            world.add_component(
-                cube_entity,
-                HierarchyComponent {
-                    parent: None,
-                    local_matrix: crate::math::mat4::Mat4::identity(),
-                },
-            );
+        // Spawn a single default cube entity at the origin, if loaded.
+        if !cube_model_indices.is_empty() {
+            let mesh_index = cube_model_indices[0];
+            let cube_entity = world.create_entity();
+            unsafe {
+                world.add_component(
+                    cube_entity,
+                    TransformComponent {
+                        position: Vec3::new(0.0, 0.0, 0.0),
+                        rotation: Vec3::new(0.0, 0.0, 0.0),
+                        scale: Vec3::new(1.0, 1.0, 1.0),
+                        matrix: crate::math::mat4::Mat4::identity(),
+                    },
+                );
+                world.add_component(
+                    cube_entity,
+                    RenderComponent {
+                        visible: true,
+                        mesh_index,
+                        metallic: 0.0,
+                        roughness: 0.8,
+                        r: 0.8,
+                        g: 0.8,
+                        b: 0.8,
+                    },
+                );
+                world.add_component(
+                    cube_entity,
+                    HierarchyComponent {
+                        parent: None,
+                        local_matrix: crate::math::mat4::Mat4::identity(),
+                    },
+                );
+            }
         }
 
         let ui_ctx = crate::ui::UiContext::new();
