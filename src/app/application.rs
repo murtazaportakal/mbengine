@@ -414,12 +414,36 @@ impl Application {
                         self.editor.registry.add_component(&name, e, &mut self.world, &mut self.physics);
                     }
                     crate::app::editor::EditorAction::SpawnModel(path) => {
-                        let path_obj = std::path::Path::new(&path);
+                        let is_group = path.starts_with("GROUP:");
+                        let actual_path = if is_group { &path[6..] } else { &path };
+                        
+                        let path_obj = std::path::Path::new(actual_path);
                         let mut mesh_indices = None;
                         let name = path_obj.file_stem().unwrap().to_string_lossy().to_string();
                         let path_str = path_obj.to_str().unwrap();
 
-                        if path_obj.extension().map_or(false, |ext| ext == "gltf" || ext == "glb") {
+                        if is_group {
+                            crate::log_info!("[SpawnModel] Loading Group: {}", actual_path);
+                            // Find all files matching `name_*.mesh` or `name.mesh`
+                            let mut group_indices = Vec::new();
+                            if let Some(parent) = path_obj.parent() {
+                                if let Ok(entries) = std::fs::read_dir(parent) {
+                                    let prefix = format!("{}_", name);
+                                    let exact = format!("{}.mesh", name);
+                                    for entry in entries.flatten() {
+                                        let file_name = entry.file_name().to_string_lossy().to_string();
+                                        if (file_name.starts_with(&prefix) || file_name == exact) && file_name.ends_with(".mesh") {
+                                            if let Some(idx) = self.asset_manager.load_cooked_mesh(&self.render.vulkan, &mut self.render.geometry_pool, entry.path().to_str().unwrap()) {
+                                                group_indices.push(idx);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !group_indices.is_empty() {
+                                mesh_indices = Some(group_indices);
+                            }
+                        } else if path_obj.extension().map_or(false, |ext| ext == "gltf" || ext == "glb") {
                             crate::log_info!("[SpawnModel] Loading GLTF: {}", path_obj.display());
                             mesh_indices = Some(self.asset_manager.load_gltf(&self.render.vulkan, &mut self.render.geometry_pool, &name, path_str).unwrap_or(&[]).to_vec());
                         } else if path_obj.extension().map_or(false, |ext| ext == "obj") {

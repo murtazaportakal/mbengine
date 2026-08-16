@@ -718,42 +718,71 @@ impl Editor {
             let item_w = 220.0;
             let item_h = 40.0;
 
+            let mut file_groups: std::collections::HashMap<String, Vec<std::path::PathBuf>> = std::collections::HashMap::new();
+
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                    if ext == "mesh" || ext == "mat" || ext == "prefab" {
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    // Hide .mat files from the browser to reduce clutter
+                    if ext == "mesh" || ext == "prefab" || ext == "gltf" || ext == "glb" || ext == "obj" {
+                        let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                        let mut group_name = name.clone();
                         
-                        let item_rect = UiRect {
-                            x: browser_rect.x + x_offset,
-                            y: browser_rect.y + y_offset - self.file_browser_scroll,
-                            w: item_w,
-                            h: item_h,
-                        };
-
-                        if item_rect.contains(ui_ctx.mouse_pos) && ui_ctx.mouse_pressed {
-                            self.dragging_file = Some(path.to_string_lossy().replace('\\', "/"));
+                        // Group sub-meshes together (e.g. adamHead_0, adamHead_1 -> adamHead)
+                        if let Some(last_underscore) = name.rfind('_') {
+                            if name[last_underscore+1..].chars().all(|c| c.is_ascii_digit()) {
+                                group_name = name[..last_underscore].to_string();
+                            }
                         }
-
-                        let style = if self.dragging_file.as_deref() == Some(&path.to_string_lossy().replace('\\', "/")) {
-                            &SLATE_BASE
-                        } else {
-                            &SLATE_SECONDARY
-                        };
-
-                        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad { rect: item_rect, color: style.bg_color, rounding: 2.0 });
-                        
-                        let mut fs = crate::containers::FixedString::<128>::new();
-                        use core::fmt::Write;
-                        let _ = write!(fs, "{}", name);
-                        ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Text { pos: crate::math::vec::Vec2::new(item_rect.x + 5.0, item_rect.y + 20.0), text: fs, color: style.text_color, font_size: 16.0 });
-
-                        x_offset += item_w + 10.0;
-                        if x_offset + item_w > browser_rect.w {
-                            x_offset = 10.0;
-                            y_offset += item_h + 10.0;
-                        }
+                        file_groups.entry(group_name).or_default().push(path);
                     }
+                }
+            }
+
+            let mut sorted_groups: Vec<_> = file_groups.into_iter().collect();
+            sorted_groups.sort_by(|a, b| a.0.cmp(&b.0));
+
+            for (group_name, paths) in sorted_groups {
+                let display_name = if paths.len() > 1 {
+                    format!("{} ({} parts)", group_name, paths.len())
+                } else {
+                    paths[0].file_name().unwrap_or_default().to_string_lossy().to_string()
+                };
+
+                let item_rect = UiRect {
+                    x: browser_rect.x + x_offset,
+                    y: browser_rect.y + y_offset - self.file_browser_scroll,
+                    w: item_w,
+                    h: item_h,
+                };
+
+                let drag_path = if paths.len() > 1 {
+                    format!("GROUP:assets/cooked/{}", group_name)
+                } else {
+                    paths[0].to_string_lossy().replace('\\', "/")
+                };
+
+                if item_rect.contains(ui_ctx.mouse_pos) && ui_ctx.mouse_pressed {
+                    self.dragging_file = Some(drag_path.clone());
+                }
+
+                let style = if self.dragging_file.as_deref() == Some(drag_path.as_str()) {
+                    &SLATE_BASE
+                } else {
+                    &SLATE_SECONDARY
+                };
+
+                ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad { rect: item_rect, color: style.bg_color, rounding: 2.0 });
+                
+                let mut fs = crate::containers::FixedString::<128>::new();
+                use core::fmt::Write;
+                let _ = write!(fs, "{}", display_name);
+                ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Text { pos: crate::math::vec::Vec2::new(item_rect.x + 5.0, item_rect.y + 20.0), text: fs, color: style.text_color, font_size: 16.0 });
+
+                x_offset += item_w + 10.0;
+                if x_offset + item_w > browser_rect.w {
+                    x_offset = 10.0;
+                    y_offset += item_h + 10.0;
                 }
             }
         }
