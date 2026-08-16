@@ -715,7 +715,7 @@ impl Editor {
         if let Ok(entries) = std::fs::read_dir("assets/cooked") {
             let mut x_offset = 10.0;
             let mut y_offset = 30.0;
-            let item_w = 120.0;
+            let item_w = 220.0;
             let item_h = 40.0;
 
             for entry in entries.flatten() {

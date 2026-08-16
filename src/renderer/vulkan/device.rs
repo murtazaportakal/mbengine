@@ -20,6 +20,7 @@ pub struct VulkanDevice {
     /// once, reused via map/unmap, destroyed at shutdown.
     pub staging_buffer: vk::Buffer,
     pub staging_memory: vk::DeviceMemory,
+    pub staging_size: u64,
 
     // Sync primitives for a single frame
     pub image_available_semaphores: [vk::Semaphore; 2],
@@ -276,6 +277,7 @@ impl VulkanDevice {
             frame_command_buffers,
             staging_buffer,
             staging_memory,
+            staging_size,
             image_available_semaphores,
             render_finished_semaphores,
             in_flight_fences,

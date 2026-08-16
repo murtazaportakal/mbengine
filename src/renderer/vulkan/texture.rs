@@ -123,6 +123,15 @@ impl Texture {
     ) -> Option<Self> {
         let buffer_size = pixels.len() as u64;
 
+        // Guard: reject uploads that exceed the persistent staging buffer.
+        if buffer_size > vulkan.staging_size {
+            crate::log_info!(
+                "[Texture] Upload of {}x{} ({} bytes) exceeds staging buffer ({} bytes) — skipped.",
+                width, height, buffer_size, vulkan.staging_size
+            );
+            return None;
+        }
+
         // Upload pixel data into the shared persistent staging buffer
         // (allocated once in VulkanDevice, never destroyed during runtime).
         // This eliminates vkDestroyBuffer validation errors that would
@@ -136,7 +145,7 @@ impl Texture {
                     buffer_size,
                     vk::MemoryMapFlags::empty(),
                 )
-                .unwrap()
+                .ok()?
         };
         unsafe {
             std::ptr::copy_nonoverlapping(pixels.as_ptr(), data_ptr as *mut u8, buffer_size as usize);
@@ -462,6 +471,15 @@ impl Texture {
 
         let buffer_size = data.len() as u64;
 
+        // Guard: reject uploads that exceed the persistent staging buffer.
+        if buffer_size > vulkan.staging_size {
+            crate::log_info!(
+                "[Texture] BC7 upload {}x{} ({} bytes) exceeds staging buffer ({} bytes) — skipped.",
+                width, height, buffer_size, vulkan.staging_size
+            );
+            return None;
+        }
+
         let data_ptr = unsafe {
             vulkan
                 .device
@@ -471,7 +489,7 @@ impl Texture {
                     buffer_size,
                     vk::MemoryMapFlags::empty(),
                 )
-                .unwrap()
+                .ok()?
         };
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), data_ptr as *mut u8, buffer_size as usize);

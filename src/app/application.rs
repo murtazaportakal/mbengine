@@ -155,6 +155,7 @@ impl Application {
         }
 
         // Spawn a single default cube entity at the origin, if loaded.
+        // Spawn a single default cube entity at the origin, if loaded.
         if !cube_model_indices.is_empty() {
             let mesh_index = cube_model_indices[0];
             let cube_entity = world.create_entity();
