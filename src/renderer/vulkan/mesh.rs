@@ -3,17 +3,9 @@
 use crate::renderer::vulkan::pipeline::Vertex;
 use crate::renderer::vulkan::VulkanDevice;
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct MeshletData {
-    pub center: [f32; 3],
-    pub radius: f32,
-    pub cone_axis: [f32; 3],
-    pub cone_cutoff: f32,
-    pub index_offset: u32,
-    pub triangle_count: u32,
-    pub padding: [u32; 2],
-}
+// MeshletData lives in gpu_format.rs — the single source of truth.
+// Re-exported here so existing `use mesh::MeshletData` imports keep working.
+pub use crate::renderer::vulkan::gpu_format::MeshletData;
 
 pub struct Mesh {
     pub vertex_offset: u32,
@@ -185,8 +177,11 @@ impl Mesh {
 
                 vertices.push(Vertex {
                     pos,
+                    _pad0: 0,
                     normal,
+                    _pad1: 0,
                     uv,
+                    _pad2: [0; 2],
                     joint_ids: [0; 4],
                     joint_weights: [0.0; 4],
                 });
@@ -251,7 +246,7 @@ impl Mesh {
                     cone_cutoff: bounds.cone_cutoff,
                     index_offset,
                     triangle_count: raw_m.triangle_count,
-                    padding: [0; 2],
+                    _pad: [0; 2],
                 });
             }
 
@@ -336,7 +331,7 @@ impl Mesh {
             cone_cutoff: -1.0,
             index_offset: 0,
             triangle_count: indices.len() as u32 / 3,
-            padding: [0; 2],
+            _pad: [0; 2],
         }];
 
         let offsets = geometry_pool.append_mesh(vulkan, vertices, indices, &meshlet_data)?;
@@ -395,8 +390,11 @@ impl Mesh {
 
                 vertices.push(Vertex {
                     pos,
+                    _pad0: 0,
                     normal,
+                    _pad1: 0,
                     uv,
+                    _pad2: [0; 2],
                     joint_ids: [0; 4],
                     joint_weights: [0.0; 4],
                 });

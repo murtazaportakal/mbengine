@@ -190,8 +190,11 @@ fn extract_meshes(
             let vertices: Vec<Vertex> = (0..positions.len())
                 .map(|i| Vertex {
                     pos: positions[i],
+                    _pad0: 0,
                     normal: normals[i],
+                    _pad1: 0,
                     uv: uvs[i],
+                    _pad2: [0; 2],
                     joint_ids: joints[i],
                     joint_weights: weights[i],
                 })

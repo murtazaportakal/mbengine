@@ -677,7 +677,11 @@ impl RenderBackend {
         }
 
         let cloth_pipeline = ComputeClothPipeline::new(&vulkan, &asset_manager.vfs);
-        let shadow_pass = ShadowPass::new(&vulkan, &asset_manager.vfs);
+        let shadow_pass = ShadowPass::new(
+            &vulkan,
+            &asset_manager.vfs,
+            pipeline.as_ref().map(|p| p.descriptor_set_layout).unwrap_or(vk::DescriptorSetLayout::null())
+        );
 
         if let Some(shadow) = &shadow_pass {
             for set in descriptor_set.iter() {
@@ -1091,7 +1095,8 @@ impl RenderBackend {
             z_far: 10000.0,
             num_point_lights,
             debug_meshlets: if self.debug_meshlets { 1 } else { 0 },
-            _padding: [0; 2],
+            _pad0: [0; 2],
+            vertex_buffer_addr: self.geometry_pool.vertex_buffer.device_address(&self.vulkan),
         };
         if !self.ubo_mapped.is_null() {
             unsafe {
@@ -1355,7 +1360,7 @@ impl RenderBackend {
         ];
 
         if let Some(shadow) = &self.shadow_pass {
-            shadow.record_shadow_pass(cmd, world, world_matrices, asset_manager, &self.vulkan, &self.geometry_pool);
+            shadow.record_shadow_pass(cmd, world, world_matrices, asset_manager, &self.vulkan, &self.geometry_pool, self.descriptor_sets[self.current_frame]);
         }
 
         let mut graph = RenderGraph::new();
@@ -1440,7 +1445,7 @@ impl RenderBackend {
                         std::slice::from_raw_parts(&pc as *const _ as *const u8, 32),
                     );
                     if total_meshlets > 0 {
-                        // self.vulkan.device.cmd_dispatch(cb, (total_meshlets + 63) / 64, 1, 1);
+                        self.vulkan.device.cmd_dispatch(cb, (total_meshlets + 63) / 64, 1, 1);
                     }
                     let draw_bar = vk::MemoryBarrier::default()
                         .src_access_mask(vk::AccessFlags::SHADER_WRITE)

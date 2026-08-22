@@ -24,6 +24,14 @@ use std::path::{Path, PathBuf};
 
 use bytemuck::{Pod, Zeroable};
 
+// ── Shared binary formats ────────────────────────────────────────────────────
+//
+// Imported from the engine library — single source of truth.
+// No more "must be byte-identical to..." copy-paste contracts.
+use engine::renderer::vulkan::gpu_format::{
+    MeshHeader, MeshletData, Vertex, MESH_FLAG_SKINNED, MESH_MAGIC, MESH_VERSION,
+};
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 /// Maximum meshlet vertex count (matches engine/mesh.rs).
@@ -32,72 +40,6 @@ const MAX_MESHLET_VERTICES: usize = 64;
 const MAX_MESHLET_TRIANGLES: usize = 124;
 /// meshopt cone-weight for back-face culling aggressiveness.
 const MESHLET_CONE_WEIGHT: f32 = 0.5;
-
-// ── Vertex layout (must be byte-identical to pipeline.rs::Vertex) ────────────
-
-/// `#[repr(C)]` vertex layout identical to the engine's `pipeline::Vertex`.
-///
-/// Offsets:
-///   - pos:          0  (12 bytes)
-///   - normal:      12  (12 bytes)
-///   - uv:          24  (8  bytes)
-///   - joint_ids:   32  (16 bytes)
-///   - joint_weights:48 (16 bytes)
-///   Total: 64 bytes
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct Vertex {
-    pos: [f32; 3],
-    normal: [f32; 3],
-    uv: [f32; 2],
-    joint_ids: [u32; 4],
-    joint_weights: [f32; 4],
-}
-
-// ── MeshletData (must be byte-identical to mesh.rs::MeshletData) ─────────────
-
-/// `#[repr(C)]` meshlet descriptor identical to the engine's `mesh::MeshletData`.
-///
-/// 32 bytes total, 16-byte aligned (padding makes it a power-of-two size).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct MeshletData {
-    center: [f32; 3],
-    radius: f32,
-    cone_axis: [f32; 3],
-    cone_cutoff: f32,
-    index_offset: u32,
-    triangle_count: u32,
-    _pad: [u32; 2],
-}
-
-// ── .mesh binary format ───────────────────────────────────────────────────────
-
-/// Magic bytes written at the start of every `.mesh` file.
-const MESH_MAGIC: &[u8; 4] = b"MESH";
-/// Increment when `MeshHeader` or any layout changes.
-const MESH_VERSION: u32 = 1;
-
-/// Flag bit: mesh contains skinning data (joint_ids / joint_weights).
-const MESH_FLAG_SKINNED: u32 = 1 << 0;
-
-/// Header preceding the vertex, index, and meshlet data arrays.
-///
-/// The engine reads this struct first, then seeks to `sizeof(MeshHeader)` to
-/// begin streaming vertex data.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct MeshHeader {
-    magic: [u8; 4],      // b"MESH"
-    version: u32,        // MESH_VERSION
-    flags: u32,          // MESH_FLAG_* bitmask
-    vertex_count: u32,
-    index_count: u32,
-    meshlet_count: u32,
-    aabb_min: [f32; 3],
-    aabb_max: [f32; 3],
-    _padding: u32,       // Pad to 48 bytes for 16-byte alignment
-}
 
 // ── .mat binary format ────────────────────────────────────────────────────────
 
@@ -598,8 +540,11 @@ fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option
 
                 vertices.push(Vertex {
                     pos: [pos_v.x, pos_v.y, pos_v.z],
+                    _pad0: 0,
                     normal: [norm_vec.x, norm_vec.y, norm_vec.z],
+                    _pad1: 0,
                     uv,
+                    _pad2: [0; 2],
                     joint_ids: j,
                     joint_weights: w,
                 });
@@ -962,7 +907,7 @@ fn write_mesh(prim: &RawPrimitive, path: &Path) -> std::io::Result<()> {
     let flags = if prim.is_skinned { MESH_FLAG_SKINNED } else { 0 };
 
     let header = MeshHeader {
-        magic: *MESH_MAGIC,
+        magic: MESH_MAGIC,
         version: MESH_VERSION,
         flags,
         vertex_count: prim.vertices.len() as u32,
@@ -970,7 +915,7 @@ fn write_mesh(prim: &RawPrimitive, path: &Path) -> std::io::Result<()> {
         meshlet_count: prim.meshlets.len() as u32,
         aabb_min: prim.aabb_min,
         aabb_max: prim.aabb_max,
-        _padding: 0,
+        _pad: 0,
     };
 
     // Write header

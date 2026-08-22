@@ -156,7 +156,8 @@ impl VulkanDevice {
             .descriptor_binding_partially_bound(true)
             .descriptor_binding_variable_descriptor_count(true)
             .runtime_descriptor_array(true)
-            .descriptor_binding_sampled_image_update_after_bind(true);
+            .descriptor_binding_sampled_image_update_after_bind(true)
+            .buffer_device_address(true);
 
         let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::default()
             .shader_draw_parameters(true);

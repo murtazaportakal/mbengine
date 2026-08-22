@@ -11,6 +11,7 @@ pub mod compute_skinning;
 pub mod device;
 pub mod geometry_pool;
 pub mod gltf_loader;
+pub mod gpu_format;
 pub mod hzb;
 pub mod mesh;
 pub mod offscreen;

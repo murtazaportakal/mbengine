@@ -52,7 +52,7 @@ impl ShadowPass {
     /// Create the shadow map image, render pass, framebuffer, and pipeline.
     ///
     /// Returns `None` if `shadow_vert.spv` is not present (graceful degradation).
-    pub fn new(vulkan: &VulkanDevice, vfs: &crate::vfs::Vfs) -> Option<Self> {
+    pub fn new(vulkan: &VulkanDevice, vfs: &crate::vfs::Vfs, global_set_layout: vk::DescriptorSetLayout) -> Option<Self> {
         // ── Shadow image (D32_SFLOAT) ─────────────────────────────────────────
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
@@ -200,27 +200,14 @@ impl ShadowPass {
         let pipeline_layout = unsafe {
             vulkan.device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(std::slice::from_ref(&global_set_layout))
                     .push_constant_ranges(std::slice::from_ref(&pc_range)),
                 None,
             ).ok()?
         };
 
-        // Vertex input: position only (vec3, binding 0, location 0).
-        // Matches the GeometryPool vertex buffer layout (stride = size of Vertex struct).
-        let binding_desc = vk::VertexInputBindingDescription::default()
-            .binding(0)
-            .stride(std::mem::size_of::<crate::renderer::vulkan::pipeline::Vertex>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX);
-
-        let attr_desc = vk::VertexInputAttributeDescription::default()
-            .location(0)
-            .binding(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0); // position is the first field in Vertex
-
-        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(std::slice::from_ref(&binding_desc))
-            .vertex_attribute_descriptions(std::slice::from_ref(&attr_desc));
+        // Vertex input: empty (using BDA)
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
@@ -337,6 +324,7 @@ impl ShadowPass {
         asset_manager: &crate::asset_manager::AssetManager,
         vulkan: &VulkanDevice,
         geometry_pool: &crate::renderer::vulkan::GeometryPool,
+        global_descriptor_set: vk::DescriptorSet,
     ) {
         use crate::ecs::{RenderComponent, TransformComponent};
 
@@ -390,7 +378,14 @@ impl ShadowPass {
         unsafe {
             vulkan.device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             vulkan.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
-            vulkan.device.cmd_bind_vertex_buffers(cmd, 0, &[geometry_pool.vertex_buffer.handle], &[0]);
+            vulkan.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline_layout,
+                0,
+                &[global_descriptor_set],
+                &[],
+            );
             vulkan.device.cmd_bind_index_buffer(cmd, geometry_pool.index_buffer.handle, 0, vk::IndexType::UINT32);
         }
 

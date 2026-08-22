@@ -1,15 +1,9 @@
 use crate::renderer::vulkan::VulkanDevice;
 use ash::vk;
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Vertex {
-    pub pos: [f32; 3],
-    pub normal: [f32; 3],
-    pub uv: [f32; 2],
-    pub joint_ids: [u32; 4],     // Bone indices (up to 4 influences)
-    pub joint_weights: [f32; 4], // Per-bone blend weights
-}
+// Vertex lives in gpu_format.rs — the single source of truth.
+// Re-exported here so existing `use pipeline::Vertex` imports keep working.
+pub use crate::renderer::vulkan::gpu_format::Vertex;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -17,6 +11,7 @@ pub struct PointLight {
     pub position: [f32; 4],
     pub color: [f32; 4],
 }
+
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -34,7 +29,8 @@ pub struct GlobalUbo {
     pub z_far: f32,
     pub num_point_lights: u32,
     pub debug_meshlets: u32,
-    pub _padding: [u32; 2],
+    pub _pad0: [u32; 2],
+    pub vertex_buffer_addr: u64,
 }
 
 #[repr(C)]
@@ -101,42 +97,8 @@ impl Pipeline {
 
         let shader_stages = [vert_stage, frag_stage];
 
-        let binding_description = vk::VertexInputBindingDescription::default()
-            .binding(0)
-            .stride(std::mem::size_of::<Vertex>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX);
-
-        let attribute_descriptions = [
-            vk::VertexInputAttributeDescription::default()
-                .binding(0)
-                .location(0)
-                .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(memoffset::offset_of!(Vertex, pos) as u32),
-            vk::VertexInputAttributeDescription::default()
-                .binding(0)
-                .location(1)
-                .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(memoffset::offset_of!(Vertex, normal) as u32),
-            vk::VertexInputAttributeDescription::default()
-                .binding(0)
-                .location(2)
-                .format(vk::Format::R32G32_SFLOAT)
-                .offset(memoffset::offset_of!(Vertex, uv) as u32),
-            vk::VertexInputAttributeDescription::default()
-                .binding(0)
-                .location(3)
-                .format(vk::Format::R32G32B32A32_UINT)
-                .offset(memoffset::offset_of!(Vertex, joint_ids) as u32),
-            vk::VertexInputAttributeDescription::default()
-                .binding(0)
-                .location(4)
-                .format(vk::Format::R32G32B32A32_SFLOAT)
-                .offset(memoffset::offset_of!(Vertex, joint_weights) as u32),
-        ];
-
-        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(std::slice::from_ref(&binding_description))
-            .vertex_attribute_descriptions(&attribute_descriptions);
+        // No vertex inputs — using Buffer Device Address instead.
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default();
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)

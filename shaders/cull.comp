@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -27,15 +28,20 @@ struct PointLight {
 
 layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 viewProj;
+    mat4 view;
+    mat4 proj;
+    mat4 inverseProj;
     mat4 lightSpaceMatrix;
     vec4 cameraPos;
     vec4 lightDir;
     vec4 lightColor;
-    PointLight pointLights[4];
+    vec2 screenSize;
+    float zNear;
+    float zFar;
     uint numPointLights;
-    uint pad0;
-    uint pad1;
-    uint pad2;
+    uint debugMeshlets;
+    uvec2 _pad0;
+    uint64_t vertexBufferAddr;
 } ubo;
 
 layout(set = 0, binding = 3) buffer InstanceBuffer {

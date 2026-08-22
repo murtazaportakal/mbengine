@@ -1,11 +1,22 @@
 #version 450
 #extension GL_ARB_shader_draw_parameters : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUV;
-layout(location = 3) in uvec4 inJointIds;     // Bone indices (unused in vertex shader — skinning done in compute)
-layout(location = 4) in vec4 inJointWeights;  // Bone weights (unused in vertex shader — skinning done in compute)
+struct Vertex {
+    vec3 pos;
+    uint _pad0;
+    vec3 normal;
+    uint _pad1;
+    vec2 uv;
+    uvec2 _pad2;
+    uvec4 jointIds;
+    vec4 jointWeights;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VertexBuffer {
+    Vertex vertices[];
+};
 
 layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec2 fragUV;
@@ -19,13 +30,20 @@ struct PointLight {
 
 layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 viewProj;
+    mat4 view;
+    mat4 proj;
+    mat4 inverseProj;
     mat4 lightSpaceMatrix;
     vec4 cameraPos;
     vec4 lightDir;
     vec4 lightColor;
-    PointLight pointLights[4];
+    vec2 screenSize;
+    float zNear;
+    float zFar;
     uint numPointLights;
-    uvec3 _padding;
+    uint debugMeshlets;
+    uvec2 _pad0;
+    uint64_t vertexBufferAddr;
 } ubo;
 
 struct InstanceData {
@@ -59,21 +77,24 @@ void main() {
     InstanceData inst = instances[gl_InstanceIndex];
     uint animInstanceId = inst.geometry2.z;
     
-    vec3 localPos = inPosition;
-    vec3 localNormal = inNormal;
+    VertexBuffer vb = VertexBuffer(ubo.vertexBufferAddr);
+    Vertex v = vb.vertices[gl_VertexIndex];
+    
+    vec3 localPos = v.pos;
+    vec3 localNormal = v.normal;
     
     if (animInstanceId != 0xFFFFFFFF) {
-        float totalWeight = inJointWeights.x + inJointWeights.y + inJointWeights.z + inJointWeights.w;
+        float totalWeight = v.jointWeights.x + v.jointWeights.y + v.jointWeights.z + v.jointWeights.w;
         if (totalWeight > 0.0001) {
             uint offset = animInstanceId * 128;
             mat4 skinMat = 
-                inJointWeights.x * boneMatrices[offset + inJointIds.x] +
-                inJointWeights.y * boneMatrices[offset + inJointIds.y] +
-                inJointWeights.z * boneMatrices[offset + inJointIds.z] +
-                inJointWeights.w * boneMatrices[offset + inJointIds.w];
+                v.jointWeights.x * boneMatrices[offset + v.jointIds.x] +
+                v.jointWeights.y * boneMatrices[offset + v.jointIds.y] +
+                v.jointWeights.z * boneMatrices[offset + v.jointIds.z] +
+                v.jointWeights.w * boneMatrices[offset + v.jointIds.w];
                 
-            localPos = (skinMat * vec4(inPosition, 1.0)).xyz;
-            localNormal = mat3(skinMat) * inNormal;
+            localPos = (skinMat * vec4(v.pos, 1.0)).xyz;
+            localNormal = mat3(skinMat) * v.normal;
         }
     }
     
@@ -81,7 +102,7 @@ void main() {
     fragPos = worldPos.xyz;
     
     fragNormal = mat3(inst.world) * localNormal;
-    fragUV = inUV;
+    fragUV = v.uv;
     fragPosLightSpace = ubo.lightSpaceMatrix * worldPos;
 
     fragColor = vec4(inst.color.rgb, 1.0);

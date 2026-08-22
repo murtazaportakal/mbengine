@@ -50,7 +50,7 @@ impl GeometryPool {
         let vertex_buffer = Buffer::new(
             vulkan,
             vertex_size,
-            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 

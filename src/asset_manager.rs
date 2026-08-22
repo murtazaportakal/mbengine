@@ -8,19 +8,7 @@ use rhai::AST;
 use std::collections::HashMap;
 use std::path::Path;
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct MeshHeader {
-    pub magic: [u8; 4],
-    pub version: u32,
-    pub flags: u32,
-    pub vertex_count: u32,
-    pub index_count: u32,
-    pub meshlet_count: u32,
-    pub aabb_min: [f32; 3],
-    pub aabb_max: [f32; 3],
-    pub _padding: u32,
-}
+use crate::renderer::vulkan::gpu_format::{MeshHeader, MESH_MAGIC};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -284,7 +272,7 @@ impl AssetManager {
             return None;
         }
 
-        if &header.magic != b"MESH" {
+        if header.magic != MESH_MAGIC {
             crate::log_info!("[AssetMgr] Invalid .mesh magic in {}", path);
             return None;
         }
