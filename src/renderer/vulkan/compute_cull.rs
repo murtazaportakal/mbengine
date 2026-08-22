@@ -64,6 +64,18 @@ impl ComputeCullPipeline {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            // OccludedMeshletsBuffer (Phase 1 output, Phase 2 input)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(8)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            // OccludedCountBuffer
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(9)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
@@ -132,6 +144,8 @@ impl ComputeCullPipeline {
         draw_count_buffer: vk::Buffer,
         meshlet_buffer: vk::Buffer,
         prefix_sum_buffer: vk::Buffer,
+        occluded_meshlets_buffer: vk::Buffer,
+        occluded_count_buffer: vk::Buffer,
         descriptor_set: vk::DescriptorSet,
     ) {
         if ubo_buffer == vk::Buffer::null() || descriptor_set == vk::DescriptorSet::null() {
@@ -210,13 +224,49 @@ impl ComputeCullPipeline {
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&prefix_info));
 
-        // Write a dummy null-sampler for binding 7 — will be updated per-frame
-        // by update_hzb_descriptor() once the HZB target is available.
+        let mut writes = vec![
+            write_ubo,
+            write_indirect,
+            write_instance,
+            write_draw_count,
+            write_meshlet,
+            write_prefix,
+        ];
+
+        let occluded_meshlets_info;
+        let write_occluded_meshlets;
+        if occluded_meshlets_buffer != vk::Buffer::null() {
+            occluded_meshlets_info = vk::DescriptorBufferInfo::default()
+                .buffer(occluded_meshlets_buffer)
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
+            write_occluded_meshlets = vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(8)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&occluded_meshlets_info));
+            writes.push(write_occluded_meshlets);
+        }
+
+        let occluded_count_info;
+        let write_occluded_count;
+        if occluded_count_buffer != vk::Buffer::null() {
+            occluded_count_info = vk::DescriptorBufferInfo::default()
+                .buffer(occluded_count_buffer)
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
+            write_occluded_count = vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(9)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&occluded_count_info));
+            writes.push(write_occluded_count);
+        }
+
         unsafe {
-            vulkan.device.update_descriptor_sets(
-                &[write_ubo, write_indirect, write_instance, write_draw_count, write_meshlet, write_prefix],
-                &[],
-            );
+            vulkan.device.update_descriptor_sets(&writes, &[]);
         }
     }
 

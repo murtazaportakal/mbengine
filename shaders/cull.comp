@@ -76,13 +76,21 @@ layout(set = 0, binding = 7) uniform sampler2D hzbSampler;
 layout(push_constant) uniform PushConstants {
     uint totalMeshlets;
     uint totalInstances;
-    uint debugCull;   // 0 = normal, 1 = disable frustum+HZB (show all)
-    uint pad2;
+    uint debugCull;
+    uint phase;
     float screenWidth;
     float screenHeight;
-    float lodBias;    // Min projected radius (pixels) to render a meshlet. Default 2.0.
-    float hzbEnabled; // 1.0 = enable HZB occlusion test, 0.0 = skip (first frame / disabled)
+    float lodBias;
+    float mipCount;
 } pc;
+
+layout(set = 0, binding = 8) buffer OccludedMeshletsBuffer {
+    uint occludedMeshlets[];
+};
+
+layout(set = 0, binding = 9) buffer OccludedCountBuffer {
+    uint occludedCount;
+};
 
 uint binary_search_instance(uint meshletIdx) {
     uint left = 0;
@@ -101,8 +109,14 @@ uint binary_search_instance(uint meshletIdx) {
 }
 
 void main() {
-    uint gID = gl_GlobalInvocationID.x;
-    if (gID >= pc.totalMeshlets) return;
+    uint gID;
+    if (pc.phase == 1) {
+        if (gl_GlobalInvocationID.x >= occludedCount) return;
+        gID = occludedMeshlets[gl_GlobalInvocationID.x];
+    } else {
+        gID = gl_GlobalInvocationID.x;
+        if (gID >= pc.totalMeshlets) return;
+    }
 
     // 1. Find which instance this meshlet belongs to
     uint instanceIdx = binary_search_instance(gID);
@@ -156,7 +170,6 @@ void main() {
     if (!visible) return;
 
     // 6. & 8. Screen-space tests (LOD and HZB)
-    // ONLY safe if the sphere is entirely in front of the camera (w > radius).
     if (pc.debugCull == 0 && clipCenter.w > worldRadius) {
         float invW = 1.0 / clipCenter.w;
         vec3 ndcCenter = clipCenter.xyz * invW;
@@ -169,8 +182,6 @@ void main() {
             viewForward = vec3(0.0, 0.0, 1.0);
         }
 
-        // Compute screen-space radius by projecting an edge point of the sphere
-        // along a stable orthogonal axis to prevent LOD flickering.
         vec3 upRef = abs(viewForward.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
         vec3 camRight = normalize(cross(viewForward, upRef));
         
@@ -178,38 +189,51 @@ void main() {
         float edgeNdcX = edgeClip.x / edgeClip.w;
         float screenRadius = abs(edgeNdcX - ndcCenter.x) * pc.screenWidth * 0.5;
 
-        // Phase G - Screen-space LOD: cull sub-pixel meshlets
         if (screenRadius < pc.lodBias) {
-            return; // Too small to contribute meaningfully
+            return; 
         }
 
-        // Phase F - HZB Occlusion Test
-        if (false && pc.hzbEnabled > 0.5) { // [DEBUG] Disabled HZB culling to see if it is the cause
-            // Map NDC to UV [0,1]
-            vec2 screenUV = ndcCenter.xy * 0.5 + 0.5;
+        // HZB Occlusion Test
+        // Convert screen center to UV [0, 1]
+        vec2 uv = ndcCenter.xy * 0.5 + 0.5;
 
-            // Clamp radius to valid range
-            float sr = max(screenRadius, 1.0);
+        // Bounding box size in UV space
+        vec2 uvRadius = vec2(screenRadius / pc.screenWidth, screenRadius / pc.screenHeight);
+        
+        // Calculate Mip Level
+        float maxRadius = max(uvRadius.x, uvRadius.y) * 2.0; // Box diameter
+        float lod = ceil(log2(max(maxRadius * pc.screenWidth, maxRadius * pc.screenHeight)));
+        lod = clamp(lod, 0.0, pc.mipCount - 1.0);
 
-            // Pick the coarsest mip that covers the sphere footprint
-            float mipLevel = ceil(log2(sr * 2.0));
-            mipLevel = clamp(mipLevel, 0.0, float(textureQueryLevels(hzbSampler) - 1));
+        // Fetch depth from 4 texels at the computed LOD
+        vec2 minUV = uv - uvRadius;
+        vec2 maxUV = uv + uvRadius;
 
-            // Sample HZB at the sphere's projected center.
-            float hzbDepth = textureLod(hzbSampler, screenUV, mipLevel).r;
+        float d1 = textureLod(hzbSampler, minUV, lod).x;
+        float d2 = textureLod(hzbSampler, vec2(maxUV.x, minUV.y), lod).x;
+        float d3 = textureLod(hzbSampler, vec2(minUV.x, maxUV.y), lod).x;
+        float d4 = textureLod(hzbSampler, maxUV, lod).x;
 
-            // NDC depth of the sphere's nearest point (closest face to camera).
-            vec3 nearestPoint = worldCenter - viewForward * worldRadius;
-            vec4 clipNear = ubo.viewProj * vec4(nearestPoint, 1.0);
-            float sphereNearDepth = (clipNear.w <= 0.0) ? 0.0 : (clipNear.z / clipNear.w);
+        // Min depth among the 4 texels
+        float maxDepth = max(max(d1, d2), max(d3, d4)); // Reverse-Z, min is max
 
-            if (sphereNearDepth > hzbDepth + 0.001) {
-                visible = false;
-            }
+        // Project the meshlet bounding sphere backmost point to get its minimum depth
+        vec4 backClip = ubo.viewProj * vec4(worldCenter - viewForward * worldRadius, 1.0);
+        float backDepth = backClip.z / backClip.w;
+
+        // If the meshlet is strictly deeper than the max depth of the bounding area in HZB, it is occluded
+        if (backDepth > maxDepth) { // Standard-Z: further objects have LARGER z values
+            visible = false;
         }
     }
 
-    if (!visible) return;
+    if (!visible) {
+        if (pc.phase == 0 && pc.debugCull == 0) {
+            uint idx = atomicAdd(occludedCount, 1);
+            occludedMeshlets[idx] = gID;
+        }
+        return;
+    }
 
     // Atomically reserve a slot in the compacted command buffer.
     uint slot = atomicAdd(drawCount, 1);

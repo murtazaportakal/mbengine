@@ -14,6 +14,8 @@ fn main() {
     println!("cargo:rerun-if-changed=shaders/cloth_integrate.comp");
     println!("cargo:rerun-if-changed=shaders/cloth_solve.comp");
     println!("cargo:rerun-if-changed=shaders/cull.comp");
+    println!("cargo:rerun-if-changed=shaders/generate_hzb.comp");
+    println!("cargo:rerun-if-changed=shaders/copy_depth.frag");
     // First try local glslangValidator
     let local_compiler = PathBuf::from("glslang")
         .join("bin")
@@ -194,5 +196,29 @@ fn main() {
 
     if !cull_status.success() {
         panic!("Failed to compile cull.comp");
+    }
+
+    // Compile Generate HZB Compute Shader
+    let mut hzb_args = args.clone();
+    hzb_args.extend(vec!["shaders/generate_hzb.comp", "-o", "shaders/generate_hzb.spv"]);
+    let hzb_status = Command::new(&compiler)
+        .args(&hzb_args)
+        .status()
+        .expect("Failed to execute shader compiler for generate_hzb.comp");
+
+    if !hzb_status.success() {
+        panic!("Failed to compile generate_hzb.comp");
+    }
+
+    // Compile Copy Depth Fragment Shader
+    let mut copy_depth_args = args.clone();
+    copy_depth_args.extend(vec!["shaders/copy_depth.frag", "-o", "shaders/copy_depth.spv"]);
+    let copy_depth_status = Command::new(&compiler)
+        .args(&copy_depth_args)
+        .status()
+        .expect("Failed to execute shader compiler for copy_depth.frag");
+
+    if !copy_depth_status.success() {
+        panic!("Failed to compile copy_depth.frag");
     }
 }

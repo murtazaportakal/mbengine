@@ -320,7 +320,7 @@ impl AssetManager {
             }
         )?;
 
-        let mesh = Mesh {
+        let mut mesh = Mesh {
             vertex_offset: offsets.0,
             index_offset: offsets.1,
             meshlet_offset: offsets.2,
@@ -337,11 +337,35 @@ impl AssetManager {
             mr_texture: None,
             emissive_texture: None,
             diffuse_texture_idx: self.get_texture_index("default_white").unwrap_or(0) as u32,
-            normal_texture_idx: 0,
+            normal_texture_idx: self.get_texture_index("default_normal").unwrap_or(0) as u32,
             mr_texture_idx: 0,
             emissive_texture_idx: 0,
-
         };
+
+        let mat_path = path.replace(".mesh", ".mat");
+        if std::path::Path::new(&mat_path).exists() {
+            let name = std::path::Path::new(&mat_path).file_stem().unwrap_or_default().to_string_lossy().to_string();
+            self.load_cooked_material(vulkan, &name, &mat_path);
+            if let Some(mat) = self.materials.get(&name) {
+                mesh.default_color[0] = mat.base_color_factor[0];
+                mesh.default_color[1] = mat.base_color_factor[1];
+                mesh.default_color[2] = mat.base_color_factor[2];
+                mesh.metallic = mat.metallic_factor;
+                mesh.roughness = mat.roughness_factor;
+                if let Some(t) = &mat.albedo_texture {
+                    mesh.diffuse_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0) as u32;
+                }
+                if let Some(t) = &mat.normal_texture {
+                    mesh.normal_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0) as u32;
+                }
+                if let Some(t) = &mat.mr_texture {
+                    mesh.mr_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0) as u32;
+                }
+                if let Some(t) = &mat.emissive_texture {
+                    mesh.emissive_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0) as u32;
+                }
+            }
+        }
 
         let index = self.add_mesh(mesh);
         self.model_map.insert(path.to_string(), vec![index]);

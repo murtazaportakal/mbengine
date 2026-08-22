@@ -148,6 +148,10 @@ void main() {
     }
 
     vec3 N = normalize(fragNormal);
+    if (!gl_FrontFacing) {
+        N = -N;
+    }
+    
     if (fragNormalTextureIndex != 0) {
         mat3 tbn = computeTBN(N, fragPos, fragUV);
         vec3 normalSample = texture(textures[nonuniformEXT(fragNormalTextureIndex)], fragUV).rgb;
@@ -263,5 +267,5 @@ void main() {
         color = fragMeshletColor;
     }
     
-    outColor = vec4(color, texColor.a);
+    outColor = vec4(color, 1.0);
 }

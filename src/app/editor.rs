@@ -197,43 +197,56 @@ impl Editor {
             }
         }
         
+static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+        let cook_text = if IS_COOKING.load(std::sync::atomic::Ordering::SeqCst) {
+            "Cooking... (Please wait)"
+        } else {
+            "Cook Asset"
+        };
+
         if ButtonBuilder::new(ui_ctx, 12)
-            .text("Cook Asset")
+            .text(cook_text)
             .style(&SLATE_BASE)
             .build()
         {
-            std::thread::spawn(move || {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Raw Models", &["gltf", "glb"])
-                    .pick_file()
-                {
-                    crate::log_info!("[Cooker] Cooking asset: {}", path.display());
-                    let output = std::process::Command::new("cargo")
-                        .arg("run")
-                        .arg("--bin")
-                        .arg("cooker")
-                        .arg("--")
-                        .arg(path.to_string_lossy().to_string())
-                        .arg("--out-dir")
-                        .arg("assets/cooked/")
-                        .output();
-                    
-                    match output {
-                        Ok(o) => {
-                            crate::log_info!("[Cooker] Finished cooking with status: {}", o.status);
-                            if !o.stdout.is_empty() {
-                                crate::log_info!("[Cooker] STDOUT: {}", String::from_utf8_lossy(&o.stdout));
+            if !IS_COOKING.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::spawn(move || {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Raw Models", &["gltf", "glb"])
+                        .pick_file()
+                    {
+                        IS_COOKING.store(true, std::sync::atomic::Ordering::SeqCst);
+                        crate::log_info!("[Cooker] Cooking asset: {}", path.display());
+                        let output = std::process::Command::new("cargo")
+                            .arg("run")
+                            .arg("--release")
+                            .arg("--bin")
+                            .arg("cooker")
+                            .arg("--")
+                            .arg(path.to_string_lossy().to_string())
+                            .arg("--out-dir")
+                            .arg("assets/cooked/")
+                            .output();
+                        
+                        match output {
+                            Ok(o) => {
+                                crate::log_info!("[Cooker] Finished cooking with status: {}", o.status);
+                                if !o.stdout.is_empty() {
+                                    crate::log_info!("[Cooker] STDOUT: {}", String::from_utf8_lossy(&o.stdout));
+                                }
+                                if !o.stderr.is_empty() {
+                                    crate::log_info!("[Cooker] STDERR: {}", String::from_utf8_lossy(&o.stderr));
+                                }
                             }
-                            if !o.stderr.is_empty() {
-                                crate::log_info!("[Cooker] STDERR: {}", String::from_utf8_lossy(&o.stderr));
+                            Err(e) => {
+                                crate::log_info!("[Cooker] Failed to run cooker: {}", e);
                             }
                         }
-                        Err(e) => {
-                            crate::log_info!("[Cooker] Failed to run cooker: {}", e);
-                        }
+                        IS_COOKING.store(false, std::sync::atomic::Ordering::SeqCst);
                     }
-                }
-            });
+                });
+            }
         }
         
         if ButtonBuilder::new(ui_ctx, 13)
@@ -762,8 +775,29 @@ impl Editor {
                     paths[0].to_string_lossy().replace('\\', "/")
                 };
 
-                if item_rect.contains(ui_ctx.mouse_pos) && ui_ctx.mouse_pressed {
+                let delete_rect = UiRect {
+                    x: item_rect.x + item_rect.w - 24.0,
+                    y: item_rect.y + 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                };
+
+                let mut deleted = false;
+                if delete_rect.contains(ui_ctx.mouse_pos) {
+                    if ui_ctx.mouse_pressed {
+                        deleted = true;
+                    }
+                } else if item_rect.contains(ui_ctx.mouse_pos) && ui_ctx.mouse_pressed {
                     self.dragging_file = Some(drag_path.clone());
+                }
+
+                if deleted {
+                    for path in &paths {
+                        let _ = std::fs::remove_file(path);
+                        let mat_path = path.with_extension("mat");
+                        let _ = std::fs::remove_file(mat_path);
+                    }
+                    continue; // Skip rendering since it's deleted
                 }
 
                 let style = if self.dragging_file.as_deref() == Some(drag_path.as_str()) {
@@ -778,6 +812,11 @@ impl Editor {
                 use core::fmt::Write;
                 let _ = write!(fs, "{}", display_name);
                 ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Text { pos: crate::math::vec::Vec2::new(item_rect.x + 5.0, item_rect.y + 20.0), text: fs, color: style.text_color, font_size: 16.0 });
+
+                ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad { rect: delete_rect, color: crate::ui::UiColor::rgba(200, 50, 50, 255), rounding: 2.0 });
+                let mut fs_del = crate::containers::FixedString::<128>::new();
+                let _ = write!(fs_del, "X");
+                ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Text { pos: crate::math::vec::Vec2::new(delete_rect.x + 5.0, delete_rect.y + 15.0), text: fs_del, color: crate::ui::UiColor::rgba(255, 255, 255, 255), font_size: 14.0 });
 
                 x_offset += item_w + 10.0;
                 if x_offset + item_w > browser_rect.w {

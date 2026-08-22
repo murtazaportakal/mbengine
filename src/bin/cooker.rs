@@ -321,8 +321,8 @@ fn main() {
                     let _ = std::fs::create_dir_all(parent);
                 }
                 
-                // Always cook if missing (or we could check timestamps for incremental builds later)
-                if !out_tex_path.exists() || true {
+                // Skip if already cooked
+                if !out_tex_path.exists() {
                     if let Err(e) = cook_texture(&in_tex_path, &out_tex_path, is_srgb) {
                         eprintln!("[cooker] WARNING: Failed to cook texture {}: {}", in_tex_path.display(), e);
                     }
@@ -448,6 +448,30 @@ fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option
     let (document, buffers, _images) =
         gltf::import(path).map_err(|e| format!("gltf::import failed: {}", e))?;
 
+    // ── Node Transforms ──────────────────────────────────────────────────────
+    let mut mesh_transforms = std::collections::HashMap::new();
+    fn traverse_node(node: &gltf::Node, parent_transform: nalgebra::Matrix4<f32>, map: &mut std::collections::HashMap<usize, nalgebra::Matrix4<f32>>) {
+        let m = node.transform().matrix();
+        let local = nalgebra::Matrix4::new(
+            m[0][0], m[1][0], m[2][0], m[3][0],
+            m[0][1], m[1][1], m[2][1], m[3][1],
+            m[0][2], m[1][2], m[2][2], m[3][2],
+            m[0][3], m[1][3], m[2][3], m[3][3],
+        );
+        let world = parent_transform * local;
+        if let Some(mesh) = node.mesh() {
+            map.insert(mesh.index(), world);
+        }
+        for child in node.children() {
+            traverse_node(&child, world, map);
+        }
+    }
+    for scene in document.scenes() {
+        for node in scene.nodes() {
+            traverse_node(&node, nalgebra::Matrix4::identity(), &mut mesh_transforms);
+        }
+    }
+
     // ── Materials ────────────────────────────────────────────────────────────
     let mut materials: Vec<RawMaterial> = Vec::new();
     for mat in document.materials() {
@@ -544,8 +568,16 @@ fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option
                 continue;
             }
 
-            // Detect skinning (any non-zero weight)
-            let is_skinned = weights.iter().any(|w| w.iter().any(|&v| v > 0.0));
+            // Detect skinning (any non-zero weight) AND must have joints
+            let is_skinned = !joints.is_empty() && weights.iter().any(|w| w.iter().any(|&v| v > 0.0));
+
+            let transform = if is_skinned {
+                nalgebra::Matrix4::identity()
+            } else {
+                mesh_transforms.get(&mesh.index()).copied().unwrap_or_else(nalgebra::Matrix4::identity)
+            };
+            
+            let normal_transform = transform.try_inverse().unwrap_or_else(nalgebra::Matrix4::identity).transpose();
 
             // Build the flat Vertex array
             let mut vertices: Vec<Vertex> = Vec::new();
@@ -556,9 +588,17 @@ fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option
                 let j = if i < joints.len() { joints[i] } else { [0, 0, 0, 0] };
                 let w = if i < weights.len() { weights[i] } else { [0.0, 0.0, 0.0, 0.0] };
 
+                let pos_v = transform * nalgebra::Vector4::new(positions[i][0], positions[i][1], positions[i][2], 1.0);
+                let norm_v = normal_transform * nalgebra::Vector4::new(normal[0], normal[1], normal[2], 0.0);
+                
+                let mut norm_vec = nalgebra::Vector3::new(norm_v.x, norm_v.y, norm_v.z);
+                if norm_vec.norm_squared() > 0.0 {
+                    norm_vec.normalize_mut();
+                }
+
                 vertices.push(Vertex {
-                    pos: positions[i],
-                    normal,
+                    pos: [pos_v.x, pos_v.y, pos_v.z],
+                    normal: [norm_vec.x, norm_vec.y, norm_vec.z],
                     uv,
                     joint_ids: j,
                     joint_weights: w,

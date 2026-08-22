@@ -89,14 +89,7 @@ impl Application {
             render.recreate_swapchain(&mut window, &mut input);
         }
 
-        // Load cube model into geometry pool
-        let cube_model_indices = asset_manager
-            .load_model(&render.vulkan, &mut render.geometry_pool, "cube.obj")
-            .unwrap_or(&[])
-            .to_vec();
-        if cube_model_indices.is_empty() {
-            crate::log_info!("Failed to load cube.obj. Rendering will fail.");
-        }
+
 
         if render.pipeline.is_none() {
             crate::log_info!("Shaders not found or failed to compile. Rendering will be skipped.");
@@ -154,42 +147,6 @@ impl Application {
             );
         }
 
-        // Spawn a single default cube entity at the origin, if loaded.
-        // Spawn a single default cube entity at the origin, if loaded.
-        if !cube_model_indices.is_empty() {
-            let mesh_index = cube_model_indices[0];
-            let cube_entity = world.create_entity();
-            unsafe {
-                world.add_component(
-                    cube_entity,
-                    TransformComponent {
-                        position: Vec3::new(0.0, 0.0, 0.0),
-                        rotation: Vec3::new(0.0, 0.0, 0.0),
-                        scale: Vec3::new(1.0, 1.0, 1.0),
-                        matrix: crate::math::mat4::Mat4::identity(),
-                    },
-                );
-                world.add_component(
-                    cube_entity,
-                    RenderComponent {
-                        visible: true,
-                        mesh_index,
-                        metallic: 0.0,
-                        roughness: 0.8,
-                        r: 0.8,
-                        g: 0.8,
-                        b: 0.8,
-                    },
-                );
-                world.add_component(
-                    cube_entity,
-                    HierarchyComponent {
-                        parent: None,
-                        local_matrix: crate::math::mat4::Mat4::identity(),
-                    },
-                );
-            }
-        }
 
         let ui_ctx = crate::ui::UiContext::new();
 
@@ -502,6 +459,31 @@ impl Application {
                         crate::log_info!("[SpawnModel] mesh_indices={:?}", mesh_indices);
                         unsafe { self.render.vulkan.device.device_wait_idle().unwrap(); }
                         // We must NOT call recreate_frame_buffers() here.
+
+                        let mut spawn_pos = Vec3::new(0.0, 0.0, 0.0);
+                        let mut forward_vec = Vec3::new(0.0, 0.0, 1.0);
+                        unsafe {
+                            let transforms = self.world.get_component_array::<crate::ecs::components::TransformComponent>();
+                            let cameras = self.world.get_component_array::<crate::ecs::components::CameraComponent>();
+                            let mut all_entities = [crate::ecs::EntityId::MAX; 1024];
+                            let alive_count = self.world.get_alive_entities(&mut all_entities);
+                            for &entity in &all_entities[..alive_count] {
+                                if cameras.has(entity) && transforms.has(entity) {
+                                    let t = transforms.get(entity);
+                                    spawn_pos = t.position;
+                                    let pitch = t.rotation.x;
+                                    let yaw = t.rotation.y;
+                                    forward_vec = Vec3::new(
+                                        yaw.sin() * pitch.cos(),
+                                        pitch.sin(),
+                                        yaw.cos() * pitch.cos(),
+                                    ).normalize();
+                                    break;
+                                }
+                            }
+                        }
+                        let final_spawn_pos = spawn_pos + forward_vec * 5.0;
+
                         // Destroying the command pool mid-loop corrupts the
                         // validation layer's buffer-reference tracking and
                         // causes VUID-vkDestroyBuffer-buffer-00922 / DEVICE_LOST
@@ -545,7 +527,7 @@ impl Application {
 
                         unsafe {
                             self.world.add_component(new_entity, TransformComponent {
-                                position: Vec3::new(0.0, 0.0, 0.0),
+                                position: final_spawn_pos,
                                 rotation: Vec3::new(0.0, 0.0, 0.0),
                                 scale: Vec3::new(1.0, 1.0, 1.0),
                                 matrix: crate::math::mat4::Mat4::identity(),

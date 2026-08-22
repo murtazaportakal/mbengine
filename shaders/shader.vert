@@ -87,9 +87,9 @@ void main() {
     fragColor = vec4(inst.color.rgb, 1.0);
     fragMetallic = inst.pbr.x;
     fragRoughness = inst.pbr.y;
-    fragTextureIndex = inst.color.w != 0.0 ? floatBitsToUint(inst.color.w) : 0xFFFFFFFF;
-    fragNormalTextureIndex = inst.pbr.z != 0.0 ? floatBitsToUint(inst.pbr.z) : 0xFFFFFFFF;
-    fragMRTextureIndex = inst.pbr.w != 0.0 ? floatBitsToUint(inst.pbr.w) : 0xFFFFFFFF;
+    fragTextureIndex = uint(inst.color.w);
+    fragNormalTextureIndex = uint(inst.pbr.z);
+    fragMRTextureIndex = uint(inst.pbr.w);
     fragEmissiveTextureIndex = inst.geometry.w;
 
     uint id = gl_DrawIDARB;

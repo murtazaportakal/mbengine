@@ -56,6 +56,10 @@ pub struct RenderBackend {
     pub instance_mapped: [*mut c_void; 2],
     pub prefix_sum_buffers: [Buffer; 2],
     pub prefix_sum_mapped: [*mut u32; 2],
+    pub occluded_meshlets_buffers: [Buffer; 2],
+    pub occluded_count_buffers: [Buffer; 2],
+    pub indirect_buffers_phase2: [Buffer; 2],
+    pub draw_count_buffers_phase2: [Buffer; 2],
     pub anim_data_buffers: [Buffer; 2],
     pub anim_data_mapped: [*mut std::ffi::c_void; 2],
     pub anim_bone_matrices_buffer: Buffer,
@@ -213,6 +217,9 @@ impl RenderBackend {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(2000),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1000),
         ];
         let compute_pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&compute_pool_sizes)
@@ -403,6 +410,11 @@ impl RenderBackend {
         let mut draw_count_bufs = Vec::with_capacity(2);
         let mut draw_count_maps = Vec::with_capacity(2);
 
+        let mut occluded_meshlets_bufs = Vec::with_capacity(2);
+        let mut occluded_count_bufs = Vec::with_capacity(2);
+        let mut indirect_bufs_phase2 = Vec::with_capacity(2);
+        let mut draw_count_bufs_phase2 = Vec::with_capacity(2);
+
         for _ in 0..2 {
             let ib = Buffer::new(
                 &vulkan,
@@ -449,6 +461,39 @@ impl RenderBackend {
             };
             draw_count_bufs.push(dcb);
             draw_count_maps.push(dcb_mapped as *mut u32);
+
+            let ocb = Buffer::new(
+                &vulkan,
+                4,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ).expect("Failed to create occluded count buffer");
+            
+            let omb = Buffer::new(
+                &vulkan,
+                4_000_000, // 4 bytes per meshlet ID, supporting up to 1,000,000 meshlets
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ).expect("Failed to create occluded meshlets buffer");
+
+            let idb2 = Buffer::new(
+                &vulkan,
+                (max_instances * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ).expect("Failed to create indirect buffer 2");
+
+            let dcb2 = Buffer::new(
+                &vulkan,
+                4,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ).expect("Failed to create draw count buffer 2");
+
+            occluded_count_bufs.push(ocb);
+            occluded_meshlets_bufs.push(omb);
+            indirect_bufs_phase2.push(idb2);
+            draw_count_bufs_phase2.push(dcb2);
         }
 
         let anim_data_size = (10_000 * std::mem::size_of::<crate::renderer::vulkan::animation::InstanceAnimData>()) as u64;
@@ -498,6 +543,10 @@ impl RenderBackend {
         let draw_count_mapped = [draw_count_maps.remove(0), draw_count_maps.remove(0)];
         let prefix_sum_buffers = [prefix_sum_bufs.remove(0), prefix_sum_bufs.remove(0)];
         let prefix_sum_mapped = [prefix_sum_maps.remove(0), prefix_sum_maps.remove(0)];
+        let occluded_meshlets_buffers = [occluded_meshlets_bufs.remove(0), occluded_meshlets_bufs.remove(0)];
+        let occluded_count_buffers = [occluded_count_bufs.remove(0), occluded_count_bufs.remove(0)];
+        let indirect_buffers_phase2 = [indirect_bufs_phase2.remove(0), indirect_bufs_phase2.remove(0)];
+        let draw_count_buffers_phase2 = [draw_count_bufs_phase2.remove(0), draw_count_bufs_phase2.remove(0)];
         let anim_data_buffers = [anim_data_bufs.remove(0), anim_data_bufs.remove(0)];
         let anim_data_mapped = [anim_data_maps.remove(0), anim_data_maps.remove(0)];
         
@@ -586,13 +635,19 @@ impl RenderBackend {
         }
 
         if let Some(compute) = &mut compute_pipeline {
-            let layouts = [compute.descriptor_set_layout, compute.descriptor_set_layout];
+            let layouts = [
+                compute.descriptor_set_layout,
+                compute.descriptor_set_layout,
+                compute.descriptor_set_layout,
+                compute.descriptor_set_layout,
+            ];
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(compute_descriptor_pool)
                 .set_layouts(&layouts);
             compute.descriptor_sets =
                 unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap() };
             for i in 0..2 {
+                // Phase 1 descriptor set
                 compute.update_descriptor_set(
                     &vulkan,
                     ubo_buffer,
@@ -601,7 +656,22 @@ impl RenderBackend {
                     draw_count_buffers[i].handle,
                     geometry_pool.meshlet_buffer.handle,
                     prefix_sum_buffers[i].handle,
-                    compute.descriptor_sets[i],
+                    occluded_meshlets_buffers[i].handle,
+                    occluded_count_buffers[i].handle,
+                    compute.descriptor_sets[i * 2 + 0],
+                );
+                // Phase 2 descriptor set
+                compute.update_descriptor_set(
+                    &vulkan,
+                    ubo_buffer,
+                    indirect_buffers_phase2[i].handle,
+                    instance_buffers[i].handle,
+                    draw_count_buffers_phase2[i].handle,
+                    geometry_pool.meshlet_buffer.handle,
+                    prefix_sum_buffers[i].handle,
+                    occluded_meshlets_buffers[i].handle,
+                    occluded_count_buffers[i].handle,
+                    compute.descriptor_sets[i * 2 + 1],
                 );
             }
         }
@@ -623,6 +693,8 @@ impl RenderBackend {
                 unsafe { vulkan.device.update_descriptor_sets(&[write], &[]) };
             }
         }
+
+
 
         let blur_target = OffscreenTarget::new(
             &vulkan,
@@ -648,6 +720,10 @@ impl RenderBackend {
             instance_mapped,
             prefix_sum_buffers,
             prefix_sum_mapped,
+            occluded_meshlets_buffers,
+            occluded_count_buffers,
+            indirect_buffers_phase2,
+            draw_count_buffers_phase2,
             anim_data_buffers,
             anim_data_mapped,
             anim_bone_matrices_buffer,
@@ -696,10 +772,6 @@ impl RenderBackend {
             backend.sdr_target.color_view,
             backend.sdr_target.sampler,
         );
-        // Create HZB target (done here after backend is fully built so we can access vulkan + vfs)
-        let hzb_w = backend.swapchain.extent.width;
-        let hzb_h = backend.swapchain.extent.height;
-        backend.hzb_target = HzbTarget::new(&backend.vulkan, hzb_w, hzb_h, &asset_manager.vfs);
         // Create depth sampler for HZB generation
         {
             let si = vk::SamplerCreateInfo::default()
@@ -711,6 +783,21 @@ impl RenderBackend {
                 .anisotropy_enable(false);
             backend.depth_copy_sampler = unsafe { backend.vulkan.device.create_sampler(&si, None).unwrap_or(vk::Sampler::null()) };
         }
+
+        // Create HZB target (done here after backend is fully built so we can access vulkan + vfs)
+        let hzb_w = backend.swapchain.extent.width;
+        let hzb_h = backend.swapchain.extent.height;
+        backend.hzb_target = HzbTarget::new(&backend.vulkan, hzb_w, hzb_h, &asset_manager.vfs, backend.depth_copy_sampler);
+
+        if let Some(hzb) = &backend.hzb_target {
+            if let Some(compute) = &backend.compute_pipeline {
+                for i in 0..2 {
+                    compute.update_hzb_descriptor(&backend.vulkan, hzb.full_view, hzb.sampler, compute.descriptor_sets[i * 2 + 0]);
+                    compute.update_hzb_descriptor(&backend.vulkan, hzb.full_view, hzb.sampler, compute.descriptor_sets[i * 2 + 1]);
+                }
+            }
+        }
+
         // Do the initial HZB layout transition using the setup command buffer
         if let Some(hzb) = &backend.hzb_target {
             let cmd = unsafe {
@@ -860,8 +947,17 @@ impl RenderBackend {
         );
         // Recreate HZB at new resolution
         if let Some(mut old_hzb) = self.hzb_target.take() { old_hzb.shutdown(&self.vulkan); }
-        self.hzb_target = HzbTarget::new(&self.vulkan, tw, th, &crate::vfs::Vfs::new("."));
+        self.hzb_target = HzbTarget::new(&self.vulkan, tw, th, &crate::vfs::Vfs::new("."), self.offscreen_target.depth_view, self.depth_copy_sampler);
         self.hzb_frame_count = 0;
+
+        if let Some(hzb) = &self.hzb_target {
+            if let Some(compute) = &self.compute_pipeline {
+                for i in 0..2 {
+                    compute.update_hzb_descriptor(&self.vulkan, hzb.full_view, hzb.sampler, compute.descriptor_sets[i * 2 + 0]);
+                    compute.update_hzb_descriptor(&self.vulkan, hzb.full_view, hzb.sampler, compute.descriptor_sets[i * 2 + 1]);
+                }
+            }
+        }
         if let Some(hzb) = &self.hzb_target {
             let cmd = unsafe {
                 let ai = vk::CommandBufferAllocateInfo::default().command_pool(self.vulkan.command_pool).level(vk::CommandBufferLevel::PRIMARY).command_buffer_count(1);
@@ -1128,8 +1224,8 @@ impl RenderBackend {
                         world: wm,
                         aabb_min: [mesh.aabb_min[0], mesh.aabb_min[1], mesh.aabb_min[2], 1.0],
                         aabb_max: [mesh.aabb_max[0], mesh.aabb_max[1], mesh.aabb_max[2], 1.0],
-                        color: [r.r, r.g, r.b, f32::from_bits(mesh.diffuse_texture_idx)],
-                        pbr: [r.metallic, r.roughness, f32::from_bits(mesh.normal_texture_idx), f32::from_bits(mesh.mr_texture_idx)],
+                        color: [r.r, r.g, r.b, mesh.diffuse_texture_idx as f32],
+                        pbr: [r.metallic, r.roughness, mesh.normal_texture_idx as f32, mesh.mr_texture_idx as f32],
                         geometry: [mesh.index_count, mesh.index_offset, mesh.vertex_offset, mesh.emissive_texture_idx],
                         geometry2: [mesh.meshlet_offset, mesh.meshlet_count, anim_instance_id, 0],
                     });
@@ -1163,8 +1259,12 @@ impl RenderBackend {
         }
 
         let dcb = self.draw_count_buffers[self.current_frame].handle;
+        let dcb2 = self.draw_count_buffers_phase2[self.current_frame].handle;
+        let ocb = self.occluded_count_buffers[self.current_frame].handle;
         unsafe {
             self.vulkan.device.cmd_fill_buffer(cmd, dcb, 0, 4, 0);
+            self.vulkan.device.cmd_fill_buffer(cmd, dcb2, 0, 4, 0);
+            self.vulkan.device.cmd_fill_buffer(cmd, ocb, 0, 4, 0);
             let mem_bar = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
@@ -1206,26 +1306,23 @@ impl RenderBackend {
                     self.vulkan.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, compute.pipeline);
                     self.vulkan.device.cmd_bind_descriptor_sets(
                         cmd, vk::PipelineBindPoint::COMPUTE, compute.layout, 0,
-                        std::slice::from_ref(&compute.descriptor_sets[self.current_frame]), &[],
+                        std::slice::from_ref(&compute.descriptor_sets[self.current_frame * 2 + 0]), &[],
                     );
                     let total_meshlets = *self.prefix_sum_data_buffer.last().unwrap_or(&0);
                     let sw = self.offscreen_target.width as f32;
                     let sh = self.offscreen_target.height as f32;
                     let hzb_enabled: f32 = if self.hzb_frame_count > 0 && self.hzb_target.is_some() { 1.0 } else { 0.0 };
-                    // Update HZB descriptor for this frame if available
-                    if let Some(hzb) = &self.hzb_target {
-                        compute.update_hzb_descriptor(&self.vulkan, hzb.full_view, hzb.sampler, compute.descriptor_sets[self.current_frame]);
-                    }
-                    #[repr(C)] struct PC { total_meshlets: u32, total_instances: u32, debug_cull: u32, pad2: u32, screen_width: f32, screen_height: f32, lod_bias: f32, hzb_enabled: f32 }
+
+                    #[repr(C)] struct PC { total_meshlets: u32, total_instances: u32, debug_cull: u32, phase: u32, screen_width: f32, screen_height: f32, lod_bias: f32, mip_count: f32 }
                     let pc = PC {
                         total_meshlets,
                         total_instances: draw_count,
                         debug_cull: if self.debug_cull { 1 } else { 0 },
-                        pad2: 0,
+                        phase: 0, // Phase 1: Test against previous HZB
                         screen_width: sw,
                         screen_height: sh,
                         lod_bias: self.lod_bias,
-                        hzb_enabled,
+                        mip_count: if hzb_enabled > 0.0 { self.hzb_target.as_ref().unwrap().mip_count as f32 } else { 0.0 },
                     };
                     self.vulkan.device.cmd_push_constants(
                         cmd, compute.layout, vk::ShaderStageFlags::COMPUTE, 0,
@@ -1236,9 +1333,9 @@ impl RenderBackend {
                     }
                     let draw_bar = vk::MemoryBarrier::default()
                         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                        .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
+                        .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ | vk::AccessFlags::SHADER_READ);
                     self.vulkan.device.cmd_pipeline_barrier(
-                        cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::DRAW_INDIRECT,
+                        cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::DRAW_INDIRECT | vk::PipelineStageFlags::COMPUTE_SHADER,
                         vk::DependencyFlags::empty(), std::slice::from_ref(&draw_bar), &[], &[],
                     );
                 }
@@ -1306,58 +1403,99 @@ impl RenderBackend {
         });
 
         // ── Phase E: Generate HZB from this frame's depth buffer ─────────────
-        // The depth image is still in DEPTH_STENCIL_ATTACHMENT_OPTIMAL after the
-        // scene pass.  Transition it to SHADER_READ_ONLY so the HZB compute can
-        // sample it, then generate the full mip chain.
         if let Some(hzb) = &self.hzb_target {
-            // Transition depth → SHADER_READ_ONLY
-            let depth_to_read = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .old_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image(self.offscreen_target.depth_image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::DEPTH,
-                    base_mip_level: 0, level_count: 1,
-                    base_array_layer: 0, layer_count: 1,
-                });
-            unsafe {
-                self.vulkan.device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                    vk::PipelineStageFlags::COMPUTE_SHADER,
-                    vk::DependencyFlags::empty(), &[], &[],
-                    std::slice::from_ref(&depth_to_read),
-                );
-            }
-
-            hzb.generate(&self.vulkan, cmd, self.offscreen_target.depth_view, self.depth_copy_sampler);
-
-            // Transition depth back to DEPTH_STENCIL_ATTACHMENT_OPTIMAL for next frame
-            let depth_to_attach = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_READ)
-                .dst_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ)
-                .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .image(self.offscreen_target.depth_image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::DEPTH,
-                    base_mip_level: 0, level_count: 1,
-                    base_array_layer: 0, layer_count: 1,
-                });
-            unsafe {
-                self.vulkan.device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::COMPUTE_SHADER,
-                    vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                    vk::DependencyFlags::empty(), &[], &[],
-                    std::slice::from_ref(&depth_to_attach),
-                );
-            }
-
-            self.hzb_frame_count = self.hzb_frame_count.saturating_add(1);
+            graph.add_pass("HZB", vec![
+                crate::renderer::vulkan::render_graph::PassResource {
+                    handle: ResourceHandle(self.offscreen_target.depth_image),
+                    state: ResourceState { layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL, stage_mask: vk::PipelineStageFlags::TRANSFER, access_mask: vk::AccessFlags::TRANSFER_READ, aspect_mask: vk::ImageAspectFlags::DEPTH },
+                },
+            ], |cb| {
+                hzb.generate(&self.vulkan, cb, self.offscreen_target.depth_image, self.offscreen_target.width, self.offscreen_target.height);
+            });
         }
+
+        // --- Phase 2 Culling (Late Pass) ---
+        if let Some(compute) = &self.compute_pipeline {
+            if draw_count > 0 {
+                graph.add_pass("Phase2_Cull", vec![], |cb| unsafe {
+                    self.vulkan.device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, compute.pipeline);
+                    self.vulkan.device.cmd_bind_descriptor_sets(
+                        cb, vk::PipelineBindPoint::COMPUTE, compute.layout, 0,
+                        std::slice::from_ref(&compute.descriptor_sets[self.current_frame * 2 + 1]), &[],
+                    );
+                    let total_meshlets = *self.prefix_sum_data_buffer.last().unwrap_or(&0);
+                    #[repr(C)] struct PC { total_meshlets: u32, total_instances: u32, debug_cull: u32, phase: u32, screen_width: f32, screen_height: f32, lod_bias: f32, mip_count: f32 }
+                    let pc = PC {
+                        total_meshlets,
+                        total_instances: draw_count,
+                        debug_cull: if self.debug_cull { 1 } else { 0 },
+                        phase: 1, // Phase 2: Read occluded buffer and test against NEW HZB
+                        screen_width: self.offscreen_target.width as f32,
+                        screen_height: self.offscreen_target.height as f32,
+                        lod_bias: self.lod_bias,
+                        mip_count: self.hzb_target.as_ref().map(|hzb| hzb.mip_count as f32).unwrap_or(0.0),
+                    };
+                    self.vulkan.device.cmd_push_constants(
+                        cb, compute.layout, vk::ShaderStageFlags::COMPUTE, 0,
+                        std::slice::from_raw_parts(&pc as *const _ as *const u8, 32),
+                    );
+                    if total_meshlets > 0 {
+                        // self.vulkan.device.cmd_dispatch(cb, (total_meshlets + 63) / 64, 1, 1);
+                    }
+                    let draw_bar = vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
+                    self.vulkan.device.cmd_pipeline_barrier(
+                        cb, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::DRAW_INDIRECT,
+                        vk::DependencyFlags::empty(), std::slice::from_ref(&draw_bar), &[], &[],
+                    );
+                });
+            }
+        }
+
+        // --- Phase 2 Rendering ---
+        graph.add_pass("Scene_Phase2", vec![
+            crate::renderer::vulkan::render_graph::PassResource {
+                handle: ResourceHandle(self.offscreen_target.color_image),
+                state: ResourceState { layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE, aspect_mask: vk::ImageAspectFlags::COLOR },
+            },
+            crate::renderer::vulkan::render_graph::PassResource {
+                handle: ResourceHandle(self.offscreen_target.depth_image),
+                state: ResourceState { layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL, stage_mask: vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS, access_mask: vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE, aspect_mask: vk::ImageAspectFlags::DEPTH },
+            },
+        ], |cb| unsafe {
+            let color_att = vk::RenderingAttachmentInfoKHR::default()
+                .image_view(self.offscreen_target.color_view).image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD).store_op(vk::AttachmentStoreOp::STORE);
+            let depth_att = vk::RenderingAttachmentInfoKHR::default()
+                .image_view(self.offscreen_target.depth_view).image_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD).store_op(vk::AttachmentStoreOp::STORE);
+            let ri = vk::RenderingInfoKHR::default()
+                .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: self.offscreen_target.width, height: self.offscreen_target.height } })
+                .layer_count(1).color_attachments(std::slice::from_ref(&color_att)).depth_attachment(&depth_att);
+            self.vulkan.device.cmd_begin_rendering(cb, &ri);
+            if let Some(p) = &self.pipeline {
+                self.vulkan.device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, p.handle);
+                if self.descriptor_sets[self.current_frame] != vk::DescriptorSet::null() {
+                    self.vulkan.device.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::GRAPHICS, p.layout, 0, std::slice::from_ref(&self.descriptor_sets[self.current_frame]), &[]);
+                }
+            }
+            let vp = vk::Viewport { x: 0.0, y: 0.0, width: self.offscreen_target.width as f32, height: self.offscreen_target.height as f32, min_depth: 0.0, max_depth: 1.0 };
+            self.vulkan.device.cmd_set_viewport(cb, 0, std::slice::from_ref(&vp));
+            let sc = vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: self.offscreen_target.width, height: self.offscreen_target.height } };
+            self.vulkan.device.cmd_set_scissor(cb, 0, std::slice::from_ref(&sc));
+            self.vulkan.device.cmd_bind_vertex_buffers(cb, 0, &[self.geometry_pool.vertex_buffer.handle], &[0]);
+            self.vulkan.device.cmd_bind_index_buffer(cb, self.geometry_pool.index_buffer.handle, 0, vk::IndexType::UINT32);
+            if self.global_texture_descriptor_sets[0] != vk::DescriptorSet::null() {
+                self.vulkan.device.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::GRAPHICS, self.pipeline.as_ref().unwrap().layout, 1, std::slice::from_ref(&self.global_texture_descriptor_sets[0]), &[]);
+            }
+            self.vulkan.device.cmd_draw_indexed_indirect_count(
+                cb, self.indirect_buffers_phase2[self.current_frame].handle, 0,
+                self.draw_count_buffers_phase2[self.current_frame].handle, 0, 100_000,
+                std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+            );
+            self.vulkan.device.cmd_end_rendering(cb);
+        });
 
         self.post_process.add_passes(
             &mut graph, &self.vulkan, &self.offscreen_target, &self.sdr_target,
@@ -1402,6 +1540,10 @@ impl RenderBackend {
             },
         );
         graph.execute(&self.vulkan, cmd, &mut self.resource_tracker);
+
+        if self.hzb_target.is_some() {
+            self.hzb_frame_count = self.hzb_frame_count.saturating_add(1);
+        }
 
         // Present barrier
         unsafe {
@@ -1476,11 +1618,11 @@ impl Drop for RenderBackend {
             if self.ubo_memory != vk::DeviceMemory::null() { self.vulkan.device.free_memory(self.ubo_memory, None); }
             self.anim_bone_matrices_buffer.shutdown(&self.vulkan);
             for i in 0..2 {
-        for b in &mut self.instance_buffers { b.shutdown(&self.vulkan); }
-        for b in &mut self.prefix_sum_buffers { b.shutdown(&self.vulkan); }
-        for b in &mut self.anim_data_buffers { b.shutdown(&self.vulkan); }
-                self.draw_count_buffers[i].shutdown(&self.vulkan);
+                self.instance_buffers[i].shutdown(&self.vulkan);
                 self.prefix_sum_buffers[i].shutdown(&self.vulkan);
+                self.anim_data_buffers[i].shutdown(&self.vulkan);
+                self.draw_count_buffers[i].shutdown(&self.vulkan);
+                self.indirect_buffers[i].shutdown(&self.vulkan);
             }
 
             // HZB

@@ -1,4 +1,4 @@
-use ash::vk;
+use ash::vk::{self, Handle};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResourceHandle(pub vk::Image);
@@ -141,30 +141,51 @@ impl<'a> RenderGraph<'a> {
                     || current_state.access_mask != required.state.access_mask
                     || current_state.stage_mask != required.state.stage_mask
                 {
-                    let barrier = vk::ImageMemoryBarrier::default()
-                        .src_access_mask(current_state.access_mask)
-                        .dst_access_mask(required.state.access_mask)
-                        .old_layout(current_state.layout)
-                        .new_layout(required.state.layout)
-                        .image(required.handle.0)
-                        .subresource_range(vk::ImageSubresourceRange {
-                            aspect_mask: required.state.aspect_mask,
-                            base_mip_level: 0,
-                            level_count: 1,
-                            base_array_layer: 0,
-                            layer_count: 1,
-                        });
+                    if required.state.aspect_mask.is_empty() {
+                        let barrier = vk::BufferMemoryBarrier::default()
+                            .src_access_mask(current_state.access_mask)
+                            .dst_access_mask(required.state.access_mask)
+                            .buffer(vk::Buffer::from_raw(required.handle.0.as_raw()))
+                            .offset(0)
+                            .size(vk::WHOLE_SIZE);
 
-                    unsafe {
-                        vulkan.device.cmd_pipeline_barrier(
-                            command_buffer,
-                            current_state.stage_mask,
-                            required.state.stage_mask,
-                            vk::DependencyFlags::empty(),
-                            &[],
-                            &[],
-                            std::slice::from_ref(&barrier),
-                        );
+                        unsafe {
+                            vulkan.device.cmd_pipeline_barrier(
+                                command_buffer,
+                                current_state.stage_mask,
+                                required.state.stage_mask,
+                                vk::DependencyFlags::empty(),
+                                &[],
+                                std::slice::from_ref(&barrier),
+                                &[],
+                            );
+                        }
+                    } else {
+                        let barrier = vk::ImageMemoryBarrier::default()
+                            .src_access_mask(current_state.access_mask)
+                            .dst_access_mask(required.state.access_mask)
+                            .old_layout(current_state.layout)
+                            .new_layout(required.state.layout)
+                            .image(required.handle.0)
+                            .subresource_range(vk::ImageSubresourceRange {
+                                aspect_mask: required.state.aspect_mask,
+                                base_mip_level: 0,
+                                level_count: 1,
+                                base_array_layer: 0,
+                                layer_count: 1,
+                            });
+
+                        unsafe {
+                            vulkan.device.cmd_pipeline_barrier(
+                                command_buffer,
+                                current_state.stage_mask,
+                                required.state.stage_mask,
+                                vk::DependencyFlags::empty(),
+                                &[],
+                                &[],
+                                std::slice::from_ref(&barrier),
+                            );
+                        }
                     }
 
                     // Update tracker
