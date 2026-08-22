@@ -947,7 +947,7 @@ impl RenderBackend {
         );
         // Recreate HZB at new resolution
         if let Some(mut old_hzb) = self.hzb_target.take() { old_hzb.shutdown(&self.vulkan); }
-        self.hzb_target = HzbTarget::new(&self.vulkan, tw, th, &crate::vfs::Vfs::new("."), self.offscreen_target.depth_view, self.depth_copy_sampler);
+        self.hzb_target = HzbTarget::new(&self.vulkan, tw, th, &crate::vfs::Vfs::new("."), self.depth_copy_sampler);
         self.hzb_frame_count = 0;
 
         if let Some(hzb) = &self.hzb_target {
