@@ -14,6 +14,7 @@ struct PointLight {
 
 layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 viewProj;
+    mat4 prevViewProj;
     mat4 view;
     mat4 proj;
     mat4 inverseProj;

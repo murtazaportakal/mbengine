@@ -4,20 +4,28 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VfsMode {
+    Filesystem,
+    Pak,
+}
+
 #[derive(Clone, Debug)]
 pub struct PakEntry {
     pub offset: u64,
     pub size: u64,
 }
 
+#[allow(dead_code)]
 pub struct VfsInner {
+    mode: VfsMode,
     pak_file: Option<Mutex<File>>,
     toc: HashMap<String, PakEntry>,
 }
 
 /// Virtual File System for loading assets.
 /// In debug builds, this maps directly to the physical hard drive.
-/// In release builds, this maps to a packed `assets.pak` file if present.
+/// In release builds, this maps to a packed `data.pak` file if present.
 #[derive(Clone)]
 pub struct Vfs {
     root_dir: PathBuf,
@@ -27,12 +35,20 @@ pub struct Vfs {
 impl Vfs {
     pub fn new(root_dir: impl AsRef<Path>) -> Self {
         let root_dir = root_dir.as_ref().to_path_buf();
-        let pak_path = root_dir.join("assets.pak");
+        let pak_path = root_dir.join("data.pak");
 
         let mut pak_file_opt = None;
         let mut toc = HashMap::new();
+        #[allow(unused_assignments)]
+        let mut mode = VfsMode::Filesystem;
+
+        #[cfg(feature = "standalone")]
+        {
+            mode = VfsMode::Pak;
+        }
 
         if pak_path.exists() {
+            mode = VfsMode::Pak;
             if let Ok(mut f) = File::open(&pak_path) {
                 // Read magic
                 let mut magic = [0u8; 4];
@@ -77,6 +93,7 @@ impl Vfs {
         Self {
             root_dir,
             inner: Arc::new(VfsInner {
+                mode,
                 pak_file: pak_file_opt,
                 toc,
             }),

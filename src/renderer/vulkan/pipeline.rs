@@ -17,6 +17,7 @@ pub struct PointLight {
 #[derive(Clone, Copy, Debug)]
 pub struct GlobalUbo {
     pub view_proj: crate::math::mat4::Mat4,
+    pub prev_view_proj: crate::math::mat4::Mat4,
     pub view: crate::math::mat4::Mat4,
     pub proj: crate::math::mat4::Mat4,
     pub inverse_proj: crate::math::mat4::Mat4,

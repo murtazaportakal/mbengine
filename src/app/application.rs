@@ -83,15 +83,15 @@ impl Application {
 
         // If the OS resized the window during creation, recreate the
         // swapchain now so the first frame's acquire_next_image succeeds.
-        if window.width as u32 != render.swapchain.extent.width
-            || window.height as u32 != render.swapchain.extent.height
+        if window.width != render.swapchain.extent.width
+            || window.height != render.swapchain.extent.height
         {
             render.recreate_swapchain(&mut window, &mut input);
         }
 
 
 
-        if render.pipeline.is_none() {
+        if render.scene_pass.is_none() {
             crate::log_info!("Shaders not found or failed to compile. Rendering will be skipped.");
         }
 
@@ -210,6 +210,10 @@ impl Application {
                         reloader.call_game_update(&mut self.world, &mut self.physics, dt as f32);
                     }
                 }
+                #[cfg(feature = "standalone")]
+                {
+                    crate::game_logic::game_update(&mut self.world, &mut self.physics, dt as f32);
+                }
                 use crate::ecs::System;
                 self.audio_system.update(dt as f32, &self.world);
                 crate::ecs::animation_system::process_animations(
@@ -243,7 +247,7 @@ impl Application {
                     let ar = self.render.offscreen_target.width as f32
                         / self.render.offscreen_target.height as f32;
                     proj_mat = crate::math::mat4::Mat4::perspective(
-                        std::f32::consts::FRAC_PI_4, ar, 0.1, 100.0,
+                        std::f32::consts::FRAC_PI_4, ar, 0.1, 10000.0,
                     );
                 }
             }
@@ -400,18 +404,18 @@ impl Application {
                             if !group_indices.is_empty() {
                                 mesh_indices = Some(group_indices);
                             }
-                        } else if path_obj.extension().map_or(false, |ext| ext == "gltf" || ext == "glb") {
+                        } else if path_obj.extension().is_some_and(|ext| ext == "gltf" || ext == "glb") {
                             crate::log_info!("[SpawnModel] Loading GLTF: {}", path_obj.display());
                             mesh_indices = Some(self.asset_manager.load_gltf(&self.render.vulkan, &mut self.render.geometry_pool, &name, path_str).unwrap_or(&[]).to_vec());
-                        } else if path_obj.extension().map_or(false, |ext| ext == "obj") {
+                        } else if path_obj.extension().is_some_and(|ext| ext == "obj") {
                             crate::log_info!("[SpawnModel] Loading OBJ: {}", path_obj.display());
                             mesh_indices = Some(self.asset_manager.load_model(&self.render.vulkan, &mut self.render.geometry_pool, path_str).unwrap_or(&[]).to_vec());
-                        } else if path_obj.extension().map_or(false, |ext| ext == "mesh") {
+                        } else if path_obj.extension().is_some_and(|ext| ext == "mesh") {
                             crate::log_info!("[SpawnModel] Loading Cooked Mesh: {}", path_obj.display());
                             if let Some(idx) = self.asset_manager.load_cooked_mesh(&self.render.vulkan, &mut self.render.geometry_pool, path_str) {
                                 mesh_indices = Some(vec![idx]);
                             }
-                        } else if path_obj.extension().map_or(false, |ext| ext == "mat") {
+                        } else if path_obj.extension().is_some_and(|ext| ext == "mat") {
                             crate::log_info!("[SpawnModel] Loading Material: {}", path_obj.display());
                             self.asset_manager.load_cooked_material(&self.render.vulkan, &name, path_str);
                             if let Some(entity) = self.selected_entity {
@@ -432,16 +436,16 @@ impl Application {
                                         let mut mr_idx = 0;
                                         let mut emissive_idx = 0;
                                         if let Some(tex) = &mat.albedo_texture {
-                                            albedo_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0) as u32;
+                                            albedo_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0);
                                         }
                                         if let Some(tex) = &mat.normal_texture {
-                                            normal_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0) as u32;
+                                            normal_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0);
                                         }
                                         if let Some(tex) = &mat.mr_texture {
-                                            mr_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0) as u32;
+                                            mr_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0);
                                         }
                                         if let Some(tex) = &mat.emissive_texture {
-                                            emissive_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0) as u32;
+                                            emissive_idx = self.asset_manager.texture_indices.get(tex).copied().unwrap_or(0);
                                         }
                                         
                                         if let Some(mesh) = self.asset_manager.get_mesh_mut(mesh_idx) {
@@ -494,10 +498,13 @@ impl Application {
                         let new_entity = self.world.create_entity();
 
                         crate::log_info!("[SpawnModel] mesh_indices={:?}", mesh_indices);
+                        
+                        let skeleton_name = name.clone();
+                        let has_skeleton = self.asset_manager.get_skeleton(&skeleton_name).is_some();
 
                         // Bindless texture update
                         {
-                            let bs = self.render.global_texture_descriptor_sets[0];
+                            let bs = self.render.scene_pass.as_ref().unwrap().global_texture_descriptor_sets[0];
                             if bs != vk::DescriptorSet::null() {
                                 let mut image_infos: Vec<vk::DescriptorImageInfo> = Vec::new();
                                 let mut entries: Vec<(u32, usize)> = Vec::new();
@@ -562,6 +569,25 @@ impl Application {
                                     self.world.add_component(new_entity, RenderComponent {
                                         visible: true, mesh_index, metallic, roughness, r, g, b,
                                     });
+                                    if has_skeleton {
+                                        self.world.add_component(new_entity, crate::ecs::components::SkeletonComponent {
+                                            skeleton_name: crate::containers::FixedString::try_from_str(&skeleton_name).unwrap(),
+                                            skinning_instance_index: None,
+                                            computed_matrices: crate::containers::FixedArray::new(),
+                                        });
+                                        self.world.add_component(new_entity, crate::ecs::components::AnimatorComponent {
+                                            state: crate::ecs::components::AnimationState::Clip { clip_handle: 0 },
+                                            current_time: 0.0,
+                                            target_state: None,
+                                            transition_time: 0.0,
+                                            crossfade_current: 0.0,
+                                            crossfade_duration: 0.0,
+                                            speed: 1.0,
+                                            is_playing: false,
+                                            is_looping: true,
+                                            state_machine: None,
+                                        });
+                                    }
                                 }
                             } else {
                                 for &mesh_index in &indices {
@@ -582,6 +608,7 @@ impl Application {
                                             r = mesh.default_color[0];
                                             g = mesh.default_color[1];
                                             b = mesh.default_color[2];
+
                                             let hx = (mesh.aabb_max[0]-mesh.aabb_min[0]).abs()*0.5;
                                             let hy = (mesh.aabb_max[1]-mesh.aabb_min[1]).abs()*0.5;
                                             let hz = (mesh.aabb_max[2]-mesh.aabb_min[2]).abs()*0.5;
@@ -594,6 +621,25 @@ impl Application {
                                         self.world.add_component(child, RenderComponent {
                                             visible: true, mesh_index, metallic, roughness, r, g, b,
                                         });
+                                        if has_skeleton {
+                                            self.world.add_component(child, crate::ecs::components::SkeletonComponent {
+                                                skeleton_name: crate::containers::FixedString::try_from_str(&skeleton_name).unwrap(),
+                                                skinning_instance_index: None,
+                                                computed_matrices: crate::containers::FixedArray::new(),
+                                            });
+                                            self.world.add_component(child, crate::ecs::components::AnimatorComponent {
+                                                state: crate::ecs::components::AnimationState::Clip { clip_handle: 0 },
+                                                current_time: 0.0,
+                                                target_state: None,
+                                                transition_time: 0.0,
+                                                crossfade_current: 0.0,
+                                                crossfade_duration: 0.0,
+                                                speed: 1.0,
+                                                is_playing: false,
+                                                is_looping: true,
+                                                state_machine: None,
+                                            });
+                                        }
                                         self.world.add_component(child, HierarchyComponent {
                                             parent: Some(new_entity), local_matrix: crate::math::mat4::Mat4::identity(),
                                         });
@@ -618,45 +664,27 @@ impl Application {
             }
             if shader_changed {
                 unsafe { self.render.vulkan.device.device_wait_idle().unwrap(); }
-                if let Some(mut old) = self.render.pipeline.take() { old.shutdown(&self.render.vulkan); }
-                self.render.pipeline = crate::renderer::vulkan::Pipeline::new(
-                    &self.render.vulkan, vk::Format::R16G16B16A16_SFLOAT, &self.asset_manager.vfs,
-                    "shaders/vert.spv", "shaders/frag.spv",
-                );
-                if let Some(pipe) = &self.render.pipeline {
-                    unsafe { self.render.vulkan.device.reset_descriptor_pool(self.render.descriptor_pool, vk::DescriptorPoolResetFlags::empty()).unwrap(); }
-                    let layouts = [pipe.descriptor_set_layout, pipe.descriptor_set_layout];
-                    let alloc = vk::DescriptorSetAllocateInfo::default()
-                        .descriptor_pool(self.render.descriptor_pool).set_layouts(&layouts);
-                    if let Ok(sets) = unsafe { self.render.vulkan.device.allocate_descriptor_sets(&alloc) } {
-                        self.render.descriptor_sets = [sets[0], sets[1]];
+                if let Some(sp) = &mut self.render.scene_pass {
+                    if sp.reload_shaders(&self.render.vulkan, &self.asset_manager) {
                         for i in 0..2 {
                             let ubo_size = std::mem::size_of::<crate::renderer::vulkan::pipeline::GlobalUbo>() as u64;
-                            let ubo_info = vk::DescriptorBufferInfo::default().buffer(self.render.ubo_buffer).offset(0).range(ubo_size);
+                            let ubo_info = vk::DescriptorBufferInfo::default().buffer(self.render.ubo_buffers[i]).offset(0).range(ubo_size);
                             let env = vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).image_view(self.asset_manager.get_texture("env_default").unwrap().view).sampler(self.asset_manager.get_texture("env_default").unwrap().sampler);
                             let shd = vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).image_view(self.asset_manager.get_texture("shadow_default").unwrap().view).sampler(self.asset_manager.get_texture("shadow_default").unwrap().sampler);
                             let ib = vk::DescriptorBufferInfo::default().buffer(self.render.instance_buffers[i].handle).offset(0).range(vk::WHOLE_SIZE);
                             let writes = [
-                                vk::WriteDescriptorSet::default().dst_set(self.render.descriptor_sets[i]).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(std::slice::from_ref(&ubo_info)),
-                                vk::WriteDescriptorSet::default().dst_set(self.render.descriptor_sets[i]).dst_binding(1).descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).image_info(std::slice::from_ref(&env)),
-                                vk::WriteDescriptorSet::default().dst_set(self.render.descriptor_sets[i]).dst_binding(2).descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).image_info(std::slice::from_ref(&shd)),
-                                vk::WriteDescriptorSet::default().dst_set(self.render.descriptor_sets[i]).dst_binding(3).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&ib)),
+                                vk::WriteDescriptorSet::default().dst_set(sp.descriptor_sets[i]).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(std::slice::from_ref(&ubo_info)),
+                                vk::WriteDescriptorSet::default().dst_set(sp.descriptor_sets[i]).dst_binding(1).descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).image_info(std::slice::from_ref(&env)),
+                                vk::WriteDescriptorSet::default().dst_set(sp.descriptor_sets[i]).dst_binding(2).descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).image_info(std::slice::from_ref(&shd)),
+                                vk::WriteDescriptorSet::default().dst_set(sp.descriptor_sets[i]).dst_binding(3).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&ib)),
                             ];
                             unsafe { self.render.vulkan.device.update_descriptor_sets(&writes, &[]); }
                         }
                     }
-                    for set in self.render.material_descriptor_sets.iter_mut() { *set = None; }
                 }
             }
 
-            // Grow per-mesh descriptor slots when new meshes are loaded
-            let mesh_count = self.asset_manager.meshes.len();
-            if self.render.material_descriptor_sets.len() < mesh_count {
-                self.render.material_descriptor_sets.resize(mesh_count, None);
-            }
-            if self.render.compute_descriptor_sets.len() < mesh_count {
-                self.render.compute_descriptor_sets.resize(mesh_count, None);
-            }
+            // Mesh descriptors removed since we don't use them anymore
 
             // Viewport resize (editor only — standalone uses full swapchain)
             #[cfg(feature = "editor")]

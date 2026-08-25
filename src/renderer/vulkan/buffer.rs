@@ -29,9 +29,17 @@ impl Buffer {
         let memory_type_index =
             vulkan.find_memory_type(mem_requirements.memory_type_bits, properties)?;
 
-        let alloc_info = vk::MemoryAllocateInfo::default()
+        let needs_device_address = usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+        let mut flags_info = vk::MemoryAllocateFlagsInfo::default()
+            .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+
+        let mut alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(mem_requirements.size)
             .memory_type_index(memory_type_index);
+
+        if needs_device_address {
+            alloc_info = alloc_info.push_next(&mut flags_info);
+        }
 
         let memory = unsafe { vulkan.device.allocate_memory(&alloc_info, None).ok()? };
 

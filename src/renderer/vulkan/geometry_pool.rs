@@ -263,7 +263,7 @@ impl GeometryPool {
                         std::ptr::copy_nonoverlapping(
                             vertices.as_ptr() as *const u8,
                             v_ptr,
-                            vertices.len() * std::mem::size_of::<Vertex>(),
+                            std::mem::size_of_val(vertices),
                         );
                     }
                 }
@@ -272,7 +272,7 @@ impl GeometryPool {
                         std::ptr::copy_nonoverlapping(
                             indices.as_ptr() as *const u8,
                             i_ptr,
-                            indices.len() * std::mem::size_of::<u32>(),
+                            std::mem::size_of_val(indices),
                         );
                     }
                 }
@@ -281,7 +281,7 @@ impl GeometryPool {
                         std::ptr::copy_nonoverlapping(
                             meshlets.as_ptr() as *const u8,
                             m_ptr,
-                            meshlets.len() * std::mem::size_of::<MeshletData>(),
+                            std::mem::size_of_val(meshlets),
                         );
                     }
                 }

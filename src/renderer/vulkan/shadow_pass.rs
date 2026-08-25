@@ -268,6 +268,46 @@ impl ShadowPass {
 
         unsafe { vulkan.device.destroy_shader_module(vert_module, None); }
 
+        // Transition shadow image to SHADER_READ_ONLY_OPTIMAL so the first frame
+        // can safely sample it even before the shadow pass has rendered.
+        unsafe {
+            let cmd_alloc = vk::CommandBufferAllocateInfo::default()
+                .command_pool(vulkan.command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+            let cmd = vulkan.device.allocate_command_buffers(&cmd_alloc).ok()?[0];
+            let begin = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            vulkan.device.begin_command_buffer(cmd, &begin).ok()?;
+            let barrier = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(shadow_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::DEPTH,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+            vulkan.device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[], &[], std::slice::from_ref(&barrier),
+            );
+            vulkan.device.end_command_buffer(cmd).ok()?;
+            let si = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+            vulkan.device.queue_submit(vulkan.graphics_queue, std::slice::from_ref(&si), vk::Fence::null()).ok()?;
+            vulkan.device.queue_wait_idle(vulkan.graphics_queue).ok()?;
+            vulkan.device.free_command_buffers(vulkan.command_pool, std::slice::from_ref(&cmd));
+        }
+
         Some(Self {
             shadow_image,
             shadow_view,

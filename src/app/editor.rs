@@ -179,23 +179,7 @@ impl Editor {
         if ButtonBuilder::new(ui_ctx, 4).text("Profiler").style(profiler_style).build() {
             self.active_tab = EditorTab::Profiler;
         }
-        if ButtonBuilder::new(ui_ctx, 11)
-            .text("Import Model")
-            .style(&SLATE_BASE)
-            .build()
-        {
-            if let Some(tx) = &self.file_dialog_sender {
-                let tx = tx.clone();
-                std::thread::spawn(move || {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Models", &["obj", "gltf", "glb"])
-                        .pick_file()
-                    {
-                        let _ = tx.send(path.to_string_lossy().to_string());
-                    }
-                });
-            }
-        }
+
         
 static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -209,8 +193,7 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
             .text(cook_text)
             .style(&SLATE_BASE)
             .build()
-        {
-            if !IS_COOKING.load(std::sync::atomic::Ordering::SeqCst) {
+            && !IS_COOKING.load(std::sync::atomic::Ordering::SeqCst) {
                 std::thread::spawn(move || {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Raw Models", &["gltf", "glb"])
@@ -247,7 +230,6 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
                     }
                 });
             }
-        }
         
         if ButtonBuilder::new(ui_ctx, 13)
             .text("Debug Meshlets")

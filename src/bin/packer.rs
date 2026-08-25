@@ -6,7 +6,7 @@ fn main() -> std::io::Result<()> {
     println!("Starting VFS Packer...");
 
     let root_dir = PathBuf::from(".");
-    let pak_path = root_dir.join("assets.pak");
+    let pak_path = root_dir.join("data.pak");
 
     let mut out_file = File::create(&pak_path)?;
 
@@ -67,7 +67,7 @@ fn main() -> std::io::Result<()> {
         total_size += buffer.len();
     }
 
-    println!("Packed {} bytes into assets.pak successfully!", total_size);
+    println!("Packed {} bytes into data.pak successfully!", total_size);
 
     Ok(())
 }
@@ -84,12 +84,16 @@ fn collect_files(
             if path.is_dir() {
                 collect_files(&path, files, root)?;
             } else {
-                let relative_path = path
-                    .strip_prefix(root)
-                    .unwrap()
-                    .to_string_lossy()
-                    .replace("\\", "/");
-                files.push((relative_path, path));
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                // Only pack cooked files, shaders, fonts, and audio. Skip raw assets.
+                if ["mesh", "mat", "anim", "spv", "tex", "ttf", "ogg", "wav", "rhai"].contains(&ext) {
+                    let relative_path = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace("\\", "/");
+                    files.push((relative_path, path));
+                }
             }
         }
     }

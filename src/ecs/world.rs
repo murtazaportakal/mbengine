@@ -203,16 +203,16 @@ impl World {
         let fixed_name = FixedString::<64>::try_from_str(name).unwrap_or_default();
 
         if self.has_component::<crate::ecs::components::NameComponent>(id) {
-            let old_name = unsafe { self.get_component_array::<crate::ecs::components::NameComponent>().get(id).name.clone() };
+            let old_name = unsafe { self.get_component_array::<crate::ecs::components::NameComponent>().get(id).name };
             if !old_name.is_empty() {
                 unsafe { (*self.name_to_id).remove(&old_name); }
             }
             unsafe {
-                self.get_component_mut::<crate::ecs::components::NameComponent>(id).name = fixed_name.clone();
+                self.get_component_mut::<crate::ecs::components::NameComponent>(id).name = fixed_name;
             }
         } else {
             unsafe {
-                self.add_component(id, crate::ecs::components::NameComponent { name: fixed_name.clone() });
+                self.add_component(id, crate::ecs::components::NameComponent { name: fixed_name });
             }
         }
 

@@ -750,7 +750,7 @@ fn write_anim(skel: &RawSkeleton, path: &Path) -> std::io::Result<()> {
         let bh = BoneHeader {
             inverse_bind_matrix: bone.inverse_bind_matrix,
             parent_index: bone.parent_index,
-            name_len: bone.name.as_bytes().len() as u32,
+            name_len: bone.name.len() as u32,
         };
         w.write_all(bytemuck::bytes_of(&bh))?;
         write_str(&bone.name, &mut w)?;
@@ -759,7 +759,7 @@ fn write_anim(skel: &RawSkeleton, path: &Path) -> std::io::Result<()> {
     // Clips
     for clip in &skel.clips {
         let ch = ClipHeader {
-            name_len: clip.name.as_bytes().len() as u32,
+            name_len: clip.name.len() as u32,
             duration: clip.duration,
             channel_count: clip.channels.len() as u32,
         };
@@ -1003,7 +1003,7 @@ fn cook_texture(in_path: &Path, out_path: &Path, _is_srgb: bool) -> std::io::Res
     
     // Load image
     let img = image::open(in_path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
     
     let rgba8 = img.into_rgba8();
     let (width, height) = rgba8.dimensions();

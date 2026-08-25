@@ -16,6 +16,19 @@ fn main() {
     println!("cargo:rerun-if-changed=shaders/cull.comp");
     println!("cargo:rerun-if-changed=shaders/generate_hzb.comp");
     println!("cargo:rerun-if-changed=shaders/copy_depth.frag");
+    println!("cargo:rerun-if-changed=game/src/lib.rs");
+
+    // Generate static game logic for standalone feature
+    if let Ok(game_src) = std::fs::read_to_string("game/src/lib.rs") {
+        let game_static = game_src
+            .replace("engine::", "crate::")
+            .replace("#[no_mangle]", "");
+        if let Ok(out_dir) = env::var("OUT_DIR") {
+            let out_path = PathBuf::from(out_dir).join("game_logic.rs");
+            std::fs::write(out_path, game_static).unwrap_or(());
+        }
+    }
+
     // First try local glslangValidator
     let local_compiler = PathBuf::from("glslang")
         .join("bin")

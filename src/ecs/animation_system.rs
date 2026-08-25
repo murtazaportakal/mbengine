@@ -91,7 +91,7 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
                     sm2.states.as_slice()
                         .iter()
                         .find(|(_, s)| std::ptr::eq(s, target_state))
-                        .map(|(n, _)| n.clone())
+                        .map(|(n, _)| *n)
                 };
                 animator.crossfade_to(new_state, dur);
                 if let (Some(sm2), Some(name)) = (animator.state_machine.as_mut(), new_name) {

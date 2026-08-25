@@ -238,14 +238,13 @@ impl AssetManager {
     /// Provides a fallback checkerboard texture if requested
     pub fn load_checkerboard(&mut self, vulkan: &VulkanDevice, name: &str) -> Option<&Texture> {
         if !self.textures.contains_key(name) {
-            if let Some(tex) = Texture::new_checkerboard(vulkan) {
+            {
+                let tex = Texture::new_checkerboard(vulkan)?;
                 let idx = self.next_texture_index;
                 self.next_texture_index += 1;
                 self.texture_indices.insert(name.to_string(), idx);
                 self.new_textures_since_last_frame.push(name.to_string());
                 self.textures.insert(name.to_string(), tex);
-            } else {
-                return None;
             }
         }
         self.textures.get(name)
@@ -324,8 +323,8 @@ impl AssetManager {
             normal_texture: None,
             mr_texture: None,
             emissive_texture: None,
-            diffuse_texture_idx: self.get_texture_index("default_white").unwrap_or(0) as u32,
-            normal_texture_idx: self.get_texture_index("default_normal").unwrap_or(0) as u32,
+            diffuse_texture_idx: self.get_texture_index("default_white").unwrap_or(0),
+            normal_texture_idx: self.get_texture_index("default_normal").unwrap_or(0),
             mr_texture_idx: 0,
             emissive_texture_idx: 0,
         };
@@ -341,16 +340,16 @@ impl AssetManager {
                 mesh.metallic = mat.metallic_factor;
                 mesh.roughness = mat.roughness_factor;
                 if let Some(t) = &mat.albedo_texture {
-                    mesh.diffuse_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0) as u32;
+                    mesh.diffuse_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0);
                 }
                 if let Some(t) = &mat.normal_texture {
-                    mesh.normal_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0) as u32;
+                    mesh.normal_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0);
                 }
                 if let Some(t) = &mat.mr_texture {
-                    mesh.mr_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0) as u32;
+                    mesh.mr_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0);
                 }
                 if let Some(t) = &mat.emissive_texture {
-                    mesh.emissive_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0) as u32;
+                    mesh.emissive_texture_idx = self.texture_indices.get(t).copied().unwrap_or(0);
                 }
             }
         }
@@ -430,7 +429,7 @@ impl AssetManager {
                         mesh.aabb_max[0], mesh.aabb_max[1], mesh.aabb_max[2]);
                     
                     if mesh.diffuse_texture.is_none() {
-                        mesh.diffuse_texture_idx = self.get_texture_index("default_white").unwrap_or(0) as u32;
+                        mesh.diffuse_texture_idx = self.get_texture_index("default_white").unwrap_or(0);
                     }
 
                     if let Some(tex_name) = &mesh.diffuse_texture {
@@ -917,7 +916,7 @@ impl AssetManager {
     }
 
     pub fn shutdown(&mut self, vulkan: &VulkanDevice) {
-        for (_, tex) in self.textures.iter_mut() {
+        for tex in self.textures.values_mut() {
             tex.shutdown(vulkan);
         }
         self.textures.clear();

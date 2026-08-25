@@ -40,6 +40,7 @@ editor = []
 standalone = []
 
 [profile.dev]
+opt-level = 1
 overflow-checks = true
 # Maximize parallelism for fast incremental compilation
 codegen-units = 256

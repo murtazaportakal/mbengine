@@ -85,12 +85,9 @@ impl ComputeCullPipeline {
                 .create_descriptor_set_layout(&layout_info, None)
                 .ok()?
         };
-
         let push_constant_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            // totalMeshlets(4) + totalInstances(4) + debugCull(4) + pad2(4)
-            // + screenWidth(4) + screenHeight(4) + lodBias(4) + hzbEnabled(4) = 32 bytes
             .size(32);
 
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
@@ -281,7 +278,7 @@ impl ComputeCullPipeline {
         if hzb_view == vk::ImageView::null() || descriptor_set == vk::DescriptorSet::null() { return; }
         let image_info = vk::DescriptorImageInfo::default()
             .image_view(hzb_view)
-            .image_layout(vk::ImageLayout::GENERAL)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .sampler(hzb_sampler);
         let write = vk::WriteDescriptorSet::default()
             .dst_set(descriptor_set)

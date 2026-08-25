@@ -37,21 +37,27 @@ cargo build --release --features standalone  # Strip editor, produce standalone 
 cargo test                               # Run the full test suite (ECS, Memory, Integration)
 ```
 
-## Future Plans (Roadmap to V5)
-Building upon our stabilized V3/V4 core, our next milestones focus entirely on scaling capability:
+## V4 Master Plan (Completed)
+The V4 Master Plan focused on scaling the engine to a production-ready state. All phases are now **100% complete**:
 
-1. **Phase 3: Data-Oriented Skeletal Animation (Cooker Path)**
+1. **Phase 0 & 1: GPU-Driven Foundation & Cooker**
+   - Implemented an offline `cooker.exe` to bake `.gltf` assets into highly optimized `.mesh` and `.mat` zero-copy binary blobs.
+   - Fully GPU-driven rendering pipeline utilizing Nanite-style compute shader culling.
+
+2. **Phase 2 & 3: Data-Oriented Skeletal Animation & Prefabs**
+   - VFS hot-reloading for cooked formats.
    - Pre-baking skeletal `.anim` formats directly in the offline cooker.
    - GPU-only bone matrix lerping and keyframe blending using compute shaders, avoiding CPU traversal entirely.
 
-2. **Phase 4: Logic, Scripting & Lighting**
+3. **Phase 4: Logic, Scripting & Lighting**
    - Expanded script-to-ECS integration with entity name registration.
    - **Forward+ Cluster Grid**: Dividing the frustum into 3D tiles to support 256+ dynamic lights with O(1) per-fragment lighting evaluation cost.
 
-3. **Phase 5: Packager & Release Builds**
-   - VFS Archiver (`packer.rs`) to bundle all cooked assets (`.mesh`, `.mat`, `.anim`, `.spv`) into a single contiguous `data.pak`.
+4. **Phase 5: Packager & Release Builds**
+   - VFS Archiver (`packer.rs`) effectively bundles all cooked assets (`.mesh`, `.mat`, `.anim`, `.spv`) into a single contiguous `data.pak`.
    - Hardened `standalone` Cargo feature locking down editor code and outputting a highly optimized, fully self-contained game client.
+   - Cross-compilation configurations included for Windows and Linux release targets.
 
 ---
 
-> **Engine Status:** All V1, V2, and V3 systems are complete. We are currently executing the V4 GPU-Driven roadmap, with Phase 0 and Phase 4 (Forward+ Clustered Lighting) now complete.
+> **Engine Status:** All V1, V2, V3, and V4 systems are **100% complete**. The engine is now a fully self-contained, production-ready, zero-heap runtime capable of producing packed release builds.

@@ -148,7 +148,8 @@ impl VulkanDevice {
         let features = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(true)
             .multi_draw_indirect(true)
-            .draw_indirect_first_instance(true);
+            .draw_indirect_first_instance(true)
+            .shader_int64(true);
 
         let mut vulkan12_features = vk::PhysicalDeviceVulkan12Features::default()
             .draw_indirect_count(true)

@@ -306,8 +306,8 @@ impl ComputeClothPipeline {
         }
 
         for inst in instances {
-            let gx = (inst.grid_width  + 15) / 16;
-            let gy = (inst.grid_height + 15) / 16;
+            let gx = inst.grid_width.div_ceil(16);
+            let gy = inst.grid_height.div_ceil(16);
 
             let pc = ClothPushConstants {
                 grid_width:    inst.grid_width,

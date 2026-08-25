@@ -40,13 +40,13 @@ struct HzbParams {
 impl HzbTarget {
     pub fn new(
         vulkan: &VulkanDevice,
-        width: u32,
-        height: u32,
+        src_w: u32,
+        src_h: u32,
         vfs: &crate::vfs::Vfs,
         depth_sampler: vk::Sampler,
     ) -> Option<Self> {
-        let hzb_w = (width / 2).max(1);
-        let hzb_h = (height / 2).max(1);
+        let hzb_w = (src_w as f32 / 2.0).ceil() as u32;
+        let hzb_h = (src_h as f32 / 2.0).ceil() as u32;
         let mip_count = {
             let mut m = 1u32;
             let mut w = hzb_w;
@@ -168,10 +168,10 @@ impl HzbTarget {
         let alloc_info = vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(&layouts);
         let descriptor_sets = unsafe { vulkan.device.allocate_descriptor_sets(&alloc_info).unwrap() };
 
-        // Create Depth Copy Image (1920x1080 R32_SFLOAT)
+        // Create Depth Copy Image (src_w x src_h R32_SFLOAT)
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D { width: src_w, height: src_h, depth: 1 })
             .mip_levels(1)
             .array_layers(1)
             .format(vk::Format::R32_SFLOAT)
@@ -222,18 +222,18 @@ impl HzbTarget {
         // Staging buffer for D32 -> R32 copy
         let depth_staging_buffer = crate::renderer::vulkan::buffer::Buffer::new(
             vulkan,
-            (width * height * 16) as u64, // (1920x1080 * 4 bytes)
+            (src_w * src_h * 16) as u64, // (1920x1080 * 4 bytes)
             vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        Some(Self { image, image_memory, mip_views, full_view, sampler, mip_count, base_width: width, base_height: height, pipeline, copy_pipeline, depth_staging_buffer, depth_copy_image, depth_copy_memory, depth_copy_view, pipeline_layout, descriptor_set_layout, descriptor_sets, descriptor_pool, param_buffers, param_mapped })
+        Some(Self { image, image_memory, mip_views, full_view, sampler, mip_count, base_width: src_w, base_height: src_h, pipeline, copy_pipeline, depth_staging_buffer, depth_copy_image, depth_copy_memory, depth_copy_view, pipeline_layout, descriptor_set_layout, descriptor_sets, descriptor_pool, param_buffers, param_mapped })
     }
 
     pub fn initial_transition(&self, vulkan: &VulkanDevice, cmd: vk::CommandBuffer) {
         let barrier = vk::ImageMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::NONE).dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED).new_layout(vk::ImageLayout::GENERAL)
+            .src_access_mask(vk::AccessFlags::NONE).dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .old_layout(vk::ImageLayout::UNDEFINED).new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image(self.image)
             .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: self.mip_count, base_array_layer: 0, layer_count: 1 });
         let barrier2 = vk::ImageMemoryBarrier::default()
@@ -247,7 +247,7 @@ impl HzbTarget {
     pub fn generate(&self, vulkan: &VulkanDevice, cmd: vk::CommandBuffer, depth_image: vk::Image, depth_w: u32, depth_h: u32) {
         let barrier = vk::ImageMemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_READ).dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .old_layout(vk::ImageLayout::GENERAL).new_layout(vk::ImageLayout::GENERAL)
+            .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).new_layout(vk::ImageLayout::GENERAL)
             .image(self.image)
             .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: self.mip_count, base_array_layer: 0, layer_count: 1 });
         unsafe { vulkan.device.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&barrier)); }
@@ -315,7 +315,7 @@ impl HzbTarget {
                 unsafe {
                     vulkan.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline);
                     vulkan.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline_layout, 0, std::slice::from_ref(&self.descriptor_sets[0]), &[]);
-                    vulkan.device.cmd_dispatch(cmd, (dst_w + 7) / 8, (dst_h + 7) / 8, 1);
+                    vulkan.device.cmd_dispatch(cmd, dst_w.div_ceil(8), dst_h.div_ceil(8), 1);
                 }
 
                 // 7. Barrier for next mip
@@ -323,13 +323,13 @@ impl HzbTarget {
                     .src_access_mask(vk::AccessFlags::SHADER_WRITE).dst_access_mask(vk::AccessFlags::SHADER_READ)
                     .old_layout(vk::ImageLayout::GENERAL).new_layout(vk::ImageLayout::GENERAL)
                     .image(self.image)
-                    .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1 });
+                    .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: mip, level_count: 1, base_array_layer: 0, layer_count: 1 });
                 unsafe { vulkan.device.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&mip_barrier)); }
             } else {
                 unsafe {
                     vulkan.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline);
                     vulkan.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline_layout, 0, std::slice::from_ref(&self.descriptor_sets[mip as usize]), &[]);
-                    vulkan.device.cmd_dispatch(cmd, (dst_w + 7) / 8, (dst_h + 7) / 8, 1);
+                    vulkan.device.cmd_dispatch(cmd, dst_w.div_ceil(8), dst_h.div_ceil(8), 1);
                     
                     let mip_barrier = vk::ImageMemoryBarrier::default()
                         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -348,7 +348,7 @@ impl HzbTarget {
 
         let full_barrier = vk::ImageMemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE).dst_access_mask(vk::AccessFlags::SHADER_READ)
-            .old_layout(vk::ImageLayout::GENERAL).new_layout(vk::ImageLayout::GENERAL)
+            .old_layout(vk::ImageLayout::GENERAL).new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image(self.image)
             .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: self.mip_count, base_array_layer: 0, layer_count: 1 });
         unsafe { vulkan.device.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&full_barrier)); }
