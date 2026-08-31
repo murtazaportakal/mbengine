@@ -212,31 +212,78 @@ struct RawMaterial {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
+// ── Core Architecture ────────────────────────────────────────────────────────
+
+pub struct RawScene {
+    primitives: Vec<RawPrimitive>,
+    materials: Vec<RawMaterial>,
+    skeleton: Option<RawSkeleton>,
+}
+
+trait AssetImporter {
+    fn import(&self, path: &Path) -> Result<RawScene, String>;
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let (input_path, out_dir) = parse_args(&args).unwrap_or_else(|e| {
         eprintln!("Error: {}", e);
         eprintln!();
-        eprintln!("Usage: cooker <input.gltf|input.glb> [--out-dir <directory>]");
+        eprintln!("Usage: cooker <input.file> [--out-dir <directory>]");
         std::process::exit(1);
     });
 
     println!("[cooker] Input:   {}", input_path.display());
     println!("[cooker] Out dir: {}", out_dir.display());
 
-    // Parse the glTF file
-    let (primitives, mut materials, skeleton) = load_gltf(&input_path).unwrap_or_else(|e| {
-        eprintln!("[cooker] Failed to load glTF: {}", e);
-        std::process::exit(1);
-    });
+    let ext = input_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
 
-    if primitives.is_empty() {
+    match ext.as_str() {
+        "gltf" | "glb" => {
+            let importer = GltfImporter;
+            let scene = importer.import(&input_path).unwrap_or_else(|e| {
+                eprintln!("[cooker] Failed to load glTF: {}", e);
+                std::process::exit(1);
+            });
+            cook_scene(scene, &input_path, &out_dir);
+        }
+        "obj" => {
+            let importer = ObjImporter;
+            let scene = importer.import(&input_path).unwrap_or_else(|e| {
+                eprintln!("[cooker] Failed to load OBJ: {}", e);
+                std::process::exit(1);
+            });
+            cook_scene(scene, &input_path, &out_dir);
+        }
+        "png" | "jpg" | "tga" | "bmp" => {
+            let stem = input_path.file_stem().unwrap().to_string_lossy();
+            let out_tex = out_dir.join(format!("{}.tex", stem));
+            std::fs::create_dir_all(&out_dir).unwrap_or_else(|e| {
+                eprintln!("[cooker] Cannot create output directory '{}': {}", out_dir.display(), e);
+                std::process::exit(1);
+            });
+            cook_texture(&input_path, &out_tex, true).unwrap_or_else(|e| {
+                eprintln!("[cooker] Failed to cook texture: {}", e);
+                std::process::exit(1);
+            });
+            println!("[cooker] Done.");
+        }
+        _ => {
+            eprintln!("[cooker] Unsupported file type '{}'.", ext);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cook_scene(mut scene: RawScene, input_path: &Path, out_dir: &Path) {
+    if scene.primitives.is_empty() {
         eprintln!("[cooker] No mesh primitives found in '{}'.", input_path.display());
         std::process::exit(1);
     }
 
-    // Derive the base name for output files (e.g. "warrior" from "warrior.gltf")
     let stem = input_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -250,7 +297,7 @@ fn main() {
     let input_parent = input_path.parent().unwrap_or(Path::new(""));
 
     // Pre-cook all textures in materials
-    for mat in &mut materials {
+    for mat in &mut scene.materials {
         let process_tex = |tex_opt: &mut Option<String>, is_srgb: bool| {
             if let Some(tex) = tex_opt {
                 let in_tex_path = input_parent.join(&tex);
@@ -281,8 +328,8 @@ fn main() {
     }
 
     // Write one .mesh per primitive
-    for (i, prim) in primitives.iter().enumerate() {
-        let mesh_name = if primitives.len() == 1 {
+    for (i, prim) in scene.primitives.iter().enumerate() {
+        let mesh_name = if scene.primitives.len() == 1 {
             format!("{}.mesh", stem)
         } else {
             format!("{}_{}.mesh", stem, i)
@@ -304,8 +351,8 @@ fn main() {
 
         // Write matching .mat if this primitive has a material
         if let Some(mat_idx) = prim.material_index {
-            if let Some(mat) = materials.get(mat_idx) {
-                let mat_name = if primitives.len() == 1 {
+            if let Some(mat) = scene.materials.get(mat_idx) {
+                let mat_name = if scene.primitives.len() == 1 {
                     format!("{}.mat", stem)
                 } else {
                     format!("{}_{}.mat", stem, i)
@@ -323,7 +370,7 @@ fn main() {
         }
     }
 
-    if let Some(skel) = skeleton {
+    if let Some(skel) = scene.skeleton {
         let anim_name = format!("{}.anim", stem);
         let anim_path = out_dir.join(&anim_name);
         write_anim(&skel, &anim_path).unwrap_or_else(|e| {
@@ -345,20 +392,12 @@ fn main() {
 
 fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf), String> {
     if args.len() < 2 {
-        return Err("Missing required argument: <input.gltf>".to_string());
+        return Err("Missing required argument: <input.file>".to_string());
     }
 
     let input = PathBuf::from(&args[1]);
     if !input.exists() {
         return Err(format!("File not found: '{}'", input.display()));
-    }
-
-    let ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
-    if ext != "gltf" && ext != "glb" {
-        return Err(format!(
-            "Unsupported file type '{}'. Expected .gltf or .glb.",
-            ext
-        ));
     }
 
     // --out-dir flag
@@ -383,10 +422,128 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf), String> {
     Ok((input, out_dir))
 }
 
-// ── glTF loading ──────────────────────────────────────────────────────────────
+// ── Importers ──────────────────────────────────────────────────────────────
+
+struct GltfImporter;
+
+impl AssetImporter for GltfImporter {
+    fn import(&self, path: &Path) -> Result<RawScene, String> {
+        let (primitives, materials, skeleton) = load_gltf_internal(path)?;
+        Ok(RawScene {
+            primitives,
+            materials,
+            skeleton,
+        })
+    }
+}
+
+struct ObjImporter;
+
+impl AssetImporter for ObjImporter {
+    fn import(&self, path: &Path) -> Result<RawScene, String> {
+        let (models, materials) = tobj::load_obj(
+            path,
+            &tobj::LoadOptions {
+                single_index: true,
+                triangulate: true,
+                ignore_points: true,
+                ignore_lines: true,
+            },
+        ).map_err(|e| format!("Failed to load OBJ: {}", e))?;
+
+        let mut out_materials = Vec::new();
+        if let Ok(mats) = materials {
+            for m in mats {
+                out_materials.push(RawMaterial {
+                    base_color_factor: m.diffuse.map_or([1.0, 1.0, 1.0, 1.0], |d| [d[0], d[1], d[2], 1.0]),
+                    metallic_factor: 0.0,
+                    roughness_factor: 0.8,
+                    albedo_tex: m.diffuse_texture.filter(|s| !s.is_empty()),
+                    normal_tex: m.ambient_texture.filter(|s| !s.is_empty()), // Often misused in OBJs for normal map
+                    mr_tex: None,
+                    emissive_tex: None,
+                });
+            }
+        }
+
+        let mut primitives = Vec::new();
+        for m in models {
+            let mesh = m.mesh;
+            
+            if mesh.positions.is_empty() || mesh.indices.is_empty() {
+                continue;
+            }
+            
+            let mut vertices = Vec::new();
+            let num_vertices = mesh.positions.len() / 3;
+
+            let has_normals = !mesh.normals.is_empty();
+            let has_uvs = !mesh.texcoords.is_empty();
+
+            let normals = if has_normals {
+                mesh.normals.clone()
+            } else {
+                let mut flat = vec![0.0; num_vertices * 3];
+                for idx in mesh.indices.chunks_exact(3) {
+                    let i0 = idx[0] as usize * 3;
+                    let i1 = idx[1] as usize * 3;
+                    let i2 = idx[2] as usize * 3;
+
+                    let v0 = nalgebra::Vector3::new(mesh.positions[i0], mesh.positions[i0+1], mesh.positions[i0+2]);
+                    let v1 = nalgebra::Vector3::new(mesh.positions[i1], mesh.positions[i1+1], mesh.positions[i1+2]);
+                    let v2 = nalgebra::Vector3::new(mesh.positions[i2], mesh.positions[i2+1], mesh.positions[i2+2]);
+
+                    let normal = (v1 - v0).cross(&(v2 - v0));
+                    for j in 0..3 {
+                        flat[i0+j] += normal[j];
+                        flat[i1+j] += normal[j];
+                        flat[i2+j] += normal[j];
+                    }
+                }
+                for i in (0..flat.len()).step_by(3) {
+                    let n = nalgebra::Vector3::new(flat[i], flat[i+1], flat[i+2]).normalize();
+                    flat[i] = n[0]; flat[i+1] = n[1]; flat[i+2] = n[2];
+                }
+                flat
+            };
+
+            for i in 0..num_vertices {
+                vertices.push(Vertex {
+                    pos: [mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]],
+                    normal: [normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]],
+                    uv: if has_uvs { [mesh.texcoords[i * 2], mesh.texcoords[i * 2 + 1]] } else { [0.0, 0.0] },
+                    joint_ids: [0, 0, 0, 0],
+                    joint_weights: [0.0, 0.0, 0.0, 0.0],
+                    _pad0: 0,
+                    _pad1: 0,
+                    _pad2: [0, 0],
+                });
+            }
+
+            let (aabb_min, aabb_max) = compute_aabb(&vertices);
+            let (indices, meshlets) = build_meshlets_for_primitive(&vertices, &mesh.indices);
+
+            primitives.push(RawPrimitive {
+                vertices,
+                indices,
+                meshlets,
+                aabb_min,
+                aabb_max,
+                is_skinned: false,
+                material_index: mesh.material_id,
+            });
+        }
+
+        Ok(RawScene {
+            primitives,
+            materials: out_materials,
+            skeleton: None,
+        })
+    }
+}
 
 /// Parse a glTF / GLB file into raw intermediate primitives and materials.
-fn load_gltf(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option<RawSkeleton>), String> {
+fn load_gltf_internal(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option<RawSkeleton>), String> {
     let (document, buffers, _images) =
         gltf::import(path).map_err(|e| format!("gltf::import failed: {}", e))?;
 

@@ -48,6 +48,7 @@ struct InstanceData {
     vec4 color;
     vec4 pbr;
     uvec4 geometry;
+    uvec4 geometry2;
 };
 
 layout(set = 0, binding = 3) readonly buffer InstanceBuffer {

@@ -99,20 +99,20 @@ impl Application {
         let mut world = unsafe { World::new(memory.persistent_arena()) };
 
         unsafe {
-            world.register_component::<TransformComponent>(20000);
-            world.register_component::<RenderComponent>(20000);
+            world.register_component::<TransformComponent>(1_000_000);
+            world.register_component::<RenderComponent>(1_000_000);
             world.register_component::<CameraComponent>(10);
             world.register_component::<LightComponent>(10);
             world.register_component::<crate::ecs::components::PointLightComponent>(10);
-            world.register_component::<HierarchyComponent>(20000);
-            world.register_component::<crate::ecs::components::RigidBodyComponent>(20000);
-            world.register_component::<crate::ecs::components::ColliderComponent>(20000);
+            world.register_component::<HierarchyComponent>(1_000_000);
+            world.register_component::<crate::ecs::components::RigidBodyComponent>(1_000_000);
+            world.register_component::<crate::ecs::components::ColliderComponent>(1_000_000);
             world.register_component::<crate::ecs::components::AudioListenerComponent>(10);
             world.register_component::<crate::ecs::components::AudioEmitterComponent>(100);
             world.register_component::<crate::ecs::components::SkeletonComponent>(100);
             world.register_component::<crate::ecs::components::AnimatorComponent>(100);
             world.register_component::<crate::ecs::components::ScriptBehaviorComponent>(100);
-            world.register_component::<crate::ecs::components::NameComponent>(10000);
+            world.register_component::<crate::ecs::components::NameComponent>(1_000_000);
         }
 
         let physics = crate::physics::PhysicsSystem::new();
@@ -287,11 +287,24 @@ impl Application {
                         self.selected_entity = Some(new_entity);
                     }
                     crate::app::editor::EditorAction::SpawnStressTest => {
-                        let spacing = 2.0;
+                        let spacing = 4.0;
                         let grid_size = 100;
                         let start_x = -(grid_size as f32 * spacing) / 2.0;
                         let start_z = -(grid_size as f32 * spacing) / 2.0;
                         
+                        // Force load the test cube for the stress test
+                        let fallback_group = vec![0];
+                        let group = self.asset_manager.load_model(&self.render.vulkan, &mut self.render.geometry_pool, "assets/cooked/test_cube.mesh").unwrap_or(&fallback_group);
+                        let mesh_index = group[0];
+
+                        // Load the checkerboard texture and assign it to the cube
+                        self.asset_manager.load_texture(&self.render.vulkan, "checkerboard", "assets/textures/checkerboard.png");
+                        if let Some(tex_idx) = self.asset_manager.get_texture_index("checkerboard") {
+                            self.asset_manager.meshes[mesh_index].diffuse_texture_idx = tex_idx;
+                        }
+
+                        let scale_val = 0.5; // Scale down so there are gaps!
+
                         for x in 0..grid_size {
                             for z in 0..grid_size {
                                 let new_entity = self.world.create_entity();
@@ -302,12 +315,21 @@ impl Application {
                                         0.0,
                                         start_z + z as f32 * spacing,
                                     );
+                                    transform.scale = crate::math::vec::Vec3::new(scale_val, scale_val, scale_val);
+                                    transform.update_matrix();
                                     self.world.add_component(new_entity, transform);
                                     
                                     let mut render = crate::ecs::components::RenderComponent::default();
-                                    render.r = (x as f32) / (grid_size as f32);
-                                    render.g = (z as f32) / (grid_size as f32);
-                                    render.b = 0.5;
+                                    render.r = 1.0;
+                                    render.g = 1.0;
+                                    render.b = 1.0;
+                                    render.mesh_index = mesh_index;
+                                    
+                                    if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
+                                        render.metallic = mesh.metallic;
+                                        render.roughness = mesh.roughness;
+                                    }
+                                    
                                     self.world.add_component(new_entity, render);
                                 }
                             }
@@ -341,9 +363,11 @@ impl Application {
                                 let current = to_delete[i];
                                 for (j, hier) in hierarchies.as_slice().iter().enumerate() {
                                     if hier.parent == Some(current) {
-                                        let child = hierarchies.dense_entities_slice()[j];
-                                        if !to_delete.contains(&child) {
-                                            to_delete.push(child);
+                                        let child_index = hierarchies.dense_entities_slice()[j];
+                                        if let Some(child_id) = self.world.reconstruct_entity(child_index) {
+                                            if !to_delete.contains(&child_id) {
+                                                to_delete.push(child_id);
+                                            }
                                         }
                                     }
                                 }
@@ -404,17 +428,16 @@ impl Application {
                             if !group_indices.is_empty() {
                                 mesh_indices = Some(group_indices);
                             }
-                        } else if path_obj.extension().is_some_and(|ext| ext == "gltf" || ext == "glb") {
-                            crate::log_info!("[SpawnModel] Loading GLTF: {}", path_obj.display());
-                            mesh_indices = Some(self.asset_manager.load_gltf(&self.render.vulkan, &mut self.render.geometry_pool, &name, path_str).unwrap_or(&[]).to_vec());
-                        } else if path_obj.extension().is_some_and(|ext| ext == "obj") {
-                            crate::log_info!("[SpawnModel] Loading OBJ: {}", path_obj.display());
-                            mesh_indices = Some(self.asset_manager.load_model(&self.render.vulkan, &mut self.render.geometry_pool, path_str).unwrap_or(&[]).to_vec());
+                        } else if path_obj.extension().is_some_and(|ext| ext == "gltf" || ext == "glb" || ext == "obj") {
+                            crate::log_info!("[SpawnModel] Error: Cannot load raw {} files at runtime! Use the offline cooker.", path_obj.display());
                         } else if path_obj.extension().is_some_and(|ext| ext == "mesh") {
                             crate::log_info!("[SpawnModel] Loading Cooked Mesh: {}", path_obj.display());
                             if let Some(idx) = self.asset_manager.load_cooked_mesh(&self.render.vulkan, &mut self.render.geometry_pool, path_str) {
                                 mesh_indices = Some(vec![idx]);
                             }
+                        } else if path_obj.extension().is_some_and(|ext| ext == "anim") {
+                            crate::log_info!("[SpawnModel] Loading Cooked Anim: {}", path_obj.display());
+                            self.asset_manager.load_cooked_anim(&self.render.vulkan, &mut self.render.animation_pool, &name, path_str);
                         } else if path_obj.extension().is_some_and(|ext| ext == "mat") {
                             crate::log_info!("[SpawnModel] Loading Material: {}", path_obj.display());
                             self.asset_manager.load_cooked_material(&self.render.vulkan, &name, path_str);
@@ -551,12 +574,14 @@ impl Application {
                                     let mut metallic = 0.0f32;
                                     let mut roughness = 0.8f32;
                                     let mut r = 1.0f32; let mut g = 1.0f32; let mut b = 1.0f32;
+                                    let mut is_skinned = false;
                                     if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
                                         metallic = mesh.metallic;
                                         roughness = mesh.roughness;
                                         r = mesh.default_color[0];
                                         g = mesh.default_color[1];
                                         b = mesh.default_color[2];
+                                        is_skinned = false; // [DIAGNOSTIC] FORCE OFF
                                         let hx = (mesh.aabb_max[0]-mesh.aabb_min[0]).abs()*0.5;
                                         let hy = (mesh.aabb_max[1]-mesh.aabb_min[1]).abs()*0.5;
                                         let hz = (mesh.aabb_max[2]-mesh.aabb_min[2]).abs()*0.5;
@@ -569,7 +594,7 @@ impl Application {
                                     self.world.add_component(new_entity, RenderComponent {
                                         visible: true, mesh_index, metallic, roughness, r, g, b,
                                     });
-                                    if has_skeleton {
+                                    if has_skeleton && is_skinned {
                                         self.world.add_component(new_entity, crate::ecs::components::SkeletonComponent {
                                             skeleton_name: crate::containers::FixedString::try_from_str(&skeleton_name).unwrap(),
                                             skinning_instance_index: None,
@@ -602,12 +627,14 @@ impl Application {
                                         let mut metallic = 0.0f32;
                                         let mut roughness = 0.8f32;
                                         let mut r = 1.0f32; let mut g = 1.0f32; let mut b = 1.0f32;
+                                        let mut is_skinned = false;
                                         if let Some(mesh) = self.asset_manager.get_mesh(mesh_index) {
                                             metallic = mesh.metallic;
                                             roughness = mesh.roughness;
                                             r = mesh.default_color[0];
                                             g = mesh.default_color[1];
                                             b = mesh.default_color[2];
+                                            is_skinned = false; // [DIAGNOSTIC] FORCE OFF
 
                                             let hx = (mesh.aabb_max[0]-mesh.aabb_min[0]).abs()*0.5;
                                             let hy = (mesh.aabb_max[1]-mesh.aabb_min[1]).abs()*0.5;
@@ -621,7 +648,7 @@ impl Application {
                                         self.world.add_component(child, RenderComponent {
                                             visible: true, mesh_index, metallic, roughness, r, g, b,
                                         });
-                                        if has_skeleton {
+                                        if has_skeleton && is_skinned {
                                             self.world.add_component(child, crate::ecs::components::SkeletonComponent {
                                                 skeleton_name: crate::containers::FixedString::try_from_str(&skeleton_name).unwrap(),
                                                 skinning_instance_index: None,
@@ -744,7 +771,13 @@ impl Application {
                                     if col.handle == handle {
                                         let mut sel = colliders.dense_entities_slice()[i];
                                         let hierarchies = self.world.get_component_array::<HierarchyComponent>();
-                                        while let Some(parent) = unsafe { hierarchies.get(sel) }.parent { sel = parent; }
+                                        while hierarchies.has(sel) {
+                                            if let Some(parent) = unsafe { hierarchies.get(sel) }.parent {
+                                                sel = parent;
+                                            } else {
+                                                break;
+                                            }
+                                        }
                                         self.selected_entity = Some(sel);
                                         break;
                                     }
@@ -777,7 +810,13 @@ impl Application {
                                 }
                                 if let Some(mut sel) = best_entity {
                                     let hierarchies = self.world.get_component_array::<HierarchyComponent>();
-                                    while let Some(parent) = unsafe { hierarchies.get(sel) }.parent { sel = parent; }
+                                    while hierarchies.has(sel) {
+                                        if let Some(parent) = unsafe { hierarchies.get(sel) }.parent {
+                                            sel = parent;
+                                        } else {
+                                            break;
+                                        }
+                                    }
                                     self.selected_entity = Some(sel);
                                 } else {
                                     self.selected_entity = None;

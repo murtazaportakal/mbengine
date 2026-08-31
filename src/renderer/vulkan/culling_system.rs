@@ -28,6 +28,7 @@ pub struct CullingSystem {
 impl CullingSystem {
     pub fn new(vulkan: &VulkanDevice, vfs: &crate::vfs::Vfs) -> Self {
         let max_instances = 100_000usize;
+        let max_meshlets = 10_000_000usize; // Max visible meshlets globally across all instances
         
         // --- Pipeline & Descriptors ---
         let pipeline = ComputeCullPipeline::new(vulkan, vfs).unwrap();
@@ -57,7 +58,7 @@ impl CullingSystem {
         for _ in 0..2 {
             let idb = Buffer::new(
                 vulkan,
-                (max_instances * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64,
+                (max_meshlets * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             ).expect("Failed to create indirect buffer");
@@ -85,14 +86,14 @@ impl CullingSystem {
             
             let omb = Buffer::new(
                 vulkan,
-                4_000_000,
+                (max_meshlets * 4) as u64,
                 vk::BufferUsageFlags::STORAGE_BUFFER,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             ).expect("Failed to create occluded meshlets buffer");
 
             let idb2 = Buffer::new(
                 vulkan,
-                (max_instances * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64,
+                (max_meshlets * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             ).expect("Failed to create indirect buffer 2");
@@ -115,7 +116,7 @@ impl CullingSystem {
         for _ in 0..2 {
             let pb = Buffer::new(
                 vulkan,
-                (max_instances * 4) as u64,
+                (max_instances * 4) as u64, // max_instances is correct here because prefix sum is PER-INSTANCE
                 vk::BufferUsageFlags::STORAGE_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             ).expect("Failed to create prefix sum buffer");

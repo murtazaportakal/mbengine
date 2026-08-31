@@ -196,7 +196,7 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
             && !IS_COOKING.load(std::sync::atomic::Ordering::SeqCst) {
                 std::thread::spawn(move || {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Raw Models", &["gltf", "glb"])
+                        .add_filter("Raw Models", &["gltf", "glb", "obj"])
                         .pick_file()
                     {
                         IS_COOKING.store(true, std::sync::atomic::Ordering::SeqCst);

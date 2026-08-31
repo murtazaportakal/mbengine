@@ -521,7 +521,7 @@ impl RenderBackend {
         if let Some(cs) = &mut backend.culling_system {
             if let Some(hzb) = &cs.hzb_target {
                 for i in 0..2 {
-                    cs.pipeline.update_hzb_descriptor(&backend.vulkan, hzb.full_view, hzb.sampler, cs.pipeline.descriptor_sets[(i * 2)]);
+                    cs.pipeline.update_hzb_descriptor(&backend.vulkan, hzb.full_view, hzb.sampler, cs.pipeline.descriptor_sets[i * 2]);
                     cs.pipeline.update_hzb_descriptor(&backend.vulkan, hzb.full_view, hzb.sampler, cs.pipeline.descriptor_sets[i * 2 + 1]);
                 }
                 
@@ -679,7 +679,7 @@ impl RenderBackend {
         if let Some(cs) = &mut self.culling_system {
             if let Some(hzb) = &cs.hzb_target {
                 for i in 0..2 {
-                    cs.pipeline.update_hzb_descriptor(&self.vulkan, hzb.full_view, hzb.sampler, cs.pipeline.descriptor_sets[(i * 2)]);
+                    cs.pipeline.update_hzb_descriptor(&self.vulkan, hzb.full_view, hzb.sampler, cs.pipeline.descriptor_sets[i * 2]);
                     cs.pipeline.update_hzb_descriptor(&self.vulkan, hzb.full_view, hzb.sampler, cs.pipeline.descriptor_sets[i * 2 + 1]);
                 }
                 
@@ -1058,7 +1058,7 @@ impl RenderBackend {
                     self.vulkan.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
                     self.vulkan.device.cmd_bind_descriptor_sets(
                         cmd, vk::PipelineBindPoint::COMPUTE, cs.pipeline.layout, 0,
-                        std::slice::from_ref(&cs.pipeline.descriptor_sets[(self.current_frame * 2)]), &[],
+                        std::slice::from_ref(&cs.pipeline.descriptor_sets[self.current_frame * 2]), &[],
                     );
                     let total_meshlets = *self.prefix_sum_data_buffer.last().unwrap_or(&0);
                     let sw = self.offscreen_target.width as f32;
@@ -1139,6 +1139,20 @@ impl RenderBackend {
         if let Some(cs) = &self.culling_system {
             if draw_count > 0 {
                 graph.add_pass("Phase2_Cull", vec![], |cb| unsafe {
+                    // Ensure Phase 0 writes to occludedCount and occludedMeshlets are visible to Phase 2
+                    let cull_bar = vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+                    self.vulkan.device.cmd_pipeline_barrier(
+                        cb,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::DependencyFlags::empty(),
+                        std::slice::from_ref(&cull_bar),
+                        &[],
+                        &[],
+                    );
+
                     self.vulkan.device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
                     self.vulkan.device.cmd_bind_descriptor_sets(
                         cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.layout, 0,
@@ -1161,7 +1175,7 @@ impl RenderBackend {
                         std::slice::from_raw_parts(&pc as *const _ as *const u8, 32),
                     );
                     if total_meshlets > 0 {
-                        // self.vulkan.device.cmd_dispatch(cb, (total_meshlets + 63) / 64, 1, 1);
+                        self.vulkan.device.cmd_dispatch(cb, total_meshlets.div_ceil(64), 1, 1);
                     }
                     let draw_bar = vk::MemoryBarrier::default()
                         .src_access_mask(vk::AccessFlags::SHADER_WRITE)

@@ -27,267 +27,14 @@ pub struct Mesh {
     pub normal_texture_idx: u32,
     pub mr_texture_idx: u32,
     pub emissive_texture_idx: u32,
+    pub is_skinned: bool,
 }
 
 impl Mesh {
-    /// Loads an .obj file, triangulates, and generates Meshlets via meshopt.
-    pub fn load_models(
-        path: &str,
-        vulkan: &VulkanDevice,
-        geometry_pool: &mut crate::renderer::vulkan::GeometryPool,
-    ) -> Option<Vec<Self>> {
-        let options = tobj::LoadOptions {
-            single_index: true,
-            triangulate: true,
-            ignore_points: true,
-            ignore_lines: true,
-        };
 
-        let (models, materials_result) = match tobj::load_obj(path, &options) {
-            Ok(result) => result,
-            Err(e) => {
-                crate::log_info!("[OBJ] tobj::load_obj failed for '{}': {:?}", path, e);
-                return None;
-            }
-        };
-        let materials = match materials_result {
-            Ok(m) => m,
-            Err(e) => {
-                crate::log_info!("Failed to load MTL file for {}: {:?}", path, e);
-                Vec::new()
-            }
-        };
-
-        let mut loaded_meshes = Vec::new();
-
-        for model in models {
-            let mesh = &model.mesh;
-            let mut default_color = [1.0, 1.0, 1.0];
-            let mut metallic = 0.0;
-            let mut roughness = 0.3;
-            let mut diffuse_texture = None;
-
-            if let Some(mat_id) = mesh.material_id {
-                if let Some(mat) = materials.get(mat_id) {
-                    if let Some(diffuse) = mat.diffuse {
-                        default_color = diffuse;
-                    }
-                    if let Some(tex) = &mat.diffuse_texture {
-                        if !tex.is_empty() {
-                            diffuse_texture = Some(tex.clone());
-                        }
-                    }
-                    if let Some(shininess) = mat.shininess {
-                        if shininess > 0.0 {
-                            roughness = (2.0 / (shininess + 2.0)).sqrt();
-                        }
-                    }
-                    if let Some(pr) = mat.unknown_param.get("Pr") {
-                        if let Ok(val) = pr.parse::<f32>() {
-                            roughness = val;
-                        }
-                    }
-                    if let Some(pm) = mat.unknown_param.get("Pm") {
-                        if let Ok(val) = pm.parse::<f32>() {
-                            metallic = val;
-                        }
-                    }
-                }
-            }
-
-            let mut vertices = Vec::new();
-
-            let mut calculated_normals = Vec::new();
-            if mesh.normals.is_empty() {
-                calculated_normals.resize(mesh.positions.len(), 0.0_f32);
-                for i in (0..mesh.indices.len()).step_by(3) {
-                    let i0 = mesh.indices[i] as usize;
-                    let i1 = mesh.indices[i + 1] as usize;
-                    let i2 = mesh.indices[i + 2] as usize;
-
-                    let v0 = [
-                        mesh.positions[i0 * 3],
-                        mesh.positions[i0 * 3 + 1],
-                        mesh.positions[i0 * 3 + 2],
-                    ];
-                    let v1 = [
-                        mesh.positions[i1 * 3],
-                        mesh.positions[i1 * 3 + 1],
-                        mesh.positions[i1 * 3 + 2],
-                    ];
-                    let v2 = [
-                        mesh.positions[i2 * 3],
-                        mesh.positions[i2 * 3 + 1],
-                        mesh.positions[i2 * 3 + 2],
-                    ];
-
-                    let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-                    let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-
-                    let cross = [
-                        e1[1] * e2[2] - e1[2] * e2[1],
-                        e1[2] * e2[0] - e1[0] * e2[2],
-                        e1[0] * e2[1] - e1[1] * e2[0],
-                    ];
-
-                    for &idx in &[i0, i1, i2] {
-                        calculated_normals[idx * 3] += cross[0];
-                        calculated_normals[idx * 3 + 1] += cross[1];
-                        calculated_normals[idx * 3 + 2] += cross[2];
-                    }
-                }
-                for i in (0..calculated_normals.len()).step_by(3) {
-                    let n = &mut calculated_normals[i..i + 3];
-                    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-                    if len > 0.0 {
-                        n[0] /= len;
-                        n[1] /= len;
-                        n[2] /= len;
-                    } else {
-                        n[1] = 1.0;
-                    }
-                }
-            }
-
-            let normals_slice = if !mesh.normals.is_empty() {
-                &mesh.normals
-            } else {
-                &calculated_normals
-            };
-
-            let num_vertices = mesh.positions.len() / 3;
-            for i in 0..num_vertices {
-                let pos = [
-                    mesh.positions[i * 3],
-                    mesh.positions[i * 3 + 1],
-                    mesh.positions[i * 3 + 2],
-                ];
-
-                let normal = [
-                    normals_slice[i * 3],
-                    normals_slice[i * 3 + 1],
-                    normals_slice[i * 3 + 2],
-                ];
-
-                let uv = if !mesh.texcoords.is_empty() {
-                    [mesh.texcoords[i * 2], mesh.texcoords[i * 2 + 1]]
-                } else {
-                    [0.0, 0.0]
-                };
-
-                vertices.push(Vertex {
-                    pos,
-                    _pad0: 0,
-                    normal,
-                    _pad1: 0,
-                    uv,
-                    _pad2: [0; 2],
-                    joint_ids: [0; 4],
-                    joint_weights: [0.0; 4],
-                });
-            }
-
-            let indices = mesh.indices.clone();
-
-            if vertices.is_empty() || indices.is_empty() {
-                continue;
-            }
-
-            let mut aabb_min = [f32::MAX; 3];
-            let mut aabb_max = [f32::MIN; 3];
-            for v in &vertices {
-                for i in 0..3 {
-                    aabb_min[i] = aabb_min[i].min(v.pos[i]);
-                    aabb_max[i] = aabb_max[i].max(v.pos[i]);
-                }
-            }
-
-            // --- Meshlet Generation via meshopt ---
-            // Max 64 vertices and 124 triangles (divisible by 4) per meshlet.
-            let vertices_u8: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    vertices.as_ptr() as *const u8,
-                    vertices.len() * std::mem::size_of::<Vertex>(),
-                )
-            };
-
-            let vertex_data = meshopt::VertexDataAdapter::new(
-                vertices_u8,
-                std::mem::size_of::<Vertex>(),
-                0, // pos offset
-            )
-            .unwrap();
-
-            let meshlets_raw = meshopt::build_meshlets(&indices, &vertex_data, 64, 124, 0.5);
-
-            let mut global_indices = Vec::new();
-            let mut meshlet_data_vec = Vec::new();
-
-            for i in 0..meshlets_raw.meshlets.len() {
-                let raw_m = &meshlets_raw.meshlets[i];
-                let index_offset = global_indices.len() as u32;
-
-                // Reconstruct global indices for this meshlet
-                for tri_idx in 0..(raw_m.triangle_count * 3) {
-                    let local_index =
-                        meshlets_raw.triangles[(raw_m.triangle_offset + tri_idx) as usize];
-                    let global_vertex_index =
-                        meshlets_raw.vertices[(raw_m.vertex_offset + local_index as u32) as usize];
-                    global_indices.push(global_vertex_index);
-                }
-
-                // Compute bounds via meshopt
-                let bounds = meshopt::compute_meshlet_bounds(meshlets_raw.get(i), &vertex_data);
-
-                meshlet_data_vec.push(MeshletData {
-                    center: bounds.center,
-                    radius: bounds.radius,
-                    cone_axis: bounds.cone_axis,
-                    cone_cutoff: bounds.cone_cutoff,
-                    index_offset,
-                    triangle_count: raw_m.triangle_count,
-                    _pad: [0; 2],
-                });
-            }
-
-            // Upload to Geometry Pool
-            let offsets = match geometry_pool.append_mesh(vulkan, &vertices, &global_indices, &meshlet_data_vec) {
-                Some(o) => o,
-                None => {
-                    crate::log_info!("[OBJ] geometry_pool.append_mesh failed (out of space?) for '{}'", path);
-                    return None;
-                }
-            };
-
-            loaded_meshes.push(Self {
-                vertex_offset: offsets.0,
-                index_offset: offsets.1,
-                meshlet_offset: offsets.2,
-                index_count: global_indices.len() as u32,
-                meshlet_count: meshlet_data_vec.len() as u32,
-                vertex_count: vertices.len() as u32,
-                aabb_min,
-                aabb_max,
-                default_color,
-                metallic,
-                roughness,
-                diffuse_texture,
-                normal_texture: None,
-                mr_texture: None, // obj usually doesn't have MR
-                emissive_texture: None,
-                diffuse_texture_idx: 0,
-                normal_texture_idx: 0,
-                mr_texture_idx: 0,
-                emissive_texture_idx: 0,
-            });
-        }
-
-        Some(loaded_meshes)
-    }
-
-    /// Create a Mesh directly from pre-parsed vertex and index data (e.g., from GLTF).
+    /// Create a Mesh directly from pre-parsed vertex and index data.
     /// Skips meshlet generation for simplicity — uses a single draw call.
-    pub fn from_gltf_data(
+    pub fn from_raw_data(
         vulkan: &VulkanDevice,
         geometry_pool: &mut crate::renderer::vulkan::GeometryPool,
         vertices: &[Vertex],
@@ -359,6 +106,7 @@ impl Mesh {
             normal_texture_idx: 0,
             mr_texture_idx: 0,
             emissive_texture_idx: 0,
+            is_skinned: false,
         })
     }
 
@@ -427,7 +175,7 @@ impl Mesh {
             }
         }
 
-        Self::from_gltf_data(vulkan, geometry_pool, &vertices, &indices)
+        Self::from_raw_data(vulkan, geometry_pool, &vertices, &indices)
     }
 
     pub fn shutdown(&mut self, _vulkan: &VulkanDevice) {

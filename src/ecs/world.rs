@@ -183,6 +183,11 @@ impl World {
         unsafe { (*self.entity_manager).is_alive(id) }
     }
 
+    /// Reconstruct a full EntityId (with correct generation) from an EntityIndex.
+    pub fn reconstruct_entity(&self, index: crate::ecs::types::EntityIndex) -> Option<EntityId> {
+        unsafe { (*self.entity_manager).reconstruct_entity(index) }
+    }
+
     /// Get the maximum allocated entity index (useful for iteration bounding).
     pub fn max_entity_index(&self) -> u32 {
         unsafe { (*self.entity_manager).max_entity_index() }

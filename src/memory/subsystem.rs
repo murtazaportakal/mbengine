@@ -97,7 +97,7 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             frame_arena_size: 64 * MB,
-            persistent_arena_size: 256 * MB,
+            persistent_arena_size: 1024 * MB,
             ecs_pool_size: 64 * MB,
             ecs_pool_block_size: 64,
             ecs_pool_block_align: 16,

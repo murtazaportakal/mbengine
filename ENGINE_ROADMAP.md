@@ -292,3 +292,211 @@ cargo build --release --features standalone  # Strip editor, produce release bun
 ```
 
 
+---
+
+## V5 Master Plan — Closing the Gap to Unity/Unreal
+
+> **Last updated:** 2026-08-31
+> **Philosophy:** Match the feature depth of Unity/Unreal for 3D games, while keeping the runtime overhead and project simplicity of Godot. Every feature added must pass two tests: (1) Does it make the engine measurably more capable for game developers? (2) Does it fit within the zero-heap, DOD, offline-cook architecture?
+
+This plan is organized into **six epics**, ordered by strategic impact. Each epic is broken into atomic, independently shippable phases.
+
+---
+
+### Epic A: First-Class Editor Viewport
+
+**Goal:** The editor IS the game — hitting Play runs the actual engine loop inside the viewport, not a simulation.
+
+**Why:** This single change closes the largest UX gap with Godot/Unity. Right now the editor is a side panel. Making the 3D viewport the primary workspace transforms the engine from a programmer's tool into a game developer's tool.
+
+#### Phase A1: True Scene Viewport
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **Fullscreen offscreen scene** | Render the scene entirely to an `OffscreenTarget`. Display it as a UI image filling the central editor panel. Already partially done (`offscreen.rs`) — wire it to the main editor layout. |
+| **P1** | **Mouse picking in viewport** | Cast a ray from cursor into the scene using the `rapier3d` ray-cast API. Highlight and select the hit entity. Set `selected_entity`. |
+| **P1** | **Play / Pause / Stop buttons** | Entering Play mode: serialize the current ECS state to a temp buffer (use `save_scene`). Stopping: restore from that buffer. No scene data is ever permanently mutated by Play mode. |
+| **P2** | **Camera fly-through in editor** | Right-click + WASD inside the viewport moves an editor-only camera. The editor camera is NOT an ECS entity — it is a pure editor state struct. |
+| **P2** | **Scene grid & world-axis overlay** | Render a flat procedural grid mesh and XYZ axis lines using the existing debug draw path, depth-tested. |
+| **P3** | **Multi-viewport support** | Split the editor into up to 4 simultaneous viewport panels (Top, Front, Side, Perspective) — classic Unreal/Blender layout. |
+
+#### Phase A2: 3D Transform Gizmo
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **Translate gizmo** | Render three colored axis arrows (X=red, Y=green, Z=blue) as GPU mesh instances. Clicking and dragging an arrow moves the selected entity on that axis. Use `active_gizmo_axis` field already in `Editor` struct. |
+| **P1** | **Rotate gizmo** | Three arc rings rendered per-axis. Dragging rotates the entity's Euler angles. |
+| **P2** | **Scale gizmo** | Three cube handles per axis. Dragging scales non-uniformly. |
+| **P2** | **World vs. Local space toggle** | Toggle between world-aligned gizmo and object-local gizmo. |
+| **P3** | **Multi-select + group transform** | Box-select multiple entities (drag rectangle in viewport). Gizmo appears at the centroid and transforms all selected. |
+
+#### Phase A3: Scene Hierarchy & Prefab Drag-Drop
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **Reparent via hierarchy drag** | Drag an entity onto another in the Scene Hierarchy panel to set `HierarchyComponent.parent`. Children move with parent transforms. |
+| **P2** | **Prefab drag-drop from file browser** | Drag a `.mesh` or future `.prefab` file from the File Browser panel into the 3D viewport. Spawn a new entity at the cursor hit position (ray-cast against ground plane). |
+| **P2** | **Undo/Redo stack** | Maintain a ring buffer of `EditorAction` variants. `Ctrl+Z` pops and inverts the last action. Supports translate, rotate, scale, spawn, delete. |
+
+---
+
+### Epic B: NavMesh & AI Navigation
+
+**Goal:** Any entity can navigate a 3D environment autonomously.
+
+**Why:** NavMesh is the single most-requested feature that separates game engines from rendering engines. Without it, you cannot ship any game that requires enemies, NPCs, or companions.
+
+#### Phase B1: Static NavMesh Baking
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **Integrate `recast-navigation-rs`** | Add the Rust bindings for the industry-standard Recast/Detour library (used by Unity, Godot, Unreal) as a Cargo dependency. |
+| **P1** | **Offline navmesh cooker step** | Add a `--navmesh` flag to `cooker.exe`. It reads the scene's static mesh geometry, runs Recast's voxelization + region + contour + poly mesh pipeline, and outputs a `.nav` binary blob. |
+| **P1** | **`.nav` VFS loader** | Add `load_cooked_navmesh(path)` to `AssetManager`. Deserialize the Detour nav mesh into a `NavMesh` struct held in the Application. |
+| **P2** | **NavMesh debug overlay** | Render the walkable triangle soup as a translucent green mesh overlay in the editor. Toggled via an editor checkbox. |
+
+#### Phase B2: Pathfinding & Steering
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **`NavAgentComponent`** | New ECS component: `{ target: Vec3, path: FixedArray<Vec3, 64>, path_index: u32, speed: f32, radius: f32 }`. Zero heap allocation — path fits in a fixed-size array. |
+| **P1** | **`NavSystem` (ECS System)** | Each frame: for entities with `NavAgentComponent` that have a dirty target, call `detour.find_path()` and store result into the fixed path array. Then advance along the path, updating `TransformComponent.position`. |
+| **P2** | **Steering behaviors** | Separation, alignment, and cohesion forces computed in a compute shader for flocking groups of up to 10,000 agents simultaneously — true DOD approach. |
+| **P3** | **Dynamic obstacles** | Register `RigidBodyComponent` entities as dynamic obstacles in Detour. NavMesh re-tiles locally when obstacles move. |
+
+---
+
+### Epic C: GPU Particle System
+
+**Goal:** A fully GPU-driven particle emitter that can simulate millions of particles at 60+ FPS with zero CPU involvement per-frame.
+
+**Why:** Visual effects (fire, explosions, magic, weather) are expected in every 3D game. A compute-shader particle system fits perfectly in the existing GPU-driven architecture.
+
+#### Phase C1: Core Particle Simulation
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **`ParticlePool` GPU buffer** | Allocate a global `MAX_PARTICLES = 1_000_000` SSBO containing flat `Particle` structs: `{ pos: [f32;3], vel: [f32;3], life: f32, max_life: f32, color: [f32;4], size: f32 }`. |
+| **P1** | **`particle_update.comp`** | Compute shader. Each invocation updates one particle: integrates velocity, decrements life, applies gravity. Dead particles (life ≤ 0) are returned to a free-list via an atomic counter. |
+| **P1** | **`particle_emit.comp`** | Compute shader. Emitter parameters passed via push constants: `{ origin, emit_dir, spread_angle, emit_rate, initial_speed, lifetime, color }`. Atomically claims slots from the free-list and initializes new particles. |
+| **P1** | **Indirect draw output** | Compact living particles into a draw-ready position buffer. Write a `VkDrawIndirectCommand` for a GPU-instanced billboard quad pass. |
+| **P2** | **Billboarded sprite rendering** | New render pass: vertex shader positions each particle quad facing the camera. Fragment shader samples from a `particle_atlas` texture array for animated sprites. |
+
+#### Phase C2: Emitter Component & Editor
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **`ParticleEmitterComponent`** | ECS component storing emitter parameters. Registered with `ComponentRegistry` so the editor inspector exposes all knobs with live preview. |
+| **P2** | **Real-time preview in editor** | Particle simulation runs live in the editor viewport. No Play mode required to preview effects. |
+| **P2** | **Emitter shape presets** | Point, sphere, cone, box, and mesh-surface emission shapes. |
+| **P3** | **Sub-emitter chaining** | A particle death event triggers a secondary emitter (e.g., spark burst on impact). Implemented with a GPU atomic event queue. |
+
+---
+
+### Epic D: Cascaded Shadow Maps + Advanced Lighting
+
+**Goal:** Production-quality outdoor lighting indistinguishable from AAA games.
+
+**Why:** The current single-cascade shadow map creates hard shadow edges and acne at medium distances. CSM is the industry standard for outdoor scenes.
+
+#### Phase D1: Cascaded Shadow Maps (CSM)
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **4-cascade depth atlas** | Replace the single 2048×2048 depth image with a 4-cascade 4096×2048 atlas. Cascades: C0=0–10m (near detail), C1=10–50m, C2=50–200m, C3=200–500m (far). |
+| **P1** | **Per-cascade light matrices** | Compute 4 orthographic light-space matrices each frame using the practical split scheme (λ=0.75). Store in a `CsmUbo` pushed into the global descriptor set. |
+| **P1** | **Shadow shader PCF 3×3 sampling** | Update `shadow_calculation()` in `shader.frag` to sample the correct cascade atlas slice based on view-space depth. Apply 9-tap Percentage Closer Filtering for smooth edges. |
+| **P2** | **Cascade debug visualization** | Editor toggle that tints fragments red/green/blue/yellow per-cascade. Essential for tuning split distances. |
+| **P3** | **PCSS (Percentage Closer Soft Shadows)** | Variable penumbra size based on blocker distance from light — physically correct soft shadows for mid-range cascades. |
+
+#### Phase D2: Point Light Shadows (Omnidirectional)
+| Priority | Task | Detail |
+|---|---|---|
+| **P2** | **Cubemap shadow atlas** | For up to 8 shadow-casting point lights: a 6-face cubemap depth array. Render geometry into each face via geometry shader instancing. |
+| **P2** | **Per-light frustum culling** | In the existing cull compute shader, add a per-point-light frustum cull pass that populates a per-light indirect draw buffer. |
+
+#### Phase D3: Image-Based Lighting (IBL) Improvements
+| Priority | Task | Detail |
+|---|---|---|
+| **P2** | **HDRI skybox baking in cooker** | `cooker.exe --hdri sky.hdr` computes the irradiance map (32×32 diffuse convolution) and pre-filtered environment map (128×128, 7 mips) offline. Stores as compressed `.ktx2` blobs for instant zero-copy load. |
+| **P3** | **Screen-Space Reflections (SSR)** | Trace reflection rays in screen space using the HZB depth buffer as an acceleration structure. Falls back to IBL when ray exits screen. |
+
+---
+
+### Epic E: Networking Foundation
+
+**Goal:** Deterministic lockstep and client-server authority for multiplayer games up to 64 players.
+
+**Why:** No AAA engine ships without networking. Adding a well-designed, DOD-compatible network layer is the largest remaining architectural gap.
+
+#### Phase E1: Transport Layer
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **Add `renet` crate** | `renet` provides reliable UDP transport with connection management, channels (reliable ordered, unreliable), and connection tokens. Actively maintained and battle-tested. |
+| **P1** | **`NetworkSubsystem` struct** | Owns a `RenetServer` or `RenetClient` depending on launch flags. Updated once per frame before the ECS scheduler runs. Zero-heap: all packet buffers pre-allocated at init. |
+| **P1** | **Launch flags** | `--server --port 7777` starts a dedicated server. `--client --host 192.168.1.1` connects. `--singleplayer` skips network init entirely. |
+
+#### Phase E2: ECS Network Replication
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **`NetworkedComponent` marker** | Tagging a component type with `Networked` causes `ReplicationSystem` to serialize it with `bincode` and broadcast diffs every N ticks. Only changed fields are sent (dirty-flag diffing). |
+| **P2** | **Client-side prediction** | Client simulates physics and movement locally. Server sends authoritative state. Client reconciles using snapshot interpolation (Quake/Source engine approach). |
+| **P3** | **Interest management** | Only replicate entities within a configurable radius of each client's position. Implemented via spatial hash grid. |
+
+---
+
+### Epic F: Cross-Platform Backend Abstraction
+
+**Goal:** The same game code targets Windows (Vulkan), Linux (Vulkan), and macOS (Metal via MoltenVK) from a single codebase.
+
+**Why:** Cross-platform support is a prerequisite for any commercial release and community adoption.
+
+#### Phase F1: Abstract Graphics Backend
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **`GfxDevice` trait** | Define a minimal `GfxDevice` trait with methods: `create_buffer`, `create_texture`, `begin_frame`, `submit`, `present`. Current `VulkanDevice` implements this trait behind a type alias. Zero overhead — trait is monomorphized at compile time. |
+| **P1** | **Conditional compile** | `#[cfg(target_os = "windows")]` + `#[cfg(target_os = "linux")]` resolve to `VulkanDevice`. `#[cfg(target_os = "macos")]` resolves to a future `MetalDevice` backed by MoltenVK. |
+| **P2** | **Linux CI pipeline** | Add a GitHub Actions workflow that cross-compiles to `x86_64-unknown-linux-gnu` using a Docker image with Vulkan SDK headers. Catches platform regressions automatically. |
+
+#### Phase F2: Window & Input Abstraction
+| Priority | Task | Detail |
+|---|---|---|
+| **P1** | **`PlatformWindow` trait** | Abstract over the current Win32 `HWND` window creation. Linux implementation uses `xcb` or `wayland-client`. |
+| **P2** | **Gamepad support** | Add `gilrs` crate for cross-platform gamepad input. Map analog sticks to the existing `Input` struct. Expose as `input.gamepad_axis(Axis::LeftX)`. |
+
+---
+
+### V5 Feature Priority Matrix
+
+| Feature | Estimated Effort | Game Dev Impact | Sprint |
+|---|---|---|---|
+| True 3D editor viewport (A1) | 2 weeks | 🔴 Critical | 1 |
+| 3D transform gizmo (A2) | 1 week | 🔴 Critical | 1 |
+| Cascaded shadow maps (D1) | 1 week | 🔴 High | 1 |
+| NavMesh baking + agent (B1+B2) | 3 weeks | 🔴 High | 2 |
+| GPU particle system (C1+C2) | 3 weeks | 🟡 High | 2 |
+| Undo/Redo stack (A3) | 3 days | 🟡 Medium | 2 |
+| Point light shadows (D2) | 2 weeks | 🟡 Medium | 3 |
+| Networking — transport (E1) | 2 weeks | 🟡 Medium | 3 |
+| Prefab drag-drop (A3) | 1 week | 🟡 Medium | 3 |
+| IBL baking / SSR (D3) | 2 weeks | 🟢 Medium | 4 |
+| Cross-platform abstraction (F) | 4 weeks | 🟢 Medium | 4 |
+| ECS replication (E2) | 3 weeks | 🟢 Medium | 5 |
+| GPU flocking / steering (B2) | 2 weeks | 🟢 Low | 5 |
+
+---
+
+### V5 Build Commands (Additions)
+
+```bash
+# Cook a scene's static geometry into a navmesh
+cargo run --bin cooker -- --navmesh scene.mesh
+
+# Cook an HDRI skybox into diffuse + specular IBL blobs
+cargo run --bin cooker -- --hdri sky.hdr
+
+# Launch as dedicated game server
+cargo run -- --server --port 7777
+
+# Launch as network client connecting to local server
+cargo run -- --client --host 127.0.0.1
+
+# Cross-compile for Linux
+cargo build --target x86_64-unknown-linux-gnu --release
+```
+
+---
+
+> **V5 North Star:** When Epic A (Editor Viewport) and Epic B (NavMesh) are complete, MBEngine can ship a real commercial 3D game. Every epic after that makes the engine progressively more competitive with commercial alternatives — without ever compromising the zero-heap, GPU-driven, DOD core that makes it uniquely performant.

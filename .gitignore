@@ -1,4 +1,4 @@
-# Rust
+# Rust build artifacts
 /target
 Cargo.lock
 
@@ -6,23 +6,40 @@ Cargo.lock
 .idea/
 .vscode/
 *.swp
+.continue/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Build artifacts
-/build
-
-# Shader tooling (downloaded locally)
+# Shader tooling (downloaded locally, not part of source)
 glslang/
 glslang.zip
 
-# Compiled SPIR-V shaders (rebuilt by build.rs)
+# Compiled SPIR-V shaders (auto-rebuilt by build.rs on every cargo run)
 shaders/*.spv
+
+# Packed release archives
 assets.pak
+data.pak
+*.pak
+
+# Log and crash files
 *.log
 crash_log*.txt
 *_reconstructed
+
+# Cooked binary assets (generated offline by cooker.exe — not source)
 assets/cooked/
+cooked_obj/
+
+# Scratch / temp workspace
 scratch/
+
+# Debug and one-off output files
+clippy.txt
+gdb_script.txt
+
+# Loose test assets at root (moved to assets/)
+test_cube.obj
+test_cube.mesh

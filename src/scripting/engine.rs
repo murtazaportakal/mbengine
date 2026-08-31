@@ -40,6 +40,7 @@ impl RhaiWorld {
     ///
     /// # Safety
     /// Must only be called while the pointer is still valid.
+    #[allow(clippy::mut_from_ref)]
     unsafe fn world(&self) -> &mut World {
         &mut *(self.world_ptr as *mut World)
     }

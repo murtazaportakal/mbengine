@@ -109,6 +109,9 @@ uint binary_search_instance(uint meshletIdx) {
             result = mid;
             left = mid + 1;
         } else {
+            if (mid == 0) {
+                break;
+            }
             right = mid - 1;
         }
     }
@@ -136,7 +139,7 @@ void main() {
     // 3. Transform meshlet bounding sphere to world space
     vec3 worldCenter = (inst.world * vec4(meshlet.center, 1.0)).xyz;
     float maxScale = max(max(length(inst.world[0].xyz), length(inst.world[1].xyz)), length(inst.world[2].xyz));
-    float worldRadius = meshlet.radius * maxScale * 1.2;
+    float worldRadius = meshlet.radius * maxScale * 2.0;
 
     // 4. Back-face cone culling (TEMPORARILY DISABLED FOR TESTING)
     bool visible = true;
@@ -196,8 +199,8 @@ void main() {
         // HZB Culling
         if (visible && pc.mipCount > 0.0) {
             mat4 hzbViewProj = (pc.phase == 0) ? ubo.prevViewProj : ubo.viewProj;
-            vec2 minUV = vec2(1.0);
-            vec2 maxUV = vec2(0.0);
+            vec2 minUV = vec2(10000.0);
+            vec2 maxUV = vec2(-10000.0);
             float minZ = 1.0;
             float maxZ = 0.0;  // Track max NDC Z for bias computation
             bool hzbValid = true;
@@ -222,51 +225,55 @@ void main() {
                 minUV = clamp(minUV, vec2(0.0), vec2(1.0));
                 maxUV = clamp(maxUV, vec2(0.0), vec2(1.0));
                 
-                // Calculate bounding box size in original screen pixels (before HZB scaling)
-                float w = (maxUV.x - minUV.x) * pc.screenWidth;
-                float h = (maxUV.y - minUV.y) * pc.screenHeight;
-
                 // Mip 0 size is the next power of two of half the screen size
                 float hzbWidth = exp2(ceil(log2(max(1.0, pc.screenWidth / 2.0))));
                 float hzbHeight = exp2(ceil(log2(max(1.0, pc.screenHeight / 2.0))));
-                float lod = ceil(log2(max(max(w, h), 1.0)));
+                
+                // Calculate bounding box size in Mip 0 texels
+                float w_hzb = (maxUV.x - minUV.x) * hzbWidth;
+                float h_hzb = (maxUV.y - minUV.y) * hzbHeight;
+                
+                // Add 1.0 to lod to ensure the footprint in the sampled mip level is <= 0.5 texels.
+                // This guarantees that even with safety padding, the footprint is < 1.0 texels and
+                // will touch AT MOST 2x2 texels, which we can safely cover with 4 exact samples.
+                float lod = ceil(log2(max(max(w_hzb, h_hzb), 1.0))) + 1.0;
                 lod = clamp(lod, 0.0, pc.mipCount - 1.0);
 
-                // Calculate exact active region size at this lod
-                float activeWidth = floor(pc.screenWidth / 2.0);
-                float activeHeight = floor(pc.screenHeight / 2.0);
-                for (int i = 0; i < int(lod); ++i) {
-                    activeWidth = max(1.0, floor(activeWidth / 2.0));
-                    activeHeight = max(1.0, floor(activeHeight / 2.0));
-                }
-
-                // Mip level full dimension
                 float mipWidth = max(1.0, hzbWidth / exp2(lod));
                 float mipHeight = max(1.0, hzbHeight / exp2(lod));
                 
-                vec2 hzbScale = vec2(activeWidth / mipWidth, activeHeight / mipHeight);
+                float activeWidth = floor(pc.screenWidth / exp2(lod + 1.0));
+                float activeHeight = floor(pc.screenHeight / exp2(lod + 1.0));
                 
+                vec2 hzbScale = vec2(activeWidth / mipWidth, activeHeight / mipHeight);
+
                 vec2 sampleMinUV = minUV * hzbScale;
                 vec2 sampleMaxUV = maxUV * hzbScale;
-
-                // Expand by 0.2 texels to account for floating point precision and rasterization rules.
-                vec2 texelSize = vec2(1.0) / vec2(mipWidth, mipHeight);
-                sampleMinUV -= 0.2 * texelSize;
-                sampleMaxUV += 0.2 * texelSize;
-
-                // Clamp to the center of the last valid texel to avoid reading padding
-                vec2 maxValidUV = vec2(
-                    max(0.0, activeWidth - 0.5) / mipWidth,
-                    max(0.0, activeHeight - 0.5) / mipHeight
-                );
                 
-                sampleMinUV = clamp(sampleMinUV, vec2(0.0), maxValidUV);
-                sampleMaxUV = clamp(sampleMaxUV, vec2(0.0), maxValidUV);
-
-                float d1 = textureLod(hzbSampler, sampleMinUV, lod).x;
-                float d2 = textureLod(hzbSampler, vec2(sampleMaxUV.x, sampleMinUV.y), lod).x;
-                float d3 = textureLod(hzbSampler, vec2(sampleMinUV.x, sampleMaxUV.y), lod).x;
-                float d4 = textureLod(hzbSampler, sampleMaxUV, lod).x;
+                vec2 minTexel = sampleMinUV * vec2(mipWidth, mipHeight);
+                vec2 maxTexel = sampleMaxUV * vec2(mipWidth, mipHeight);
+                
+                // Expand by 0.1 texels for safety against floating point and rasterization edges
+                minTexel -= 0.1;
+                maxTexel += 0.1;
+                
+                vec2 centerTexel = (minTexel + maxTexel) * 0.5;
+                // baseTexel perfectly finds the 2x2 block that covers a <= 1.0 wide footprint
+                ivec2 baseTexel = ivec2(floor(centerTexel - 0.5));
+                
+                // Clamp to active area
+                ivec2 maxValidTexel = ivec2(max(0.0, activeWidth - 1.0), max(0.0, activeHeight - 1.0));
+                
+                ivec2 t00 = clamp(baseTexel, ivec2(0), maxValidTexel);
+                ivec2 t10 = clamp(baseTexel + ivec2(1, 0), ivec2(0), maxValidTexel);
+                ivec2 t01 = clamp(baseTexel + ivec2(0, 1), ivec2(0), maxValidTexel);
+                ivec2 t11 = clamp(baseTexel + ivec2(1, 1), ivec2(0), maxValidTexel);
+                
+                // Explicitly fetch the 4 texels
+                float d1 = texelFetch(hzbSampler, t00, int(lod)).x;
+                float d2 = texelFetch(hzbSampler, t10, int(lod)).x;
+                float d3 = texelFetch(hzbSampler, t01, int(lod)).x;
+                float d4 = texelFetch(hzbSampler, t11, int(lod)).x;
 
                 float maxDepth = max(max(d1, d2), max(d3, d4));
 
@@ -281,9 +288,7 @@ void main() {
                 float sphereDepthExtent = maxZ - minZ;
                 float bias = (pc.phase == 0)
                     ? max(0.001, sphereDepthExtent)
-                    : 0.001;
-
-                if (minZ > maxDepth + bias) {
+                    : 0.001;                if (minZ > maxDepth + bias) {
                     visible = false;
                 }
             }
@@ -295,7 +300,9 @@ void main() {
     if (!visible) {
         if (pc.phase == 0 && pc.debugCull == 0) {
             uint idx = atomicAdd(occludedCount, 1);
-            occludedMeshlets[idx] = gID;
+            if (idx < 1000000) {
+                occludedMeshlets[idx] = gID;
+            }
         }
         return;
     }
@@ -303,9 +310,12 @@ void main() {
     // Atomically reserve a slot in the compacted command buffer.
     uint slot = atomicAdd(drawCount, 1);
 
-    commands[slot].indexCount = meshlet.triangleCount * 3;
-    commands[slot].instanceCount = 1;
-    commands[slot].firstIndex = inst.extra.y + meshlet.indexOffset;
-    commands[slot].vertexOffset = int(inst.extra.z);
-    commands[slot].firstInstance = instanceIdx;
+    // Bounds check to prevent GPU memory corruption / Access Violations (max_instances is 100,000)
+    if (slot < 100000) {
+        commands[slot].indexCount = meshlet.triangleCount * 3;
+        commands[slot].instanceCount = 1;
+        commands[slot].firstIndex = inst.extra.y + meshlet.indexOffset;
+        commands[slot].vertexOffset = int(inst.extra.z);
+        commands[slot].firstInstance = instanceIdx;
+    }
 }

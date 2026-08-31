@@ -14,6 +14,8 @@ fn main() {
     println!("cargo:rerun-if-changed=shaders/cloth_integrate.comp");
     println!("cargo:rerun-if-changed=shaders/cloth_solve.comp");
     println!("cargo:rerun-if-changed=shaders/cull.comp");
+    println!("cargo:rerun-if-changed=shaders/anim_update.comp");
+    println!("cargo:rerun-if-changed=shaders/prepass.vert");
     println!("cargo:rerun-if-changed=shaders/generate_hzb.comp");
     println!("cargo:rerun-if-changed=shaders/copy_depth.frag");
     println!("cargo:rerun-if-changed=game/src/lib.rs");

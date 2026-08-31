@@ -59,7 +59,7 @@ pub struct InstanceData {
     pub color: [f32; 4],                // 16 bytes (offset 96)  (r, g, b, albedo_idx_bitcast)
     pub pbr: [f32; 4], // 16 bytes (offset 112) (metallic, roughness, normal_idx_bitcast, mr_idx_bitcast)
     pub geometry: [u32; 4], // 16 bytes (offset 128) (index_count, index_offset, vertex_offset, emissive_idx)
-    pub geometry2: [u32; 4], // 16 bytes (offset 144) (meshlet_offset, meshlet_count, pad0, pad1)
+    pub geometry2: [u32; 4], // 16 bytes (offset 144) (meshlet_offset, meshlet_count, anim_instance, pad)
 }
 
 pub struct Pipeline {

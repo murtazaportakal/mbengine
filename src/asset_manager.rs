@@ -327,6 +327,7 @@ impl AssetManager {
             normal_texture_idx: self.get_texture_index("default_normal").unwrap_or(0),
             mr_texture_idx: 0,
             emissive_texture_idx: 0,
+            is_skinned: false,
         };
 
         let mat_path = path.replace(".mesh", ".mat");
@@ -417,148 +418,16 @@ impl AssetManager {
         geometry_pool: &mut crate::renderer::vulkan::GeometryPool,
         path: &str,
     ) -> Option<&[usize]> {
-        if !self.model_map.contains_key(path) {
-            crate::log_info!("[AssetMgr] Loading model: {}", path);
-            if let Some(loaded_meshes) = Mesh::load_models(path, vulkan, geometry_pool) {
-                crate::log_info!("[AssetMgr] Model {} loaded {} meshes", path, loaded_meshes.len());
-                let mut indices = Vec::with_capacity(loaded_meshes.len());
-                for (mi, mut mesh) in loaded_meshes.into_iter().enumerate() {
-                    crate::log_info!("[AssetMgr]   mesh[{}]: {} verts, {} indices, AABB [{:.1},{:.1},{:.1}]..[{:.1},{:.1},{:.1}]",
-                        mi, mesh.vertex_count, mesh.index_count,
-                        mesh.aabb_min[0], mesh.aabb_min[1], mesh.aabb_min[2],
-                        mesh.aabb_max[0], mesh.aabb_max[1], mesh.aabb_max[2]);
-                    
-                    if mesh.diffuse_texture.is_none() {
-                        mesh.diffuse_texture_idx = self.get_texture_index("default_white").unwrap_or(0);
-                    }
-
-                    if let Some(tex_name) = &mesh.diffuse_texture {
-                        let tex_path = if std::path::Path::new(tex_name).is_absolute() {
-                            tex_name.clone()
-                        } else if let Some(parent) = std::path::Path::new(path).parent() {
-                            parent.join(tex_name).to_string_lossy().to_string()
-                        } else {
-                            tex_name.clone()
-                        };
-                        self.load_texture(vulkan, tex_name, &tex_path);
-                        mesh.diffuse_texture_idx = self.get_texture_index(tex_name).unwrap_or(0);
-                    }
-                    if let Some(tex_name) = &mesh.normal_texture {
-                        mesh.normal_texture_idx = self.get_texture_index(tex_name).unwrap_or(0);
-                    }
-                    if let Some(tex_name) = &mesh.mr_texture {
-                        mesh.mr_texture_idx = self.get_texture_index(tex_name).unwrap_or(0);
-                    }
-                    if let Some(tex_name) = &mesh.emissive_texture {
-                        mesh.emissive_texture_idx = self.get_texture_index(tex_name).unwrap_or(0);
-                    }
-                    indices.push(self.meshes.len());
-                    self.meshes.push(mesh);
-                }
-                self.model_map.insert(path.to_string(), indices);
-                self.model_paths.insert(path.to_string(), path.to_string());
-            } else {
-                crate::log_info!("[AssetMgr] Failed to load model: {}", path);
-                return None;
-            }
+        if path.ends_with(".mesh") {
+            self.load_cooked_mesh(vulkan, geometry_pool, path);
+            return self.model_map.get(path).map(|v| v.as_slice());
         }
-        self.model_map.get(path).map(|v| v.as_slice())
+        
+        crate::log_info!("[AssetMgr] Cannot load raw file '{}'. Please use the offline cooker.", path);
+        None
     }
 
-    /// Load a GLTF/GLB file containing meshes, skeleton, and animation clips.
-    ///
-    /// Returns the mesh indices for the loaded primitives, or None on failure.
-    pub fn load_gltf(
-        &mut self,
-        vulkan: &VulkanDevice,
-        geometry_pool: &mut crate::renderer::vulkan::GeometryPool,
-        name: &str,
-        path: &str,
-    ) -> Option<&[usize]> {
-        if self.model_map.contains_key(name) {
-            return self.model_map.get(name).map(|v| v.as_slice());
-        }
 
-        let gltf_data = crate::renderer::vulkan::gltf_loader::load_gltf(path)?;
-
-        // Load images into textures
-        let mut gltf_texture_names = Vec::new();
-        for (i, img) in gltf_data.images.iter().enumerate() {
-            let tex_name = format!("{}_tex_{}", name, i);
-            if !self.textures.contains_key(&tex_name) {
-                if let Some(tex) = crate::renderer::vulkan::texture::Texture::from_rgba8(
-                    vulkan,
-                    img.width,
-                    img.height,
-                    &img.pixels,
-                ) {
-                    let idx = self.next_texture_index;
-                    self.next_texture_index += 1;
-                    self.texture_indices.insert(tex_name.clone(), idx);
-                    self.new_textures_since_last_frame.push(tex_name.clone());
-                    self.textures.insert(tex_name.clone(), tex);
-                }
-            }
-            gltf_texture_names.push(tex_name);
-        }
-
-        // Store meshes
-        let mut indices = Vec::with_capacity(gltf_data.primitives.len());
-        for (vertices, idx_data, mat_idx) in &gltf_data.primitives {
-            let mut mesh = Mesh::from_gltf_data(vulkan, geometry_pool, vertices, idx_data)?;
-
-            // Apply material properties if available
-            if let Some(m_idx) = mat_idx {
-                if let Some(mat) = gltf_data.materials.get(*m_idx) {
-                    mesh.default_color = [
-                        mat.base_color_factor[0],
-                        mat.base_color_factor[1],
-                        mat.base_color_factor[2],
-                    ];
-                    mesh.metallic = mat.metallic_factor;
-                    mesh.roughness = mat.roughness_factor;
-
-                    if let Some(tex_idx) = mat.base_color_texture {
-                        let name = gltf_texture_names[tex_idx].clone();
-                        mesh.diffuse_texture = Some(name.clone());
-                        mesh.diffuse_texture_idx = self.get_texture_index(&name).unwrap_or(0);
-                    }
-                    if let Some(tex_idx) = mat.normal_texture {
-                        let name = gltf_texture_names[tex_idx].clone();
-                        mesh.normal_texture = Some(name.clone());
-                        mesh.normal_texture_idx = self.get_texture_index(&name).unwrap_or(0);
-                    }
-                    if let Some(tex_idx) = mat.metallic_roughness_texture {
-                        let name = gltf_texture_names[tex_idx].clone();
-                        mesh.mr_texture = Some(name.clone());
-                        mesh.mr_texture_idx = self.get_texture_index(&name).unwrap_or(0);
-                    }
-                    if let Some(tex_idx) = mat.emissive_texture {
-                        let name = gltf_texture_names[tex_idx].clone();
-                        mesh.emissive_texture = Some(name.clone());
-                        mesh.emissive_texture_idx = self.get_texture_index(&name).unwrap_or(0);
-                    }
-                }
-            }
-
-            indices.push(self.meshes.len());
-            self.meshes.push(mesh);
-        }
-        self.model_map.insert(name.to_string(), indices);
-        self.model_paths.insert(path.to_string(), name.to_string());
-
-        // Store skeleton
-        if let Some(skeleton) = gltf_data.skeleton {
-            self.skeletons.insert(name.to_string(), skeleton);
-        }
-
-        // Store animation clips
-        if !gltf_data.clips.is_empty() {
-            self.animation_clips.extend(gltf_data.clips);
-        }
-
-        self.model_map.get(name).map(|v| v.as_slice())
-    }
 
     /// Get a skeleton by name.
     pub fn get_skeleton(&self, name: &str) -> Option<&Skeleton> {

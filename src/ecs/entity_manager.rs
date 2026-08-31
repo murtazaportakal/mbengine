@@ -163,6 +163,15 @@ impl EntityManager {
         id_gen == slot_gen
     }
 
+    /// Reconstruct a full EntityId (with correct generation) from an EntityIndex.
+    pub fn reconstruct_entity(&self, index: EntityIndex) -> Option<EntityId> {
+        if index >= self.next_fresh_index {
+            return None;
+        }
+        let slot_gen = unsafe { *self.generations.add(index as usize) };
+        Some(crate::ecs::types::make_entity_id(index, slot_gen))
+    }
+
     /// Get the maximum allocated entity index (useful for iteration bounding).
     pub fn max_entity_index(&self) -> u32 {
         self.next_fresh_index
