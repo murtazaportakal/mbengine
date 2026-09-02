@@ -256,7 +256,13 @@ void main() {
     kD_ambient *= 1.0 - metallic;
 
     // SSAO pass not yet implemented — use full ambient
-    vec3 ambient = (kD_ambient * diffuseIBL) + specularIBL;
+    float ao = 1.0;
+    
+    // Fake IBL since we don't have an environment map yet
+    vec3 ambient = vec3(0.03) * albedo * ao;
+    if (metallic > 0.0) {
+        ambient += albedo * metallic * 0.15 * ao;
+    }
     
     vec3 emissive = vec3(0.0);
     if (fragEmissiveTextureIndex != 0) {

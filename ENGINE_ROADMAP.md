@@ -184,7 +184,7 @@ Run tests via `cargo test`. Contains 40 tests covering:
 
 ## V4 Master Plan — GPU-Driven Rendering & Asset Pipeline
 
-> **Status:** Phase 0 & Phase 4 complete. Phases 1, 2, 3, 5 pending.
+> **Status:** All Phases (0-5) complete. Engine is fully V4-compliant.
 
 ### Architectural Constraints for V4
 
