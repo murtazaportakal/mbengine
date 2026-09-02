@@ -175,7 +175,11 @@ impl AssetManager {
         }
 
         let data = &bytes[32..32 + data_size];
-        Texture::new_bc7(vulkan, width, height, format, data)
+        
+        let lower_path = path.to_lowercase();
+        let is_linear = lower_path.contains("normal") || lower_path.contains("metallic") || lower_path.contains("roughness") || lower_path.contains("mr");
+        
+        Texture::new_bc7(vulkan, width, height, format, data, is_linear)
     }
 
     pub fn load_hdr_texture(
@@ -327,7 +331,7 @@ impl AssetManager {
             normal_texture_idx: self.get_texture_index("default_normal").unwrap_or(0),
             mr_texture_idx: 0,
             emissive_texture_idx: 0,
-            is_skinned: false,
+            is_skinned: (header.flags & crate::renderer::vulkan::gpu_format::MESH_FLAG_SKINNED) != 0,
         };
 
         let mat_path = path.replace(".mesh", ".mat");

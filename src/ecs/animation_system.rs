@@ -87,11 +87,14 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
                 let new_name = {
                     // Find the name of this target state in the state machine.
                     // This is the reverse lookup: state → name.
-                    let sm2 = animator.state_machine.as_ref().unwrap();
-                    sm2.states.as_slice()
-                        .iter()
-                        .find(|(_, s)| std::ptr::eq(s, target_state))
-                        .map(|(n, _)| *n)
+                    if let Some(sm2) = animator.state_machine.as_ref() {
+                        sm2.states.as_slice()
+                            .iter()
+                            .find(|(_, s)| std::ptr::eq(s, target_state))
+                            .map(|(n, _)| *n)
+                    } else {
+                        None
+                    }
                 };
                 animator.crossfade_to(new_state, dur);
                 if let (Some(sm2), Some(name)) = (animator.state_machine.as_mut(), new_name) {
@@ -122,8 +125,10 @@ pub fn process_animations(world: &World, asset_manager: &AssetManager, dt: f32) 
                 animator.crossfade_current += dt_scaled;
 
                 if animator.crossfade_current >= animator.crossfade_duration {
-                    animator.state = animator.target_state.take().unwrap();
-                    animator.current_time = animator.transition_time;
+                    if let Some(target) = animator.target_state.take() {
+                        animator.state = target;
+                        animator.current_time = animator.transition_time;
+                    }
                 }
             }
         }

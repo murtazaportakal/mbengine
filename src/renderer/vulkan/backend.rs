@@ -26,7 +26,7 @@ use crate::renderer::vulkan::{
 };
 use crate::renderer::vulkan::render_graph::{RenderGraph, ResourceTracker, ResourceHandle, ResourceState};
 use crate::ecs::{
-    CameraComponent, LightComponent, RenderComponent, TransformComponent,
+    LightComponent, RenderComponent, TransformComponent,
 };
 use crate::math::vec::Vec3;
 
@@ -715,40 +715,15 @@ impl RenderBackend {
         ui_ctx: &crate::ui::UiContext,
         ui_font: &crate::ui::font::Font,
         input: &mut crate::app::input::Input,
+        view: crate::math::mat4::Mat4,
+        proj: crate::math::mat4::Mat4,
+        camera_pos: [f32; 4],
     ) {
         if self.scene_pass.is_none() { return; }
 
         // Extract Camera
-        let mut view_proj = crate::math::mat4::Mat4::identity();
-        let mut view = crate::math::mat4::Mat4::identity();
-        let mut proj = crate::math::mat4::Mat4::identity();
-        let mut inverse_proj = crate::math::mat4::Mat4::identity();
-        let mut camera_pos = [0.0f32; 4];
-        {
-            let cameras = world.get_component_array::<CameraComponent>();
-            let transforms = world.get_component_array::<TransformComponent>();
-            if let Some(&cam_entity) = cameras.dense_entities_slice().first() {
-                if transforms.has(cam_entity) {
-                    let cam_transform = unsafe { transforms.get(cam_entity) };
-                    let pitch = cam_transform.rotation.x;
-                    let yaw = cam_transform.rotation.y;
-                    let forward = Vec3::new(
-                        yaw.sin() * pitch.cos(),
-                        pitch.sin(),
-                        yaw.cos() * pitch.cos(),
-                    ).normalize();
-                    let center = cam_transform.position + forward;
-                    view = crate::math::mat4::Mat4::look_at(
-                        cam_transform.position, center, Vec3::new(0.0, 1.0, 0.0),
-                    );
-                    let aspect = self.offscreen_target.width as f32 / self.offscreen_target.height as f32;
-                    proj = crate::math::mat4::Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 10000.0);
-                    view_proj = proj * view;
-                    inverse_proj = proj.try_inverse().unwrap_or(crate::math::mat4::Mat4::identity());
-                    camera_pos = [cam_transform.position.x, cam_transform.position.y, cam_transform.position.z, 1.0];
-                }
-            }
-        }
+        let view_proj = proj * view;
+        let inverse_proj = proj.try_inverse().unwrap_or(crate::math::mat4::Mat4::identity());
 
         // Extract Light
         let mut light_dir = [0.0f32, -1.0, 0.0, 0.0];
@@ -1030,15 +1005,14 @@ impl RenderBackend {
                         std::slice::from_ref(&anim.descriptor_sets[self.current_frame]), &[],
                     );
                     
-                    let total_verts = self.geometry_pool.current_vertex_count;
-                    let pc_data: [u32; 2] = [total_verts, 0];
+                    let pc_data: [u32; 2] = [anim_count, 0];
                     
                     self.vulkan.device.cmd_push_constants(
                         cmd, anim.pipeline.layout, vk::ShaderStageFlags::COMPUTE, 0,
                         bytemuck::bytes_of(&pc_data),
                     );
                     
-                    let group_count = total_verts.div_ceil(256);
+                    let group_count = anim_count.div_ceil(64);
                     self.vulkan.device.cmd_dispatch(cmd, group_count, 1, 1);
                     
                     let mem_bar = vk::MemoryBarrier::default()

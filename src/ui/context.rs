@@ -114,6 +114,9 @@ pub struct UiContext {
     pub mouse_down: bool,
     pub mouse_pressed: bool,
     pub mouse_released: bool,
+    pub right_mouse_down: bool,
+    pub right_mouse_pressed: bool,
+    pub right_mouse_released: bool,
     pub mouse_scroll_y: f32,
 
     pub hot_item: u64,
@@ -151,6 +154,9 @@ impl UiContext {
             mouse_down: false,
             mouse_pressed: false,
             mouse_released: false,
+            right_mouse_down: false,
+            right_mouse_pressed: false,
+            right_mouse_released: false,
             mouse_scroll_y: 0.0,
             hot_item: 0,
             active_item: 0,
@@ -167,10 +173,11 @@ impl UiContext {
         }
     }
 
-    pub fn begin_frame(&mut self, mouse_pos: Vec2, mouse_down: bool, scroll_y: f32) {
+    pub fn begin_frame(&mut self, mouse_pos: Vec2, mouse_down: bool, right_mouse_down: bool, scroll_y: f32) {
         self.draw_commands.clear();
 
         let was_down = self.mouse_down;
+        let was_right_down = self.right_mouse_down;
         self.last_mouse_pos = self.mouse_pos;
         self.mouse_pos = mouse_pos;
         self.mouse_delta = Vec2::new(
@@ -180,6 +187,11 @@ impl UiContext {
         self.mouse_down = mouse_down;
         self.mouse_pressed = !was_down && mouse_down;
         self.mouse_released = was_down && !mouse_down;
+        
+        self.right_mouse_down = right_mouse_down;
+        self.right_mouse_pressed = !was_right_down && right_mouse_down;
+        self.right_mouse_released = was_right_down && !right_mouse_down;
+        
         self.mouse_scroll_y = scroll_y;
 
         self.hot_item = 0;

@@ -198,7 +198,8 @@ impl Application {
 
             self.ui_ctx.begin_frame(
                 crate::math::vec::Vec2::new(self.input.mouse_x as f32, self.input.mouse_y as f32),
-                self.input.keys[0x01],
+                self.input.keys[0x01], // mouse_down
+                self.input.keys[0x02], // right_mouse_down
                 self.input.mouse_scroll_y,
             );
 
@@ -226,6 +227,7 @@ impl Application {
 
             let mut view_mat = crate::math::mat4::Mat4::identity();
             let mut proj_mat = crate::math::mat4::Mat4::identity();
+            let mut camera_world_pos = [0.0f32; 4];
 
             let cam_entity = {
                 let cameras = self.world.get_component_array::<CameraComponent>();
@@ -235,6 +237,7 @@ impl Application {
                 let transforms = self.world.get_component_array::<TransformComponent>();
                 if transforms.has(cam_entity) {
                     let transform = unsafe { transforms.get(cam_entity) };
+                    camera_world_pos = [transform.position.x, transform.position.y, transform.position.z, 1.0];
                     let pitch = transform.rotation.x;
                     let yaw = transform.rotation.y;
                     let forward = crate::math::vec::Vec3::new(
@@ -432,8 +435,16 @@ impl Application {
                             crate::log_info!("[SpawnModel] Error: Cannot load raw {} files at runtime! Use the offline cooker.", path_obj.display());
                         } else if path_obj.extension().is_some_and(|ext| ext == "mesh") {
                             crate::log_info!("[SpawnModel] Loading Cooked Mesh: {}", path_obj.display());
-                            if let Some(idx) = self.asset_manager.load_cooked_mesh(&self.render.vulkan, &mut self.render.geometry_pool, path_str) {
-                                mesh_indices = Some(vec![idx]);
+                            mesh_indices = self.asset_manager.load_cooked_mesh(
+                                &self.render.vulkan,
+                                &mut self.render.geometry_pool,
+                                path_str,
+                            ).map(|s| vec![s]);
+                            
+                            let anim_path = path_str.replace(".mesh", ".anim");
+                            if std::path::Path::new(&anim_path).exists() {
+                                crate::log_info!("[SpawnModel] Auto-loading Anim: {}", anim_path);
+                                self.asset_manager.load_cooked_anim(&self.render.vulkan, &mut self.render.animation_pool, &name, &anim_path);
                             }
                         } else if path_obj.extension().is_some_and(|ext| ext == "anim") {
                             crate::log_info!("[SpawnModel] Loading Cooked Anim: {}", path_obj.display());
@@ -509,7 +520,22 @@ impl Application {
                                 }
                             }
                         }
-                        let final_spawn_pos = spawn_pos + forward_vec * 5.0;
+                        let mut final_spawn_pos = spawn_pos + forward_vec * 5.0;
+                        
+                        // Try to spawn the object on the ground grid (Y = 0)
+                        if forward_vec.y < -0.01 {
+                            // Ray intersection with Y=0 plane:
+                            // spawn_pos.y + t * forward_vec.y = 0  =>  t = -spawn_pos.y / forward_vec.y
+                            let t = -spawn_pos.y / forward_vec.y;
+                            if t > 0.0 && t < 100.0 {
+                                final_spawn_pos = spawn_pos + forward_vec * t;
+                            } else {
+                                final_spawn_pos.y = 0.0;
+                            }
+                        } else {
+                            // If looking up or horizontally, just spawn in front but clamped to ground
+                            final_spawn_pos.y = 0.0;
+                        }
 
                         // Destroying the command pool mid-loop corrupts the
                         // validation layer's buffer-reference tracking and
@@ -581,7 +607,7 @@ impl Application {
                                         r = mesh.default_color[0];
                                         g = mesh.default_color[1];
                                         b = mesh.default_color[2];
-                                        is_skinned = false; // [DIAGNOSTIC] FORCE OFF
+                                        is_skinned = mesh.is_skinned;
                                         let hx = (mesh.aabb_max[0]-mesh.aabb_min[0]).abs()*0.5;
                                         let hy = (mesh.aabb_max[1]-mesh.aabb_min[1]).abs()*0.5;
                                         let hz = (mesh.aabb_max[2]-mesh.aabb_min[2]).abs()*0.5;
@@ -608,7 +634,7 @@ impl Application {
                                             crossfade_current: 0.0,
                                             crossfade_duration: 0.0,
                                             speed: 1.0,
-                                            is_playing: false,
+                                            is_playing: true,
                                             is_looping: true,
                                             state_machine: None,
                                         });
@@ -634,7 +660,7 @@ impl Application {
                                             r = mesh.default_color[0];
                                             g = mesh.default_color[1];
                                             b = mesh.default_color[2];
-                                            is_skinned = false; // [DIAGNOSTIC] FORCE OFF
+                                            is_skinned = mesh.is_skinned;
 
                                             let hx = (mesh.aabb_max[0]-mesh.aabb_min[0]).abs()*0.5;
                                             let hy = (mesh.aabb_max[1]-mesh.aabb_min[1]).abs()*0.5;
@@ -662,7 +688,7 @@ impl Application {
                                                 crossfade_current: 0.0,
                                                 crossfade_duration: 0.0,
                                                 speed: 1.0,
-                                                is_playing: false,
+                                                is_playing: true,
                                                 is_looping: true,
                                                 state_machine: None,
                                             });
@@ -892,6 +918,7 @@ impl Application {
             self.render.render_frame(
                 &mut self.window, &self.world, &self.world_matrices,
                 &self.asset_manager, &self.ui_ctx, &self.ui_font, &mut self.input,
+                view_mat, proj_mat, camera_world_pos,
             );
             self.render.current_frame = (self.render.current_frame + 1) % 2;
             self.memory.frame_arena().reset(false);

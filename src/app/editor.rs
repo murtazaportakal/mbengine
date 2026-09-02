@@ -24,6 +24,22 @@ pub enum EditorAction {
     SpawnStressTest,
 }
 
+pub struct EditorCamera {
+    pub position: crate::math::vec::Vec3,
+    pub pitch: f32,
+    pub yaw: f32,
+}
+
+impl Default for EditorCamera {
+    fn default() -> Self {
+        Self {
+            position: crate::math::vec::Vec3::new(0.0, 3.0, -8.0),
+            pitch: -std::f32::consts::FRAC_PI_8,
+            yaw: 0.0,
+        }
+    }
+}
+
 pub struct Editor {
     pub registry: ComponentRegistry,
     pub file_dialog_receiver: Option<std::sync::mpsc::Receiver<String>>,
@@ -42,6 +58,8 @@ pub struct Editor {
     pub hierarchy_scroll: f32,
     pub file_browser_scroll: f32,
     pub dragging_file: Option<String>,
+    pub camera: EditorCamera,
+    pub is_flying: bool,
 }
 
 impl Default for Editor {
@@ -93,6 +111,8 @@ impl Editor {
             hierarchy_scroll: 0.0,
             file_browser_scroll: 0.0,
             dragging_file: None,
+            camera: EditorCamera::default(),
+            is_flying: false,
         }
     }
 
@@ -130,7 +150,7 @@ impl Editor {
         }
 
         use crate::ui::context::{
-            ButtonBuilder, PanelBuilder, UiRect, SLATE_BASE, SLATE_SECONDARY,
+            ButtonBuilder, PanelBuilder, UiRect, SLATE_BASE, SLATE_SECONDARY, SLATE_ACCENT,
         };
 
         // Render the stats in top right or left
@@ -434,6 +454,131 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
         ui_ctx.image(viewport_rect, 0); // 0 is offscreen_texture_id
 
+        // --- 3D Grid & Axis Overlay ---
+        let mut draw_3d_line = |p1: crate::math::vec::Vec3, p2: crate::math::vec::Vec3, mut color: crate::ui::UiColor| {
+            let mut p1_clip = proj * view * crate::math::vec::Vec4::new(p1.x, p1.y, p1.z, 1.0);
+            let mut p2_clip = proj * view * crate::math::vec::Vec4::new(p2.x, p2.y, p2.z, 1.0);
+            
+            // Distance-based alpha fade to prevent Moire patterns / solid squares in the distance
+            let dist = (p1_clip.w + p2_clip.w) * 0.5;
+            let fade_start = 10.0;
+            let fade_end = 35.0;
+            if dist > fade_start {
+                let alpha_scale = (1.0 - (dist - fade_start) / (fade_end - fade_start)).clamp(0.0, 1.0);
+                color.a = (color.a as f32 * alpha_scale) as u8;
+            }
+            if color.a == 0 {
+                return;
+            }
+
+            let near_w = 0.001;
+
+            if p1_clip.w < near_w && p2_clip.w < near_w {
+                return;
+            }
+
+            if p1_clip.w < near_w {
+                let t = (near_w - p1_clip.w) / (p2_clip.w - p1_clip.w);
+                p1_clip = p1_clip + (p2_clip - p1_clip) * t;
+            } else if p2_clip.w < near_w {
+                let t = (near_w - p2_clip.w) / (p1_clip.w - p2_clip.w);
+                p2_clip = p2_clip + (p1_clip - p2_clip) * t;
+            }
+            
+            let p1_ndc = p1_clip / p1_clip.w;
+            let p2_ndc = p2_clip / p2_clip.w;
+            
+            let p1_screen = crate::math::vec::Vec2::new(
+                viewport_rect.x + (p1_ndc.x * 0.5 + 0.5) * viewport_rect.w,
+                viewport_rect.y + (p1_ndc.y * 0.5 + 0.5) * viewport_rect.h,
+            );
+            let p2_screen = crate::math::vec::Vec2::new(
+                viewport_rect.x + (p2_ndc.x * 0.5 + 0.5) * viewport_rect.w,
+                viewport_rect.y + (p2_ndc.y * 0.5 + 0.5) * viewport_rect.h,
+            );
+            
+            // Cohen-Sutherland clipping against viewport bounds to prevent huge off-screen quads
+            let mut x0 = p1_screen.x;
+            let mut y0 = p1_screen.y;
+            let mut x1 = p2_screen.x;
+            let mut y1 = p2_screen.y;
+
+            let xmin = viewport_rect.x;
+            let xmax = viewport_rect.x + viewport_rect.w;
+            let ymin = viewport_rect.y;
+            let ymax = viewport_rect.y + viewport_rect.h;
+
+            let compute_outcode = |x: f32, y: f32| -> u32 {
+                let mut code = 0;
+                if x < xmin { code |= 1; } else if x > xmax { code |= 2; }
+                if y < ymin { code |= 4; } else if y > ymax { code |= 8; }
+                code
+            };
+
+            let mut outcode0 = compute_outcode(x0, y0);
+            let mut outcode1 = compute_outcode(x1, y1);
+            let mut accept = false;
+
+            loop {
+                if (outcode0 | outcode1) == 0 {
+                    accept = true; break;
+                } else if (outcode0 & outcode1) != 0 {
+                    break;
+                } else {
+                    let outcode_out = if outcode0 != 0 { outcode0 } else { outcode1 };
+                    let mut x = 0.0;
+                    let mut y = 0.0;
+                    
+                    if (outcode_out & 8) != 0 {
+                        x = x0 + (x1 - x0) * (ymax - y0) / (y1 - y0);
+                        y = ymax;
+                    } else if (outcode_out & 4) != 0 {
+                        x = x0 + (x1 - x0) * (ymin - y0) / (y1 - y0);
+                        y = ymin;
+                    } else if (outcode_out & 2) != 0 {
+                        y = y0 + (y1 - y0) * (xmax - x0) / (x1 - x0);
+                        x = xmax;
+                    } else if (outcode_out & 1) != 0 {
+                        y = y0 + (y1 - y0) * (xmin - x0) / (x1 - x0);
+                        x = xmin;
+                    }
+
+                    if outcode_out == outcode0 {
+                        x0 = x; y0 = y; outcode0 = compute_outcode(x0, y0);
+                    } else {
+                        x1 = x; y1 = y; outcode1 = compute_outcode(x1, y1);
+                    }
+                }
+            }
+
+            if accept {
+                ui_ctx.add_line(
+                    crate::math::vec::Vec2::new(x0, y0),
+                    crate::math::vec::Vec2::new(x1, y1),
+                    color,
+                    1.0,
+                );
+            }
+        };
+
+        let grid_size = 100;
+        let spacing = 1.0;
+        let grid_color = crate::ui::UiColor::rgba(128, 128, 128, 30);
+        for i in -grid_size..=grid_size {
+            let offset = i as f32 * spacing;
+            draw_3d_line(
+                crate::math::vec::Vec3::new(offset, 0.0, -grid_size as f32 * spacing),
+                crate::math::vec::Vec3::new(offset, 0.0, grid_size as f32 * spacing),
+                grid_color,
+            );
+            draw_3d_line(
+                crate::math::vec::Vec3::new(-grid_size as f32 * spacing, 0.0, offset),
+                crate::math::vec::Vec3::new(grid_size as f32 * spacing, 0.0, offset),
+                grid_color,
+            );
+        }
+
+
         // If mouse is inside viewport and clicked, trigger raycast
         if viewport_rect.contains(ui_ctx.mouse_pos) {
             viewport_hovered = true;
@@ -445,6 +590,9 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
                 let ndc_y = (local_y / viewport_rect.h) * 2.0 - 1.0;
                 raycast_request = Some((ndc_x, ndc_y));
             }
+            if ui_ctx.right_mouse_pressed {
+                self.is_flying = true;
+            }
             if !ui_ctx.mouse_down {
                 if let Some(file) = self.dragging_file.take() {
                     actions.push(EditorAction::SpawnModel(file));
@@ -452,6 +600,21 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
             }
         }
         
+        if !ui_ctx.right_mouse_down {
+            self.is_flying = false;
+        }
+
+        if self.is_flying {
+            // Hide cursor implicitly handled by platform if we could, but for now we just capture delta
+            self.camera.yaw += ui_ctx.mouse_delta.x * 0.005;
+            self.camera.pitch += ui_ctx.mouse_delta.y * 0.005;
+            self.camera.pitch = self.camera.pitch.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
+            
+            // Note: Since we don't have direct keyboard state in UiContext easily except through the app,
+            // we will pass input commands from Application to Editor, or just let Application update the camera position.
+            // For now, we will just return EditorAction::MoveCamera? No, let's just let Application do it since Application owns `Input`.
+        }
+
         if !ui_ctx.mouse_down {
             self.dragging_file = None;
         }
@@ -679,7 +842,7 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
                         }
                     }
                 }
-            ui_ctx.end_vertical_layout();
+            }
         }
 
         // 5. Bottom File Browser
@@ -724,10 +887,14 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
                         let mut group_name = name.clone();
                         
                         // Group sub-meshes together (e.g. adamHead_0, adamHead_1 -> adamHead)
-                        if let Some(last_underscore) = name.rfind('_') {
-                            if name[last_underscore+1..].chars().all(|c| c.is_ascii_digit()) {
-                                group_name = name[..last_underscore].to_string();
+                        if ext == "mesh" {
+                            if let Some(last_underscore) = name.rfind('_') {
+                                if name[last_underscore+1..].chars().all(|c| c.is_ascii_digit()) {
+                                    group_name = name[..last_underscore].to_string();
+                                }
                             }
+                        } else {
+                            group_name = format!("{}.{}", name, ext);
                         }
                         file_groups.entry(group_name).or_default().push(path);
                     }
@@ -768,6 +935,7 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
                 if delete_rect.contains(ui_ctx.mouse_pos) {
                     if ui_ctx.mouse_pressed {
                         deleted = true;
+                        ui_ctx.mouse_pressed = false; // Consume click
                     }
                 } else if item_rect.contains(ui_ctx.mouse_pos) && ui_ctx.mouse_pressed {
                     self.dragging_file = Some(drag_path.clone());
@@ -775,6 +943,12 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
                 if deleted {
                     for path in &paths {
+                        // Protect source files from accidental deletion in the asset browser
+                        if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                            if ext == "gltf" || ext == "glb" || ext == "obj" || ext == "fbx" {
+                                continue;
+                            }
+                        }
                         let _ = std::fs::remove_file(path);
                         let mat_path = path.with_extension("mat");
                         let _ = std::fs::remove_file(mat_path);
@@ -783,12 +957,19 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
                 }
 
                 let style = if self.dragging_file.as_deref() == Some(drag_path.as_str()) {
-                    &SLATE_BASE
+                    &SLATE_ACCENT
+                } else if item_rect.contains(ui_ctx.mouse_pos) {
+                    &SLATE_BASE // Hover state
                 } else {
-                    &SLATE_SECONDARY
+                    &SLATE_BASE // Normal state (was SLATE_SECONDARY which blended in)
                 };
 
-                ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad { rect: item_rect, color: style.bg_color, rounding: 2.0 });
+                let mut bg_color = style.bg_color;
+                if item_rect.contains(ui_ctx.mouse_pos) {
+                    bg_color = crate::ui::UiColor::rgb(bg_color.r.saturating_add(20), bg_color.g.saturating_add(20), bg_color.b.saturating_add(20));
+                }
+
+                ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Quad { rect: item_rect, color: bg_color, rounding: 2.0 });
                 
                 let mut fs = crate::containers::FixedString::<128>::new();
                 use core::fmt::Write;
@@ -827,7 +1008,6 @@ static IS_COOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
             ui_ctx.draw_commands.push(crate::ui::context::DrawCommand::Text { pos: crate::math::vec::Vec2::new(drag_rect.x + 5.0, drag_rect.y + 20.0), text: fs, color: crate::ui::UiColor::rgba(255, 255, 255, 255), font_size: 16.0 });
         }
 
-        }
         } else if self.active_tab == EditorTab::ScriptGraph {
             // Full-screen canvas below the top bar
             let canvas_rect = UiRect {

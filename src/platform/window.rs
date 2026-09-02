@@ -55,12 +55,20 @@ impl Window {
 
             win32::ShowWindow(hwnd, win32::SW_SHOW);
 
+            // Read the actual client rect immediately — CreateWindowExA uses outer
+            // dimensions (including title bar + borders), so width/height here are
+            // the inner (render-able) pixel counts the swapchain will be sized to.
+            let mut rect: win32::RECT = std::mem::zeroed();
+            win32::GetClientRect(hwnd, &mut rect);
+            let client_w = (rect.right - rect.left) as u32;
+            let client_h = (rect.bottom - rect.top) as u32;
+
             Self {
                 hwnd,
                 hinstance,
                 should_close: false,
-                width: width as u32,
-                height: height as u32,
+                width: client_w,
+                height: client_h,
                 resized: false,
             }
         }

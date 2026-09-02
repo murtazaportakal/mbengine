@@ -178,6 +178,17 @@ impl World {
         }
     }
 
+    /// Destroy all alive entities.
+    pub fn clear_all_entities(&mut self) {
+        let mut buffer = vec![INVALID_ENTITY; 10000];
+        let alive_count = self.get_alive_entities(&mut buffer);
+        for i in 0..alive_count {
+            if self.is_alive(buffer[i]) {
+                self.destroy_entity(buffer[i]);
+            }
+        }
+    }
+
     /// Check whether an entity is still alive.
     pub fn is_alive(&self, id: EntityId) -> bool {
         unsafe { (*self.entity_manager).is_alive(id) }

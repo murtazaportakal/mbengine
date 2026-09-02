@@ -543,11 +543,10 @@ impl AssetImporter for ObjImporter {
 }
 
 /// Parse a glTF / GLB file into raw intermediate primitives and materials.
-fn load_gltf_internal(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option<RawSkeleton>), String> {
+fn load_gltf_internal(path: &std::path::Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial>, Option<RawSkeleton>), String> {
     let (document, buffers, _images) =
         gltf::import(path).map_err(|e| format!("gltf::import failed: {}", e))?;
 
-    // ── Node Transforms ──────────────────────────────────────────────────────
     let mut mesh_transforms = std::collections::HashMap::new();
     fn traverse_node(node: &gltf::Node, parent_transform: nalgebra::Matrix4<f32>, map: &mut std::collections::HashMap<usize, nalgebra::Matrix4<f32>>) {
         let m = node.transform().matrix();
@@ -558,9 +557,7 @@ fn load_gltf_internal(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial
             m[0][3], m[1][3], m[2][3], m[3][3],
         );
         let world = parent_transform * local;
-        if let Some(mesh) = node.mesh() {
-            map.insert(mesh.index(), world);
-        }
+        map.insert(node.index(), world);
         for child in node.children() {
             traverse_node(&child, world, map);
         }
@@ -571,35 +568,21 @@ fn load_gltf_internal(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial
         }
     }
 
-    // ── Materials ────────────────────────────────────────────────────────────
     let mut materials: Vec<RawMaterial> = Vec::new();
     for mat in document.materials() {
         let pbr = mat.pbr_metallic_roughness();
-
-        // Helper: convert a glTF texture reference into a stable file path string.
-        // We record the source image index so the engine can find the right file.
-        // For embedded textures we record "embedded:<index>" as a sentinel that
-        // Phase 2 (VFS hooks) will resolve when loading the cooked asset.
         let tex_path = |info: Option<gltf::texture::Texture<'_>>| -> Option<String> {
             info.map(|t| {
                 let src = t.source();
                 match src.source() {
                     gltf::image::Source::Uri { uri, .. } => {
-                        // Resolve relative to the glTF directory
-                        let gltf_dir = path.parent().unwrap_or(Path::new("."));
-                        gltf_dir
-                            .join(uri)
-                            .to_string_lossy()
-                            .replace('\\', "/")
+                        let gltf_dir = path.parent().unwrap_or(std::path::Path::new("."));
+                        gltf_dir.join(uri).to_string_lossy().replace('\\', "/")
                     }
-                    gltf::image::Source::View { .. } => {
-                        // Embedded image — record index as sentinel for Phase 2
-                        format!("embedded:{}", src.index())
-                    }
+                    gltf::image::Source::View { .. } => format!("embedded:{}", src.index()),
                 }
             })
         };
-
         materials.push(RawMaterial {
             base_color_factor: pbr.base_color_factor(),
             metallic_factor: pbr.metallic_factor(),
@@ -611,148 +594,158 @@ fn load_gltf_internal(path: &Path) -> Result<(Vec<RawPrimitive>, Vec<RawMaterial
         });
     }
 
-    // ── Primitives ───────────────────────────────────────────────────────────
-    let mut primitives: Vec<RawPrimitive> = Vec::new();
-    for mesh in document.meshes() {
-        for primitive in mesh.primitives() {
-            let reader = primitive.reader(|buf| Some(&buffers[buf.index()]));
+    let has_real_skin = document.skins().next().is_some();
+    let has_animations = document.animations().count() > 0;
+    let use_synthetic_skeleton = !has_real_skin && has_animations;
 
-            // Positions (required)
-            let positions: Vec<[f32; 3]> = match reader.read_positions() {
-                Some(iter) => iter.collect(),
-                None => {
-                    eprintln!(
-                        "[cooker] Warning: primitive in mesh '{}' has no POSITION data — skipping.",
-                        mesh.name().unwrap_or("<unnamed>")
-                    );
-                    continue;
+    let mut node_to_synthetic_bone = std::collections::HashMap::new();
+    let mut synthetic_joints = Vec::new();
+    if use_synthetic_skeleton {
+        let mut bone_idx = 0;
+        for scene in document.scenes() {
+            fn map_nodes(node: &gltf::Node, map: &mut std::collections::HashMap<usize, u32>, idx: &mut u32, joints: &mut Vec<usize>) {
+                map.insert(node.index(), *idx);
+                joints.push(node.index());
+                *idx += 1;
+                for child in node.children() {
+                    map_nodes(&child, map, idx, joints);
                 }
-            };
-            let n = positions.len();
-
-            // Normals
-            let normals: Vec<[f32; 3]> = reader
-                .read_normals()
-                .map(|it| it.collect())
-                .unwrap_or_else(|| compute_flat_normals(&positions));
-
-            // UV0
-            let uvs: Vec<[f32; 2]> = reader
-                .read_tex_coords(0)
-                .map(|it| it.into_f32().collect())
-                .unwrap_or_else(|| vec![[0.0f32; 2]; n]);
-
-            // Skinning: JOINTS_0 + WEIGHTS_0
-            let joints: Vec<[u32; 4]> = reader
-                .read_joints(0)
-                .map(|it| {
-                    it.into_u16()
-                        .map(|j| [j[0] as u32, j[1] as u32, j[2] as u32, j[3] as u32])
-                        .collect()
-                })
-                .unwrap_or_else(|| vec![[0u32; 4]; n]);
-
-            let weights: Vec<[f32; 4]> = reader
-                .read_weights(0)
-                .map(|it| it.into_f32().collect())
-                .unwrap_or_else(|| vec![[0.0f32; 4]; n]);
-
-            // Indices (fall back to sequential if absent)
-            let base_indices: Vec<u32> = reader
-                .read_indices()
-                .map(|it| it.into_u32().collect())
-                .unwrap_or_else(|| (0..n as u32).collect());
-
-            if base_indices.is_empty() || positions.is_empty() {
-                continue;
             }
-
-            // Detect skinning (any non-zero weight) AND must have joints
-            let is_skinned = !joints.is_empty() && weights.iter().any(|w| w.iter().any(|&v| v > 0.0));
-
-            let transform = if is_skinned {
-                nalgebra::Matrix4::identity()
-            } else {
-                mesh_transforms.get(&mesh.index()).copied().unwrap_or_else(nalgebra::Matrix4::identity)
-            };
-            
-            let normal_transform = transform.try_inverse().unwrap_or_else(nalgebra::Matrix4::identity).transpose();
-
-            // Build the flat Vertex array
-            let mut vertices: Vec<Vertex> = Vec::new();
-            for i in 0..n {
-                let normal = if i < normals.len() { normals[i] } else { [0.0, 0.0, 0.0] };
-                let uv = if i < uvs.len() { uvs[i] } else { [0.0, 0.0] };
-
-                let j = if i < joints.len() { joints[i] } else { [0, 0, 0, 0] };
-                let w = if i < weights.len() { weights[i] } else { [0.0, 0.0, 0.0, 0.0] };
-
-                let pos_v = transform * nalgebra::Vector4::new(positions[i][0], positions[i][1], positions[i][2], 1.0);
-                let norm_v = normal_transform * nalgebra::Vector4::new(normal[0], normal[1], normal[2], 0.0);
-                
-                let mut norm_vec = nalgebra::Vector3::new(norm_v.x, norm_v.y, norm_v.z);
-                if norm_vec.norm_squared() > 0.0 {
-                    norm_vec.normalize_mut();
-                }
-
-                vertices.push(Vertex {
-                    pos: [pos_v.x, pos_v.y, pos_v.z],
-                    _pad0: 0,
-                    normal: [norm_vec.x, norm_vec.y, norm_vec.z],
-                    _pad1: 0,
-                    uv,
-                    _pad2: [0; 2],
-                    joint_ids: j,
-                    joint_weights: w,
-                });
+            for node in scene.nodes() {
+                map_nodes(&node, &mut node_to_synthetic_bone, &mut bone_idx, &mut synthetic_joints);
             }
-
-            // AABB
-            let (aabb_min, aabb_max) = compute_aabb(&vertices);
-
-            // Meshlet generation via meshopt
-            let (indices, meshlets) =
-                build_meshlets_for_primitive(&vertices, &base_indices);
-
-            let material_index = primitive.material().index();
-
-            primitives.push(RawPrimitive {
-                vertices,
-                indices,
-                meshlets,
-                aabb_min,
-                aabb_max,
-                is_skinned,
-                material_index,
-            });
         }
     }
 
-    let skeleton = extract_skeleton_and_animations(&document, &buffers);
+    let mut primitives: Vec<RawPrimitive> = Vec::new();
+    for scene in document.scenes() {
+        fn extract_from_node(
+            node: &gltf::Node,
+            document: &gltf::Document,
+            buffers: &[gltf::buffer::Data],
+            mesh_transforms: &std::collections::HashMap<usize, nalgebra::Matrix4<f32>>,
+            use_synthetic_skeleton: bool,
+            node_to_synthetic_bone: &std::collections::HashMap<usize, u32>,
+            primitives: &mut Vec<RawPrimitive>
+        ) {
+            if let Some(mesh) = node.mesh() {
+                for primitive in mesh.primitives() {
+                    let reader = primitive.reader(|buf| Some(&buffers[buf.index()]));
+                    let positions: Vec<[f32; 3]> = match reader.read_positions() {
+                        Some(iter) => iter.collect(),
+                        None => continue,
+                    };
+                    let n = positions.len();
+
+                    let normals: Vec<[f32; 3]> = reader.read_normals().map(|it| it.collect()).unwrap_or_else(|| compute_flat_normals(&positions));
+                    let uvs: Vec<[f32; 2]> = reader.read_tex_coords(0).map(|it| it.into_f32().collect()).unwrap_or_else(|| vec![[0.0f32; 2]; n]);
+                    
+                    let mut joints: Vec<[u32; 4]> = reader.read_joints(0).map(|it| {
+                        it.into_u16().map(|j| [j[0] as u32, j[1] as u32, j[2] as u32, j[3] as u32]).collect()
+                    }).unwrap_or_else(|| vec![[0u32; 4]; n]);
+                    
+                    let mut weights: Vec<[f32; 4]> = reader.read_weights(0).map(|it| it.into_f32().collect()).unwrap_or_else(|| vec![[0.0f32; 4]; n]);
+                    
+                    let mut is_skinned = reader.read_weights(0).is_some();
+                    
+                    if use_synthetic_skeleton {
+                        if let Some(&bone_idx) = node_to_synthetic_bone.get(&node.index()) {
+                            joints = vec![[bone_idx, 0, 0, 0]; n];
+                            weights = vec![[1.0, 0.0, 0.0, 0.0]; n];
+                            is_skinned = true;
+                        }
+                    }
+
+                    let base_indices: Vec<u32> = reader.read_indices().map(|it| it.into_u32().collect()).unwrap_or_else(|| (0..n as u32).collect());
+                    if base_indices.is_empty() || positions.is_empty() { continue; }
+
+                    let transform = mesh_transforms.get(&node.index()).copied().unwrap_or(nalgebra::Matrix4::identity());
+                    let normal_transform = transform.try_inverse().unwrap_or_else(|| nalgebra::Matrix4::identity()).transpose();
+
+                    let mut vertices = Vec::new();
+                    for i in 0..n {
+                        let pos_v = transform * nalgebra::Vector4::new(positions[i][0], positions[i][1], positions[i][2], 1.0);
+                        let norm_v = normal_transform * nalgebra::Vector4::new(normals[i][0], normals[i][1], normals[i][2], 0.0);
+                        let mut norm_vec = nalgebra::Vector3::new(norm_v.x, norm_v.y, norm_v.z);
+                        if norm_vec.norm_squared() > 0.0 { norm_vec.normalize_mut(); }
+                        vertices.push(Vertex {
+                            pos: [pos_v.x, pos_v.y, pos_v.z],
+                            _pad0: 0,
+                            normal: [norm_vec.x, norm_vec.y, norm_vec.z],
+                            _pad1: 0,
+                            uv: uvs[i],
+                            _pad2: [0; 2],
+                            joint_ids: joints[i],
+                            joint_weights: weights[i],
+                        });
+                    }
+
+                    let (aabb_min, aabb_max) = compute_aabb(&vertices);
+                    let (indices, meshlets) = build_meshlets_for_primitive(&vertices, &base_indices);
+                    let material_index = primitive.material().index();
+
+                    primitives.push(RawPrimitive { vertices, indices, meshlets, aabb_min, aabb_max, is_skinned, material_index });
+                }
+            }
+            for child in node.children() {
+                extract_from_node(&child, document, buffers, mesh_transforms, use_synthetic_skeleton, node_to_synthetic_bone, primitives);
+            }
+        }
+        for node in scene.nodes() {
+            extract_from_node(&node, &document, &buffers, &mesh_transforms, use_synthetic_skeleton, &node_to_synthetic_bone, &mut primitives);
+        }
+    }
+
+    let skeleton = extract_skeleton_and_animations(&document, &buffers, &mesh_transforms, use_synthetic_skeleton, &node_to_synthetic_bone, &synthetic_joints);
     Ok((primitives, materials, skeleton))
 }
-
-// ── Skeleton & Animation Extraction ───────────────────────────────────────────
 
 fn extract_skeleton_and_animations(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
+    mesh_transforms: &std::collections::HashMap<usize, nalgebra::Matrix4<f32>>,
+    use_synthetic_skeleton: bool,
+    node_to_synthetic_bone: &std::collections::HashMap<usize, u32>,
+    synthetic_joints: &[usize],
 ) -> Option<RawSkeleton> {
-    let skin = document.skins().next()?;
-    let joints: Vec<gltf::Node<'_>> = skin.joints().collect();
+    let mut joints: Vec<gltf::Node<'_>> = Vec::new();
+    let mut node_to_bone = std::collections::HashMap::new();
+
+    if use_synthetic_skeleton {
+        for &node_idx in synthetic_joints {
+            for scene in document.scenes() {
+                fn find_node<'a>(n: &gltf::Node<'a>, idx: usize) -> Option<gltf::Node<'a>> {
+                    if n.index() == idx { return Some(n.clone()); }
+                    for child in n.children() {
+                        if let Some(res) = find_node(&child, idx) { return Some(res); }
+                    }
+                    None
+                }
+                for node in scene.nodes() {
+                    if let Some(res) = find_node(&node, node_idx) {
+                        joints.push(res);
+                        break;
+                    }
+                }
+            }
+        }
+        node_to_bone = node_to_synthetic_bone.clone();
+    } else {
+        if let Some(skin) = document.skins().next() {
+            joints = skin.joints().collect();
+            for (i, joint) in joints.iter().enumerate() {
+                node_to_bone.insert(joint.index(), i as u32);
+            }
+        } else {
+            return None; // No skin and no synthetic skeleton
+        }
+    }
 
     if joints.len() > MAX_BONES {
         eprintln!("[cooker] Warning: Skeleton has {} bones (max is {}).", joints.len(), MAX_BONES);
         return None;
     }
 
-    // Map GLTF node index -> Bone index
-    let mut node_to_bone = std::collections::HashMap::new();
-    for (i, joint) in joints.iter().enumerate() {
-        node_to_bone.insert(joint.index(), i as u32);
-    }
-
-    // Build parent map for the entire document
     let mut parent_map = std::collections::HashMap::new();
     fn visit(node: &gltf::Node<'_>, map: &mut std::collections::HashMap<usize, usize>) {
         for child in node.children() {
@@ -766,7 +759,6 @@ fn extract_skeleton_and_animations(
         }
     }
 
-    // Find parent bone index
     let find_parent_bone = |node: &gltf::Node<'_>| -> i32 {
         let mut curr = node.index();
         loop {
@@ -782,26 +774,32 @@ fn extract_skeleton_and_animations(
         }
     };
 
-    let inverse_bind_matrices: Vec<[f32; 16]> = match skin
-        .reader(|buf| Some(&buffers[buf.index()]))
-        .read_inverse_bind_matrices()
-    {
-        Some(iter) => iter.map(|m| {
+    let inverse_bind_matrices: Vec<[f32; 16]> = if use_synthetic_skeleton {
+        joints.iter().map(|j| {
+            let t = mesh_transforms.get(&j.index()).copied().unwrap_or(nalgebra::Matrix4::identity());
+            let inv = t.try_inverse().unwrap_or(nalgebra::Matrix4::identity());
             [
-                m[0][0], m[0][1], m[0][2], m[0][3],
-                m[1][0], m[1][1], m[1][2], m[1][3],
-                m[2][0], m[2][1], m[2][2], m[2][3],
-                m[3][0], m[3][1], m[3][2], m[3][3],
+                inv[0], inv[4], inv[8], inv[12],
+                inv[1], inv[5], inv[9], inv[13],
+                inv[2], inv[6], inv[10], inv[14],
+                inv[3], inv[7], inv[11], inv[15],
             ]
-        }).collect(),
-        None => {
-            let id = [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
-            ];
-            vec![id; joints.len()]
+        }).collect()
+    } else {
+        let skin = document.skins().next().unwrap();
+        match skin.reader(|buf| Some(&buffers[buf.index()])).read_inverse_bind_matrices() {
+            Some(iter) => iter.map(|m| {
+                [
+                    m[0][0], m[0][1], m[0][2], m[0][3],
+                    m[1][0], m[1][1], m[1][2], m[1][3],
+                    m[2][0], m[2][1], m[2][2], m[2][3],
+                    m[3][0], m[3][1], m[3][2], m[3][3],
+                ]
+            }).collect(),
+            None => {
+                let id = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+                vec![id; joints.len()]
+            }
         }
     };
 
@@ -814,7 +812,6 @@ fn extract_skeleton_and_animations(
         });
     }
 
-    // Animations
     let mut clips = Vec::new();
     for animation in document.animations() {
         let mut duration = 0.0f32;
@@ -878,9 +875,6 @@ fn extract_skeleton_and_animations(
 
     Some(RawSkeleton { bones, clips })
 }
-
-// ── .anim writer ──────────────────────────────────────────────────────────────
-
 fn write_anim(skel: &RawSkeleton, path: &Path) -> std::io::Result<()> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);

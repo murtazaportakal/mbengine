@@ -462,12 +462,21 @@ impl Texture {
         height: u32,
         format_val: u32,
         data: &[u8],
+        is_linear: bool,
     ) -> Option<Self> {
-        let format = match format_val {
+        let mut format = match format_val {
             1 => vk::Format::BC7_UNORM_BLOCK,
             2 => vk::Format::BC7_SRGB_BLOCK,
             _ => vk::Format::R8G8B8A8_SRGB,
         };
+        
+        if is_linear {
+            if format == vk::Format::BC7_SRGB_BLOCK {
+                format = vk::Format::BC7_UNORM_BLOCK;
+            } else if format == vk::Format::R8G8B8A8_SRGB {
+                format = vk::Format::R8G8B8A8_UNORM;
+            }
+        }
 
         let buffer_size = data.len() as u64;
 
